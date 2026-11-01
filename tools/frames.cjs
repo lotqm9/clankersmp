@@ -7,7 +7,7 @@ const [agent = 'haiku', n = '16', every = '500'] = process.argv.slice(2);
 const OUT = path.join(__dirname, '..', '.local');
 (async () => {
   const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist'] });
-  const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
+  const page = await browser.newPage({ viewport: { width: +(process.env.W || 640), height: +(process.env.H || 360) } });
   await page.goto(`https://engine-production-08c9.up.railway.app/play/?follow=${agent}&embed=1&view=third`);
   await page.waitForTimeout(16000);
   fs.mkdirSync(OUT, { recursive: true });

@@ -999,7 +999,9 @@ export class Body {
         if (IS_WATER[h]) return false;
         if (SOLID[h] && !(await this.mine(fx, fy + 2, fz, false))) return false;
       }
-      for (const cy of [ny + 1, ny]) {
+      // a step down is cut three high (the cell over its head as well), or the ceiling stops the jump back up and
+      // the way down is a trap: a player cuts stairs the same way
+      for (const cy of ny < fy ? [ny + 2, ny + 1, ny] : [ny + 1, ny]) {
         const c = this.get(nx, cy, nz);
         if (IS_WATER[c] || c === B.BEDROCK) return false;
         if (SOLID[c] && !(await this.mine(nx, cy, nz, false))) return false;
@@ -1009,7 +1011,9 @@ export class Body {
         const f = this.fillerBlock();
         if (!f || !(await this.place(f, nx, ny - 1, nz))) return false;
       }
-      await this.goto(nx + 0.5, ny, nz + 0.5, 0.45, { maxMs: 3000 });
+      // down a step: centre over it and drop (walking tiptoes at ledges); level or up: walk (it jumps the step)
+      if (ny < fy) await this.dropInto(nx, ny, nz);
+      else await this.goto(nx + 0.5, ny, nz + 0.5, 0.45, { maxMs: 3000 });
       if (Math.floor(this.phys.x) === fx && Math.floor(this.phys.z) === fz) return this.reachTo(x, y, z) <= REACH;
     }
     return this.reachTo(x, y, z) <= REACH;

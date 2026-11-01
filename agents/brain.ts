@@ -31,15 +31,22 @@ const PACK: {
   stage: number;
 } = { plan: "", by: "", base: null, houses: {}, builds: [], trades: 0, stage: -1 };
 
-/** How many of a kind the pack has finished (houses: one per player who built one; the wall: 1 once it's done). */
+/** Every house built at the base: the ones in the builds list, and each player's newest (an older save kept only
+ *  that, so a second house used to drop its first one out of the count and off the map of what's built). */
+function houseRects(): (Rect & { y: number })[] {
+  const out: (Rect & { y: number })[] = PACK.builds.filter((b) => b.kind === "house");
+  for (const h of Object.values(PACK.houses)) if (!out.some((o) => o.x0 === h.x0 && o.z0 === h.z0)) out.push(h);
+  return out;
+}
+/** How many of a kind the pack has finished (the wall: 1 once it's done). */
 function civCount(k: Kind | "trade"): number {
   if (k === "trade") return PACK.trades;
-  if (k === "house") return Object.keys(PACK.houses).length;
+  if (k === "house") return houseRects().length;
   return PACK.builds.filter((b) => b.kind === k && b.done).length;
 }
 /** Everything built or being built: where new buildings must not go. */
 function footprints(): Rect[] {
-  return [...Object.values(PACK.houses), ...PACK.builds.map((b) => (b.kind === "wall" ? { x0: b.x0 + 1, z0: b.z0 + 1, x1: b.x0 + 1, z1: b.z0 + 1 } : b))];
+  return [...houseRects(), ...PACK.builds.filter((b) => b.kind !== "house").map((b) => (b.kind === "wall" ? { x0: b.x0 + 1, z0: b.z0 + 1, x1: b.x0 + 1, z1: b.z0 + 1 } : b))];
 }
 let packFile = "";
 function loadPack(): void {
@@ -201,6 +208,7 @@ export class Brain {
   private lastWear = 0;
   private lastHomeTrip = 0;
   private queue: Record<string, unknown>[] = [];
+  private failing = new Map<string, { n: number; why: string; at: number }>(); // what keeps failing, by action
   private flushing = false;
   cost = 0;
   private spend: [number, number][] = []; // [when, dollars] per decision, the last hour
@@ -369,6 +377,10 @@ export class Brain {
         const failed = /couldn|can.t|^no |nothing|still|failed|got 0 |missing|isn.t|don.t|there is no/i.test(res);
         if (failed && this.lastFail === a.desc) this.heard.push(`${a.desc} has now failed twice in a row (${res}). Do something different.`);
         this.lastFail = failed ? a.desc : "";
+        // and over a longer stretch (a walk in between doesn't wipe it): what keeps not working, until it works
+        const fk = a.name === "go_to" ? "go_to" : a.desc;
+        if (failed) this.failing.set(fk, { n: (this.failing.get(fk)?.n ?? 0) + 1, why: res.slice(0, 180), at: Date.now() });
+        else this.failing.delete(fk);
         if (failed && k < d.actions.length - 1) this.heard.push(`The rest of your plan was skipped because ${a.desc} didn't work.`);
         if (failed || this.reflexCount !== reflexes) break;
       }
@@ -411,7 +423,7 @@ export class Brain {
     const t = b.timeOfDay();
     const night = t >= NIGHT_START || t < 0 || t > NIGHT_END ? "it is night" : t >= 11000 ? `night falls in about ${Math.max(1, Math.round((NIGHT_START - t) / 1200))} minutes` : "it is day";
     const fx = Math.floor(b.phys.x);
-    const fy = Math.floor(b.phys.y + 0.01);
+    const fy = Math.floor(b.phys.y + 0.1);
     const fz = Math.floor(b.phys.z);
     const under = BLOCKS[b.get(fx, fy - 1, fz)]?.key ?? "air";
     const lines: string[] = [];
@@ -471,6 +483,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const fresh = [...this.heard, ...b.events.splice(0)];
     this.heard = [];
     if (this.log.length) lines.push(`\nWhat you did recently (oldest first):\n${this.log.map((l) => `- ${l}`).join("\n")}`);
+    const bad = [...this.failing].filter(([, f]) => f.n >= 2 && Date.now() - f.at < 600000);
+    if (bad.length) lines.push(`Not working lately (the same try won't go differently: fix the cause, or do something else): ${bad.map(([k, f]) => `${k} failed ${f.n} times (last: ${f.why})`).join("; ")}.`);
     if (fresh.length) lines.push(`\nSince your last decision:\n${fresh.slice(-12).map((l) => `- ${l}`).join("\n")}`);
     lines.push("\nWhat do you do now?");
     return lines.join("\n");
@@ -653,10 +667,13 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
             const d = Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z);
             if (d > 14) return `the pack's base is at x=${PACK.base.x} z=${PACK.base.z}, ${Math.round(d)} blocks ${dirWord(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z)}: go_to_base first and build next to the others`;
           }
+          const before = b.home;
           const r = await b.buildHouse();
-          if (b.home) {
+          if (b.home && b.home !== before) {
             this.save();
-            PACK.houses[this.name] = { x0: b.home.x0, z0: b.home.z0, x1: b.home.x0 + 3, z1: b.home.z0 + 3, y: b.home.y };
+            const h = { x0: b.home.x0, z0: b.home.z0, x1: b.home.x0 + 3, z1: b.home.z0 + 3, y: b.home.y };
+            PACK.houses[this.name] = h;
+            PACK.builds.push({ kind: "house", ...h, by: [this.name], done: true, at: Date.now() });
             this.civUpdate(`${this.name} built a house`);
             if (!PACK.base) {
               PACK.base = { x: b.home.x0 + 2, y: b.home.y, z: b.home.z0 + 2 };
@@ -800,7 +817,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return `finished ${civLabel(kind)} at ${where} (${r.placed} blocks placed this time)`;
     }
     savePack();
-    if (!r.placed) return r.outOf ? `out of building blocks: ${missing} still to go on ${civLabel(kind)} at ${where}` : `couldn't place blocks on ${civLabel(kind)} at ${where} (in the way, or out of reach): ${missing} to go`;
+    if (!r.placed) return r.outOf ? `out of building blocks: ${missing} still to go on ${civLabel(kind)} at ${where}` : `couldn't place blocks on ${civLabel(kind)} at ${where}: ${r.why || "in the way, or out of reach"}; ${missing} to go`;
     return `placed ${r.placed} blocks on ${civLabel(kind)} at ${where}: ${missing} to go${r.outOf ? " (you ran out of building blocks)" : ""}`;
   }
 
@@ -855,7 +872,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     for (let k = 0; k < n && !b.abort && !b.dead; k++) {
       const x = Math.floor(b.phys.x);
       const z = Math.floor(b.phys.z);
-      const y = Math.floor(b.phys.y + 0.01) - 1;
+      const y = Math.floor(b.phys.y + 0.1) - 1;
       const id = b.get(x, y, z);
       if (id === B.WATER || id === B.BEDROCK) break;
       if (b.get(x, y - 1, z) === B.AIR && b.get(x, y - 2, z) === B.AIR) return `stopped after ${dug}: there is a drop below (a cave)`;
@@ -864,7 +881,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       await b.dropInto(x, y, z);
     }
     await b.pickUp(3, 3000);
-    return `dug down ${dug} blocks, now at y=${Math.floor(b.phys.y)}, standing on ${BLOCKS[b.get(Math.floor(b.phys.x), Math.floor(b.phys.y + 0.01) - 1, Math.floor(b.phys.z))]?.key ?? "?"}`;
+    return `dug down ${dug} blocks, now at y=${Math.floor(b.phys.y)}, standing on ${BLOCKS[b.get(Math.floor(b.phys.x), Math.floor(b.phys.y + 0.1) - 1, Math.floor(b.phys.z))]?.key ?? "?"}`;
   }
 
   private findTarget(name: string): Target | null {

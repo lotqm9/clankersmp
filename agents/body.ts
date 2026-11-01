@@ -15,13 +15,14 @@ import { generateWorld, hashBlocks, type GenInfo } from "../shared/worldgen.ts";
 import { newPhysState, tickPlayer, type MoveInput, type PhysState } from "../shared/physics.ts";
 import { PathFinder, type PathPoint } from "../server/src/pathfind.ts";
 import { breakTicks } from "../shared/mining.ts";
-import { B, BLOCKS, IS_WATER, SOLID, isFarmland, isFurnace, isStorage as isStorageId } from "../shared/blocks.ts";
+import { B, BLOCKS, IS_WATER, SOLID, isFarmland, isFurnace, isSmallPlant, isStorage as isStorageId } from "../shared/blocks.ts";
 import { I, fromWire, isHoe as isHoeId, itemDef, type Stack } from "../shared/items.ts";
 import { canHarvest } from "../shared/mining.ts";
 import { cooldownTicks } from "../shared/combat.ts";
 import { EAT_TICKS } from "../shared/survival.ts";
 import { RECIPES, recipeSize } from "../shared/recipes.ts";
 import { JOBS } from "../shared/villagers.ts";
+import { door, isDoor } from "../shared/shapes.ts";
 
 interface VillagerOffers {
   vid: number;
@@ -48,6 +49,8 @@ export const NIGHT_END = 23459;
 /** Ground and plants it may dig straight through when they block its way (never what someone built). */
 const NATURAL = new Set<number>([B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES, B.DIRT, B.GRASS, B.SAND, B.GRAVEL, B.CLAY, B.STONE] as number[]);
 const REACH = 4.3; // a little inside the server's 5 (eye to block centre)
+// The cell its feet are in is floor(y + 0.1), not floor(y): farmland and dirt paths are a pixel low (their top at
+// .9375), and floor(y + 0.01) there took the ground itself for the feet cell (nudge then dug holes in the farm).
 const HIT_REACH = 2.9;
 
 /** One world for every body in this process: the same seed, the same edits (each body applies them; idempotent). */
@@ -424,14 +427,14 @@ export class Body {
   covered(): boolean {
     const x = Math.floor(this.phys.x);
     const z = Math.floor(this.phys.z);
-    for (let y = Math.floor(this.phys.y) + 2; y < 128; y++) if (SOLID[this.get(x, y, z)]) return true;
+    for (let y = Math.floor(this.phys.y + 0.1) + 2; y < 128; y++) if (SOLID[this.get(x, y, z)]) return true;
     return false;
   }
 
   /** Walls on every side at foot and head height, and a roof: nothing can get in. */
   sealed(): boolean {
     const x = Math.floor(this.phys.x);
-    const y = Math.floor(this.phys.y + 0.01);
+    const y = Math.floor(this.phys.y + 0.1);
     const z = Math.floor(this.phys.z);
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1]) if (!SOLID[this.get(x + dx, y + dy, z + dz)]) return false;
     return SOLID[this.get(x, y + 2, z)] === 1;
@@ -571,7 +574,7 @@ export class Body {
   private dropAhead(): number {
     if (!this.phys.onGround) return 0;
     const a = (this.input.yaw * Math.PI) / 180;
-    const y = Math.floor(this.phys.y + 0.01);
+    const y = Math.floor(this.phys.y + 0.1);
     let worst = 0;
     for (const reach of [0.6, 1.1]) {
       const x = Math.floor(this.phys.x - Math.sin(a) * reach);
@@ -588,7 +591,7 @@ export class Body {
   /** Water just ahead of its feet, where its next steps would land. */
   private waterAhead(): boolean {
     const a = (this.input.yaw * Math.PI) / 180;
-    const y = Math.floor(this.phys.y + 0.01);
+    const y = Math.floor(this.phys.y + 0.1);
     for (const reach of [0.6, 1.1]) {
       const x = Math.floor(this.phys.x - Math.sin(a) * reach);
       const z = Math.floor(this.phys.z + Math.cos(a) * reach);
@@ -613,6 +616,9 @@ export class Body {
     let best = Infinity;
     let fails = 0;
     let unstuck = false;
+    // setting off from inside its own house: open the doorway first (blocked up for the night, or a shut door), or
+    // every way out is a wall it won't dig through
+    if (this.home && this.atHome() && Math.hypot(x - (this.home.x0 + 2), z - (this.home.z0 + 2)) > 1.5) await this.openDoorway();
     while (!this.abort && !this.dead && Date.now() - t0 < maxMs) {
       if (arrived()) break;
       const d = Math.hypot(x - this.phys.x, z - this.phys.z);
@@ -697,7 +703,7 @@ export class Body {
     const sx = this.phys.x;
     const sz = this.phys.z;
     const len = Math.hypot(x - sx, z - sz);
-    const y = Math.floor(f + 0.01);
+    const y = Math.floor(f + 0.1);
     for (let s = 0.4; s < len; s += 0.4) {
       const px = sx + ((x - sx) * s) / len;
       const pz = sz + ((z - sz) * s) / len;
@@ -732,7 +738,7 @@ export class Body {
     const d = Math.hypot(dx, dz) || 1;
     const ux = dx / d;
     const uz = dz / d;
-    const fy = Math.floor(this.phys.y + 0.01);
+    const fy = Math.floor(this.phys.y + 0.1);
     const cx = Math.floor(this.phys.x + ux * 0.8);
     const cz = Math.floor(this.phys.z + uz * 0.8);
     const wet = (x: number, y: number, z: number) => [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]].some(([a, b, c]) => IS_WATER[this.get(x + a, y + b, z + c)]);
@@ -781,7 +787,7 @@ export class Body {
   /** Walls all round at head height: a pit. */
   inHole(): boolean {
     const x = Math.floor(this.phys.x);
-    const y = Math.floor(this.phys.y + 0.01) + 1;
+    const y = Math.floor(this.phys.y + 0.1) + 1;
     const z = Math.floor(this.phys.z);
     return [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([dx, dz]) => SOLID[this.get(x + dx, y, z + dz)] === 1);
   }
@@ -794,7 +800,7 @@ export class Body {
       if (!filler) break;
       const x = Math.floor(this.phys.x);
       const z = Math.floor(this.phys.z);
-      const y0 = Math.floor(this.phys.y + 0.01);
+      const y0 = Math.floor(this.phys.y + 0.1);
       if (SOLID[this.get(x, y0 + 2, z)]) {
         // a roof: dig it first
         if (!(await this.mine(x, y0 + 2, z, false))) break;
@@ -814,7 +820,7 @@ export class Body {
         }
       }
       await this.wait(8);
-      if (Math.floor(this.phys.y + 0.01) > y0) up++;
+      if (Math.floor(this.phys.y + 0.1) > y0) up++;
       else break;
     }
     this.wantPitch = 10;
@@ -934,7 +940,7 @@ export class Body {
       if (this.reachTo(x, y, z) <= REACH) return true;
       const fx = Math.floor(this.phys.x);
       const fz = Math.floor(this.phys.z);
-      const fy = Math.floor(this.phys.y + 0.01) - 1;
+      const fy = Math.floor(this.phys.y + 0.1) - 1;
       if (fy <= y || fy <= 30) return this.reachTo(x, y, z) <= REACH; // level with it, or as deep as it goes (the deep caves are deadly)
       const id = this.get(fx, fy, fz);
       if (IS_WATER[id] || id === B.BEDROCK) return false;
@@ -952,7 +958,7 @@ export class Body {
       if (this.reachTo(x, y, z) <= REACH) return true;
       const fx = Math.floor(this.phys.x);
       const fz = Math.floor(this.phys.z);
-      const fy = Math.floor(this.phys.y + 0.01);
+      const fy = Math.floor(this.phys.y + 0.1);
       const dx = x + 0.5 - this.phys.x;
       const dz = z + 0.5 - this.phys.z;
       const [sx, sz] = Math.abs(dx) >= Math.abs(dz) ? [Math.sign(dx), 0] : [0, Math.sign(dz)];
@@ -982,12 +988,12 @@ export class Body {
   }
 
   /** Put a block from the inventory into a cell (in reach, next to something solid, not where it stands). */
-  async place(item: number, x: number, y: number, z: number): Promise<boolean> {
+  async place(item: number, x: number, y: number, z: number, walkMs = 20000): Promise<boolean> {
     if (!this.has(item)) return false;
     const cur = this.get(x, y, z);
     if (cur !== B.AIR && !IS_WATER[cur] && !BLOCKS[cur]?.replaceable) return false;
     if (this.reachTo(x, y, z) > REACH) {
-      const ok = await this.goto(x + 0.5, y, z + 0.5, 2.5, { maxMs: 20000, done: () => this.reachTo(x, y, z) <= REACH });
+      const ok = await this.goto(x + 0.5, y, z + 0.5, 2.5, { maxMs: walkMs, done: () => this.reachTo(x, y, z) <= REACH });
       if (!ok) return false;
     }
     if (!(await this.hold(item))) return false;
@@ -1005,7 +1011,7 @@ export class Body {
   /** A free cell next to the body, on the ground, to put something (a crafting table, a furnace). */
   spotNearby(): [number, number, number] | null {
     const fx = Math.floor(this.phys.x);
-    const fy = Math.floor(this.phys.y + 0.01);
+    const fy = Math.floor(this.phys.y + 0.1);
     const fz = Math.floor(this.phys.z);
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1], [2, 0], [0, 2], [-2, 0], [0, -2]]) {
       for (const dy of [0, -1, 1]) {
@@ -1321,7 +1327,7 @@ export class Body {
   async escapeWater(maxTicks = 300): Promise<boolean> {
     let stuck = 0;
     let lastY = this.phys.y;
-    for (let k = 0; k < maxTicks && !this.dead && (this.phys.inWater || this.waterNear(Math.floor(this.phys.x), Math.floor(this.phys.y + 0.01), Math.floor(this.phys.z), 0, 0)); k++) {
+    for (let k = 0; k < maxTicks && !this.dead && (this.phys.inWater || this.waterNear(Math.floor(this.phys.x), Math.floor(this.phys.y + 0.1), Math.floor(this.phys.z), 0, 0)); k++) {
       const bank = this.findBank(8);
       if (bank) {
         this.steer(bank[0] + 0.5, bank[2] + 0.5, bank[1], 10);
@@ -1379,14 +1385,14 @@ export class Body {
     this.halt();
     if (this.phys.inWater) await this.escapeWater();
     // a hole next to water floods: walk a few blocks away from it first
-    for (let tries = 0; tries < 3 && this.waterNear(Math.floor(this.phys.x), Math.floor(this.phys.y + 0.01), Math.floor(this.phys.z)); tries++) {
+    for (let tries = 0; tries < 3 && this.waterNear(Math.floor(this.phys.x), Math.floor(this.phys.y + 0.1), Math.floor(this.phys.z)); tries++) {
       const a = Math.random() * Math.PI * 2;
       await this.goto(this.phys.x + Math.cos(a) * 6, this.phys.y, this.phys.z + Math.sin(a) * 6, 1.5, { maxMs: 6000 });
     }
     if (this.phys.inWater) return "in water, can't dig in here";
     const x = Math.floor(this.phys.x);
     const z = Math.floor(this.phys.z);
-    const y0 = Math.floor(this.phys.y + 0.01);
+    const y0 = Math.floor(this.phys.y + 0.1);
     for (let k = 1; k <= 3; k++) {
       if (this.abort || this.dead) return "interrupted";
       const id = this.get(x, y0 - k, z);
@@ -1397,7 +1403,7 @@ export class Body {
     for (let k = 0; k < 30 && !this.fillerBlock(); k++) await this.nextTick(); // the dirt it fell onto gets picked up
     const filler = this.fillerBlock();
     if (!filler) return "dug down but has nothing to close the roof with";
-    const roof = Math.floor(this.phys.y + 0.01) + 2;
+    const roof = Math.floor(this.phys.y + 0.1) + 2;
     if (!SOLID[this.get(x, roof, z)]) {
       await this.hold(filler);
       this.wantPitch = -89;
@@ -1415,7 +1421,7 @@ export class Body {
   async lightUp(): Promise<boolean> {
     if (!this.has(B.TORCH)) return false;
     const x = Math.floor(this.phys.x);
-    const y = Math.floor(this.phys.y + 0.01);
+    const y = Math.floor(this.phys.y + 0.1);
     const z = Math.floor(this.phys.z);
     for (let r = -4; r <= 4; r++) for (let dy = -3; dy <= 3; dy++) for (let q = -4; q <= 4; q++) if (this.get(x + r, y + dy, z + q) === B.TORCH) return true;
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -1466,15 +1472,22 @@ export class Body {
   /** Sleep in a bed: a near one, or the one it carries put down where there is room for it. The server skips the
    *  night once half the living players are asleep; it wakes at sunrise, or if something hurts it. */
   async sleep(): Promise<string> {
-    if (!this.isNight()) return "you can only sleep at night";
     const beds = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => B.RED_BED + k);
+    // dusk by its bed: wait there for nightfall (a bed only works from time 12542), instead of asking again and again
+    const tod = this.timeOfDay();
+    if (tod >= 10800 && tod < NIGHT_START + 20 && (this.atHome() || this.findBlocks(beds, 4, 1).length)) {
+      this.action = "waiting by the bed for nightfall";
+      while (this.timeOfDay() < NIGHT_START + 20 && this.timeOfDay() >= 10800 && !this.abort && !this.dead) await this.wait(20);
+      if (this.abort || this.dead) return "stopped waiting for the night";
+    }
+    if (!this.isNight()) return `you can only sleep at night (from time ${NIGHT_START}; it is ${this.timeOfDay()})`;
     let bed = this.findBlocks(beds, 16, 1)[0];
     const bedItem = BLOCKS[B.RED_BED].item || B.RED_BED;
     // a bed goes in a house, never down a hole in the open
     if (!bed && this.has(bedItem) && !this.atHome()) return this.home ? "your bed belongs in your house: go_home and sleep there" : "a bed goes in a house: build_house first (it puts your bed inside), or dig_in for tonight";
     if (!bed && this.has(bedItem)) {
       const fx = Math.floor(this.phys.x);
-      const fy = Math.floor(this.phys.y + 0.01);
+      const fy = Math.floor(this.phys.y + 0.1);
       const fz = Math.floor(this.phys.z);
       const dirs: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]]; // north, east, south, west (the facings)
       const free = (x: number, y: number, z: number) => !SOLID[this.get(x, y, z)] && !IS_WATER[this.get(x, y, z)] && SOLID[this.get(x, y - 1, z)] === 1;
@@ -1518,7 +1531,7 @@ export class Body {
     let walls = 0;
     for (let k = 0; k < 140 && !this.abort && !this.dead && !this.outInTheOpen(); k++) {
       const x = Math.floor(this.phys.x);
-      const y = Math.floor(this.phys.y + 0.01);
+      const y = Math.floor(this.phys.y + 0.1);
       const z = Math.floor(this.phys.z);
       if (this.inHole() && this.fillerBlock() && !SOLID[this.get(x, y + 2, z)] && (await this.pillarUp(1)) > 0) continue;
       const used = await this.stepUp(dir);
@@ -1559,7 +1572,7 @@ export class Body {
    *  the wall from where it ends up (as stepUp numbers them), or -1 if there is none near. */
   async toWall(): Promise<number> {
     const fx = Math.floor(this.phys.x);
-    const fy = Math.floor(this.phys.y + 0.01);
+    const fy = Math.floor(this.phys.y + 0.1);
     const fz = Math.floor(this.phys.z);
     let best: [number, number] | null = null;
     let bd = Infinity;
@@ -1610,7 +1623,7 @@ export class Body {
   surfaced(): boolean {
     if (!this.covered()) return true;
     const x = Math.floor(this.phys.x);
-    const y = Math.floor(this.phys.y + 0.01);
+    const y = Math.floor(this.phys.y + 0.1);
     const z = Math.floor(this.phys.z);
     for (let k = 2; k <= 7; k++) {
       const id = this.get(x, y + k, z);
@@ -1622,7 +1635,7 @@ export class Body {
   /** Room over its head and a way out sideways: it can walk off. */
   free(): boolean {
     const x = Math.floor(this.phys.x);
-    const y = Math.floor(this.phys.y + 0.01);
+    const y = Math.floor(this.phys.y + 0.1);
     const z = Math.floor(this.phys.z);
     return !this.inHole() && !SOLID[this.get(x, y + 2, z)];
   }
@@ -1632,7 +1645,7 @@ export class Body {
    *  direction it climbed, or -1. Needs no blocks to spare when the rock is there. */
   async stepUp(prefer = -1): Promise<number> {
     const x = Math.floor(this.phys.x);
-    const y = Math.floor(this.phys.y + 0.01);
+    const y = Math.floor(this.phys.y + 0.1);
     const z = Math.floor(this.phys.z);
     const dirs: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     const order = prefer >= 0 ? [prefer, ...[0, 1, 2, 3].filter((d) => d !== prefer)] : [0, 1, 2, 3];
@@ -1666,7 +1679,7 @@ export class Body {
         this.debug(`stepUp ${d}: couldn't clear the way`);
         continue;
       }
-      for (let t = 0; t < 24 && Math.floor(this.phys.y + 0.01) <= y; t++) {
+      for (let t = 0; t < 24 && Math.floor(this.phys.y + 0.1) <= y; t++) {
         const tx = sx + 0.5 - this.phys.x;
         const tz = sz + 0.5 - this.phys.z;
         this.wantYaw = this.input.yaw = (deg(Math.atan2(-tx, tz)) + 360) % 360;
@@ -1676,7 +1689,7 @@ export class Body {
         await this.nextTick();
       }
       this.halt();
-      if (Math.floor(this.phys.y + 0.01) > y) {
+      if (Math.floor(this.phys.y + 0.1) > y) {
         await this.center(sx, sz, 12); // square on the step, so the next one lines up
         return d;
       }
@@ -1710,7 +1723,7 @@ export class Body {
   private houseSite(): [number, number, number] | null {
     const fx = Math.floor(this.phys.x);
     const fz = Math.floor(this.phys.z);
-    const y = Math.floor(this.phys.y + 0.01);
+    const y = Math.floor(this.phys.y + 0.1);
     let best: [number, number, number] | null = null;
     let bd = Infinity;
     for (let oz = -6; oz <= 3; oz++)
@@ -1728,6 +1741,8 @@ export class Body {
             }
           }
         if (!ok || this.waterNear(x0 + 2, y, z0 + 2, 3, 2)) continue;
+        // and a way out: the doorway (north wall, x0 + 1) opens onto ground with room to walk, not into a wall
+        if (SOLID[this.get(x0 + 1, y, z0 - 1)] || SOLID[this.get(x0 + 1, y + 1, z0 - 1)] || !SOLID[this.get(x0 + 1, y - 1, z0 - 1)]) continue;
         const d = Math.hypot(x0 + 2 - this.phys.x, z0 + 2 - this.phys.z);
         if (d < bd) {
           bd = d;
@@ -1776,16 +1791,23 @@ export class Body {
     // a light, and the bed, in the room's far side (it stands by the door)
     if (this.has(B.TORCH) && !SOLID[this.get(x0 + 1, y, z0 + 2)]) await this.place(B.TORCH, x0 + 1, y, z0 + 2);
     const bedItem = BLOCKS[B.RED_BED].item || B.RED_BED;
+    let bedIn = false;
     if (this.has(bedItem)) {
+      // the bed runs along the room's east side, its head to the north (two cells, both inside); it stands in the
+      // west side by the door, out of the bed's way
+      await this.center(x0 + 1, z0 + 1, 20);
       await this.hold(bedItem);
       await this.lookAt(x0 + 2.5, y + 0.3, z0 + 2.5, 12);
-      this.send({ t: "place", x: x0 + 2, y, z: z0 + 2, id: B.RED_BED + 2 }); // facing south: the head in the last row... or the wall stops it
+      this.send({ t: "place", x: x0 + 2, y, z: z0 + 2, id: B.RED_BED });
       this.swing();
-      await this.wait(6);
+      for (let k = 0; k < 12 && !bedIn; k++) {
+        await this.nextTick();
+        bedIn = this.get(x0 + 2, y, z0 + 2) >= B.RED_BED && this.get(x0 + 2, y, z0 + 2) < B.RED_BED + 8;
+      }
     }
     const walls = ring.length * 2 - 2 + 16;
-    const doorIn = this.get(door[0], y, door[2]) >= B.OAK_DOOR && this.get(door[0], y, door[2]) < B.OAK_DOOR + 16;
-    return `built a house at x=${x0 + 1} z=${z0 + 1} (${placed} of ${walls} blocks placed, ${doorIn ? "with a door" : "an open doorway on the north side"})`;
+    const doorIn = isDoor(this.get(door[0], y, door[2]));
+    return `built a house at x=${x0 + 1} z=${z0 + 1} (${placed} of ${walls} blocks placed, ${doorIn ? "with a door" : "an open doorway on the north side"}${bedIn ? ", your bed inside" : ""})`;
   }
 
   // ---------------------------------------------------------------- mining like a player: a staircase
@@ -1797,7 +1819,7 @@ export class Body {
     const start = have();
     const fx0 = Math.floor(this.phys.x);
     const fz0 = Math.floor(this.phys.z);
-    const fy0 = Math.floor(this.phys.y + 0.01);
+    const fy0 = Math.floor(this.phys.y + 0.1);
     const wetNear = (x: number, y: number, z: number) =>
       [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].some(([a, b, c]) => IS_WATER[this.get(x + a, y + b, z + c)] === 1);
     const isOre = (id: number) => !!BLOCKS[id]?.key?.endsWith("_ore");
@@ -1861,7 +1883,7 @@ export class Body {
     }
     await this.pickUp(3, 2500);
     const got = have() - start;
-    const depth = fy0 - Math.floor(this.phys.y + 0.01);
+    const depth = fy0 - Math.floor(this.phys.y + 0.1);
     // and back up the same stairs
     this.action = "walking back up the stairs";
     for (let k = stairs.length - 2; k >= 0 && !this.abort && !this.dead; k--) {
@@ -1930,14 +1952,22 @@ export class Body {
   }
 
   /** Place what is still missing of a plan (cells in build order), up to `max` blocks. */
-  async buildCells(cells: PlanCell[], max: number, label: string): Promise<{ placed: number; left: number; outOf: boolean }> {
+  async buildCells(cells: PlanCell[], max: number, label: string): Promise<{ placed: number; left: number; outOf: boolean; why: string }> {
     const missing = ([x, y, z, k]: PlanCell) => (k === "t" ? this.get(x, y, z) !== B.TORCH : k === "c" ? !isStorageId(this.get(x, y, z)) : !SOLID[this.get(x, y, z)]);
+    const footprint = new Set(cells.map(([x, , z]) => `${x},${z}`));
     let placed = 0;
     let outOf = false;
+    let lifts = 0;
+    let why = "";
+    let misses = 0;
     this.action = label;
-    for (const cell of cells.filter(missing)) {
-      if (this.abort || this.dead || placed >= max) break;
-      const [x, y, z, k] = cell;
+    const todo = cells.filter(missing);
+    for (let i = 0; i < todo.length; i++) {
+      // four blocks in a row that wouldn't go in: something's wrong here (walled off, someone in the way), so stop
+      // and say so rather than walk about trying every cell
+      if (this.abort || this.dead || placed >= max || misses >= 4) break;
+      const [x, y, z, k] = todo[i];
+      if (!missing(todo[i])) continue;
       const id = this.blockFor(k);
       if (!id) {
         if (k === "b" || k === "f" || k === "g") {
@@ -1946,14 +1976,95 @@ export class Body {
         }
         continue;
       }
+      // a flower or a sapling growing where a block goes: pick it first (a block can't go in on top of it)
+      const cur = this.get(x, y, z);
+      if (cur !== B.AIR && !IS_WATER[cur] && !SOLID[cur] && !BLOCKS[cur]?.replaceable && (isSmallPlant(cur) || cur === B.OAK_SAPLING || cur === B.BIRCH_SAPLING)) await this.mine(x, y, z);
       // never wall itself in: step off a cell before a block goes there
       const fx = Math.floor(this.phys.x);
       const fz = Math.floor(this.phys.z);
-      const fy = Math.floor(this.phys.y + 0.01);
+      const fy = Math.floor(this.phys.y + 0.1);
       if (fx === x && fz === z && (y === fy || y === fy + 1)) await this.goto(x + 0.5 + (x % 2 ? 1.6 : -1.6), fy, z + 0.5, 0.8, { maxMs: 3000 });
-      if (await this.place(id, x, y, z)) placed++;
+      // a cell well above the ground round it is out of reach from anywhere down there: no long walk about first
+      const round = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) => !footprint.has(`${x + dx},${z + dz}`)).map(([dx, dz]) => this.groundAt(x + dx, z + dz, y));
+      const high = round.length > 0 && y - Math.max(...round) > 4;
+      if (await this.place(id, x, y, z, high ? 3000 : 12000)) {
+        placed++;
+        misses = 0;
+        continue;
+      }
+      if (this.abort || this.dead) break;
+      // too high to reach from the ground (a roof's far corner, the top of a tower): up a pillar beside it, every
+      // block in reach from up there, then back down the pillar
+      if (this.reachTo(x, y, z) > REACH && lifts < 3) {
+        lifts++;
+        const up = await this.scaffoldTo(x, y, z, footprint);
+        if (up >= 0) {
+          for (const c of todo.slice(i)) {
+            if (this.abort || this.dead || placed >= max) break;
+            const cid = this.blockFor(c[3]);
+            if (cid && missing(c) && this.reachTo(c[0], c[1], c[2]) <= REACH && (await this.place(cid, c[0], c[1], c[2]))) placed++;
+          }
+          if (up > 0) await this.climbDown(up);
+          if (!missing(todo[i])) {
+            misses = 0;
+            continue;
+          }
+        }
+      }
+      misses++;
+      if (!why && missing(todo[i])) {
+        const g = this.groundAt(x, z, y);
+        why = this.reachTo(x, y, z) > REACH
+          ? `the block at x=${x} y=${y} z=${z} is out of reach${g >= 0 && y - g > 3 ? ` (${y - g} above the ground there)` : ""}`
+          : `something is in the way at x=${x} y=${y} z=${z} (someone standing there, or a block that isn't yours to replace)`;
+      }
     }
-    return { placed, left: cells.filter(missing).length, outOf };
+    return { placed, left: cells.filter(missing).length, outOf, why };
+  }
+
+  /** Up beside a cell it can't reach from the ground: a pillar of its spare blocks under its feet (the way a player
+   *  builds up to a roof), next to the building and never on it. How many blocks it went up, or -1 if there is no
+   *  spot for one. */
+  private async scaffoldTo(x: number, y: number, z: number, footprint: Set<string>): Promise<number> {
+    const R = REACH - 0.3;
+    let best: { cx: number; cz: number; g: number; k: number; score: number } | null = null;
+    for (let dz = -3; dz <= 3; dz++)
+      for (let dx = -3; dx <= 3; dx++) {
+        const cx = x + dx;
+        const cz = z + dz;
+        const h = Math.hypot(dx, dz);
+        if (h < 1 || h > 3.2 || footprint.has(`${cx},${cz}`)) continue;
+        const g = this.groundAt(cx, cz, y);
+        if (g < 0) continue;
+        // feet at g + 1 + k, the eyes EYE_HEIGHT above: high enough that the cell is in reach
+        const k = Math.max(0, Math.ceil(y + 0.5 - (g + 1 + EYE_HEIGHT) - Math.sqrt(Math.max(0, R * R - h * h))));
+        if (k > 4) continue;
+        let room = true;
+        for (let yy = g + 1; yy <= g + k + 2 && room; yy++) if (SOLID[this.get(cx, yy, cz)] || IS_WATER[this.get(cx, yy, cz)]) room = false;
+        if (!room) continue;
+        const score = k * 3 + Math.hypot(cx + 0.5 - this.phys.x, cz + 0.5 - this.phys.z);
+        if (!best || score < best.score) best = { cx, cz, g, k, score };
+      }
+    if (!best) return -1;
+    const { cx, cz, g, k } = best;
+    const there = () => Math.floor(this.phys.x) === cx && Math.floor(this.phys.z) === cz && Math.abs(this.phys.y - (g + 1)) < 0.6;
+    if (!there()) await this.goto(cx + 0.5, g + 1, cz + 0.5, 0.4, { maxMs: 15000, done: there });
+    if (!there()) return -1;
+    await this.center(cx, cz, 20);
+    if (k > 0 && this.buildingBlocks().n < k + 1) return -1;
+    return k > 0 ? await this.pillarUp(k) : 0;
+  }
+
+  /** Down the pillar it stands on, a block at a time (it gets the blocks back). */
+  private async climbDown(n: number): Promise<void> {
+    for (let k = 0; k < n && !this.dead; k++) {
+      const x = Math.floor(this.phys.x);
+      const z = Math.floor(this.phys.z);
+      const y = Math.floor(this.phys.y + 0.1) - 1;
+      if (!SOLID[this.get(x, y, z)] || !(await this.mine(x, y, z, false))) break;
+      await this.dropInto(x, y, z);
+    }
+    await this.pickUp(3, 2000);
   }
 
   // ---------------------------------------------------------------- farming
@@ -2079,12 +2190,20 @@ export class Body {
       if (!this.atHome()) return "couldn't get back into your house";
     }
     const [dx, dy, dz] = h.door;
-    if (this.get(dx, dy, dz) === B.AIR || this.get(dx, dy + 1, dz) === B.AIR) {
+    const d = this.get(dx, dy, dz);
+    if (isDoor(d) && door(d).open) {
+      // its door, left open on the way out: shut it
+      await this.lookAt(dx + 0.5, dy + 0.5, dz + 0.5, 10);
+      this.send({ t: "use", x: dx, y: dy, z: dz });
+      await this.wait(4);
+    } else if (this.get(dx, dy, dz) === B.AIR || this.get(dx, dy + 1, dz) === B.AIR) {
       // no door: close the doorway with two blocks (taken out again in the morning)
       await this.center(h.x0 + 2, h.z0 + 2, 20);
       for (const yy of [dy, dy + 1]) if (!SOLID[this.get(dx, yy, dz)] && this.nextBuildingBlock()) await this.place(this.nextBuildingBlock(), dx, yy, dz);
     }
-    if (this.isNight() && this.findBlocks([0, 1, 2, 3, 4, 5, 6, 7].map((k) => B.RED_BED + k), 3, 1).length) return `home, door shut: ${await this.sleep()}`;
+    // in for the night: to bed (at dusk it waits by the bed for the dark)
+    const bedHere = this.findBlocks([0, 1, 2, 3, 4, 5, 6, 7].map((k) => B.RED_BED + k), 3, 1).length > 0 || this.has(BLOCKS[B.RED_BED].item || B.RED_BED);
+    if ((this.isNight() || this.timeOfDay() >= 11600) && bedHere) return `home, door shut: ${await this.sleep()}`;
     return "home, with the door shut";
   }
 
@@ -2093,11 +2212,24 @@ export class Body {
     const h = this.home;
     if (!h || !this.atHome()) return "not at home";
     const [dx, dy, dz] = h.door;
-    for (const yy of [dy + 1, dy]) {
-      const id = this.get(dx, yy, dz);
-      if (SOLID[id] && !(id >= B.OAK_DOOR && id < B.OAK_DOOR + 16)) await this.mine(dx, yy, dz, false);
-    }
     await this.goto(dx + 0.5, dy, dz - 1.5, 0.8, { maxMs: 8000 });
     return "out of the house";
+  }
+
+  /** Its doorway, from inside the house: the blocks it shut it with come out, and a shut door is opened. */
+  async openDoorway(): Promise<void> {
+    const h = this.home;
+    if (!h) return;
+    const [dx, dy, dz] = h.door;
+    for (const yy of [dy + 1, dy]) {
+      const id = this.get(dx, yy, dz);
+      if (isDoor(id)) {
+        if (yy === dy && !door(id).open) {
+          await this.lookAt(dx + 0.5, yy + 0.5, dz + 0.5, 10);
+          this.send({ t: "use", x: dx, y: yy, z: dz });
+          for (let k = 0; k < 10 && this.get(dx, yy, dz) === id; k++) await this.nextTick();
+        }
+      } else if (SOLID[id]) await this.mine(dx, yy, dz, false);
+    }
   }
 }

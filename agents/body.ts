@@ -569,7 +569,7 @@ export class Body {
     this.input.forward = off < 80 ? 1 : off < 120 ? 0.35 : 0; // walk on through a turn, like a player curving round
     this.input.strafe = 0;
     const d = Math.hypot(dx, dz);
-    this.input.jump = (floorY - this.phys.y > 0.55 && d < 1.8) || (this.phys.collidedH && this.phys.onGround) || this.phys.inWater;
+    this.input.jump = (floorY - this.phys.y > 0.55 && d < 1.8) || (this.phys.collidedH && this.phys.onGround && this.stepAhead()) || this.phys.inWater;
     this.input.sprint = far > 7 && off < 20 && this.stats.food > 6 && !this.phys.inWater;
     // on dry land it never walks into water (ponds with steep banks are traps): only a swimmer swims; and never off a
     // ledge higher than it can take (a fall of more than 3 blocks hurts, and on low health any fall can kill)
@@ -577,6 +577,19 @@ export class Body {
       this.input.forward = 0;
       this.input.sprint = false;
     }
+  }
+
+  /** A one-block step just ahead (a block at its feet with room for the body above it): the only bump worth a jump.
+   *  Walls, fences, players and half-built houses are walked round or dug through, never hopped at. */
+  private stepAhead(): boolean {
+    const a = (this.input.yaw * Math.PI) / 180;
+    const y = Math.floor(this.phys.y + 0.01);
+    for (const reach of [0.5, 0.9]) {
+      const x = Math.floor(this.phys.x - Math.sin(a) * reach);
+      const z = Math.floor(this.phys.z + Math.cos(a) * reach);
+      if (SOLID[this.get(x, y, z)] && !SOLID[this.get(x, y + 1, z)] && !SOLID[this.get(x, y + 2, z)]) return true;
+    }
+    return false;
   }
 
   /** How far down the ground is just ahead (0 when it's level or higher; up to 8). */
@@ -902,11 +915,17 @@ export class Body {
     if (id === B.AIR || IS_WATER[id] || BLOCKS[id]?.breakTicks < 0) return false;
     if (this.reachTo(x, y, z) > REACH) {
       if (!approach) return false;
-      const near = () => Math.hypot(x + 0.5 - this.phys.x, z + 0.5 - this.phys.z) < 2.6;
-      // walk over (to above it, if it's underground), then dig down to it if it's still below reach
-      let ok = await this.goto(x + 0.5, y, z + 0.5, 2, { maxMs: 15000, done: () => this.reachTo(x, y, z) <= REACH || (y < this.phys.y - 2 && near()) });
-      if (!ok || this.reachTo(x, y, z) > REACH) ok = y < this.phys.y - 2 && near() && (await this.digDownTo(x, y, z));
-      if (!ok && Math.hypot(x + 0.5 - this.phys.x, z + 0.5 - this.phys.z) < 12) ok = await this.tunnelTo(x, y, z);
+      const flat = () => Math.hypot(x + 0.5 - this.phys.x, z + 0.5 - this.phys.z);
+      const near = () => flat() < 2.6;
+      // something underground: stop a step back from it (as far out as it is deep), then go down a staircase to it,
+      // the way a player does; a straight shaft is the last resort (it means climbing out on a pillar after)
+      const deep = () => y < this.phys.y - 2;
+      let ok = await this.goto(x + 0.5, y, z + 0.5, 2, { maxMs: 15000, done: () => this.reachTo(x, y, z) <= REACH || (deep() && flat() <= Math.max(2.6, this.phys.y - y + 1)) });
+      if (!ok || this.reachTo(x, y, z) > REACH) {
+        ok = deep() && flat() < 16 && (await this.tunnelTo(x, y, z));
+        if (!ok) ok = deep() && near() && (await this.digDownTo(x, y, z));
+        if (!ok && flat() < 12) ok = await this.tunnelTo(x, y, z);
+      }
       if (!ok) {
         this.debug(`can't reach ${BLOCKS[id]?.key} at ${x} ${y} ${z} (from ${this.phys.x.toFixed(1)} ${this.phys.y.toFixed(1)} ${this.phys.z.toFixed(1)})`);
         return false;

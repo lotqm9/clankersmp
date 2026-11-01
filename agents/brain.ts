@@ -762,12 +762,35 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const t0 = Date.now();
     const skip = new Set<number>();
     let tried = 0;
+    // soft ground (dirt, sand, gravel) comes out of one shallow pit, a layer at a time, well away from the town and
+    // the villages: a player digs a quarry, not a hole here and a hole there all over the base
+    const soft = !plan.blocks.includes(B.STONE) && plan.blocks.some((id) => id === B.DIRT || id === B.GRASS || id === B.SAND || id === B.GRAVEL);
+    const villages = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean);
+    const offLimits = (x: number, z: number) =>
+      (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 18) || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 30) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
+    let pit: [number, number, number] | null = null;
     while (!b.abort && !b.dead && have() - start < count && Date.now() - t0 < 90000) {
       // nothing deep: the deep caves are where Rattlers wait in the dark
       const floor = Math.max(30, Math.floor(b.phys.y) - 8);
       // and nothing touching water: breaking it lets the water flood in on top of you
       const wet = (x: number, y: number, z: number) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([dx, dy, dz]) => IS_WATER[b.get(x + dx, y + dy, z + dz)] === 1);
-      const found = b.findBlocks(plan.blocks, 32, 16).filter(([x, y, z]) => y >= floor && !wet(x, y, z) && !skip.has(x + z * 512 + y * 262144));
+      let found = b.findBlocks(plan.blocks, 32, soft ? 120 : 16).filter(([x, y, z]) => y >= floor && !wet(x, y, z) && !skip.has(x + z * 512 + y * 262144));
+      if (soft) {
+        found = found.filter(([x, , z]) => !offLimits(x, z));
+        if (pit) {
+          const [px, py, pz] = pit;
+          const inPit = found.filter(([x, y, z]) => Math.abs(x - px) <= 2 && Math.abs(z - pz) <= 2 && y >= py - 1 && y <= py);
+          // the top layer first, row by row from where it stands, so it never digs itself into a hole
+          if (inPit.length) found = inPit.sort((p, q) => q[1] - p[1] || Math.hypot(p[0] - b.phys.x, p[2] - b.phys.z) - Math.hypot(q[0] - b.phys.x, q[2] - b.phys.z));
+          else pit = null;
+        }
+        if (!pit && found.length) {
+          // a new pit: the nearest open patch of ground of the right kind, at the surface
+          const top = found.filter(([x, y, z]) => !SOLID[b.get(x, y + 1, z)]);
+          pit = (top[0] ?? found[0]) as [number, number, number];
+        }
+        if (!found.length) return have() - start > 0 ? `got ${have() - start} of ${count} ${item} (no more open ground away from the town nearby: explore a little and collect again)` : `no ${item} away from the town and the villages within 32 blocks: walk out a bit (explore) and collect there`;
+      }
       // stone that isn't lying open at its feet: mine down a staircase like a player, not a shaft
       if (plan.blocks.includes(B.STONE) && (!found.length || found[0][1] < b.phys.y - 2 || skip.size >= 2)) {
         if (!b.bestToolFor(B.STONE) || !canHarvest(B.STONE, b.bestToolFor(B.STONE))) return "stone needs a pickaxe: craft a wooden_pickaxe first";

@@ -674,6 +674,16 @@ export class Shard {
       case "smelt":
         if (p.agent && Number.isInteger(msg.id)) this.send(p, { t: "smelting", ...this.survival.smelt(p, msg.id, Math.max(1, Math.min(16, Math.floor(Number(msg.n) || 1)))) });
         break;
+      case "aloot":
+        if (p.agent) this.send(p, { t: "looted", ...this.survival.agentLoot(p) });
+        break;
+      case "atrades":
+        if (p.agent) this.send(p, { t: "atrades", v: this.survival.agentTrades(p) });
+        break;
+      case "atrade":
+        if (p.agent && Number.isInteger(msg.v) && Number.isInteger(msg.o))
+          this.send(p, { t: "atraded", ...this.survival.agentTrade(p, msg.v, msg.o, Math.max(1, Math.min(16, Math.floor(Number(msg.n) || 1)))) });
+        break;
       case "craft": {
         if (!p.agent || typeof msg.r !== "string") break;
         const n = this.survival.craft(p, msg.r, Math.max(1, Math.min(64, Math.floor(Number(msg.n) || 1))));

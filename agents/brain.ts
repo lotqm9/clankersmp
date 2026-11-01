@@ -7,8 +7,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { Body, NIGHT_END, NIGHT_START, type Target } from "./body.ts";
-import { B, BLOCKS, IS_WATER } from "../shared/blocks.ts";
+import { Body, NIGHT_END, NIGHT_START, type Rect, type Target } from "./body.ts";
+import { KINDS, STAGES, label as civLabel, planFor, progress, wallPlan, type Building, type Kind } from "./civ.ts";
+import { VILLAGE_SITES } from "../shared/villages.ts";
+import { B, BLOCKS, IS_WATER, SOLID } from "../shared/blocks.ts";
 import { ITEMS, itemDef, type Stack } from "../shared/items.ts";
 import { MF, MOB_SPECS } from "../shared/mobs.ts";
 import { SPECS as ANIMAL_SPECS } from "../shared/animals.ts";
@@ -19,7 +21,26 @@ import { FLAG } from "../shared/protocol.ts";
 const BOARD = new Map<string, { goal: string; doing: string }>();
 
 /** The pack's shared plan and base: one list all three work from, one place they build up together. */
-const PACK: { plan: string; by: string; base: { x: number; y: number; z: number } | null } = { plan: "", by: "", base: null };
+const PACK: {
+  plan: string;
+  by: string;
+  base: { x: number; y: number; z: number } | null;
+  houses: Record<string, Rect & { y: number }>;
+  builds: Building[];
+  trades: number;
+  stage: number;
+} = { plan: "", by: "", base: null, houses: {}, builds: [], trades: 0, stage: -1 };
+
+/** How many of a kind the pack has finished (houses: one per player who built one; the wall: 1 once it's done). */
+function civCount(k: Kind | "trade"): number {
+  if (k === "trade") return PACK.trades;
+  if (k === "house") return Object.keys(PACK.houses).length;
+  return PACK.builds.filter((b) => b.kind === k && b.done).length;
+}
+/** Everything built or being built: where new buildings must not go. */
+function footprints(): Rect[] {
+  return [...Object.values(PACK.houses), ...PACK.builds.map((b) => (b.kind === "wall" ? { x0: b.x0 + 1, z0: b.z0 + 1, x1: b.x0 + 1, z1: b.z0 + 1 } : b))];
+}
 let packFile = "";
 function loadPack(): void {
   if (packFile) return;
@@ -29,6 +50,10 @@ function loadPack(): void {
     PACK.plan = typeof j.plan === "string" ? j.plan : "";
     PACK.by = typeof j.by === "string" ? j.by : "";
     if (j.base && typeof j.base.x === "number") PACK.base = j.base;
+    if (j.houses && typeof j.houses === "object") PACK.houses = j.houses;
+    if (Array.isArray(j.builds)) PACK.builds = j.builds;
+    if (typeof j.trades === "number") PACK.trades = j.trades;
+    if (typeof j.stage === "number") PACK.stage = j.stage;
   } catch {
     // no pack yet
   }
@@ -63,21 +88,29 @@ const SURVIVAL_RECIPES = [
 
 const SYSTEM = (name: string) => `You are ${name}, a Claude model with a body in a hardcore survival game that plays like Minecraft. You act through the tools. Three players share this world: opus, sonnet and haiku. All three of you are Claude models.
 Hardcore means one life. If you die you are out of this world for good, and the others carry on without you.
-Nobody has given you a task. You three choose your own direction, and the strongest thing you can do is do it together, like a pack: stay alive and build one settlement that keeps growing. Pick a spot for the pack's base, build your houses there next to each other, then keep expanding it: a farm, shared supplies, torches and walls, a furnace, iron tools and armor for everyone, more buildings, paths between them. Agree on a plan in chat, write it down with pack_plan so all three work from the same list, split the jobs, hand each other what's needed (give) and check on each other. Every death makes the pack weaker. You still have full control: how you treat the other two is your call.
+What this world is about: you three build a civilization together, from nothing. Start with a camp, grow it into a settlement, a village, a town and finally a city, and see how far you can take it before the world takes you. The stages are tracked for you every turn:
+- a camp: a house at the pack's base
+- a settlement: a house for each of you, a farm, a well
+- a village: 6 lamp posts, a storehouse, 2 farms, a wall round the base
+- a town: a town hall, a market, a watchtower, 5 trades with the villagers
+- a city: 6 houses, 4 farms, 16 lamp posts, 2 watchtowers
+Everything is built at the pack's base (the first house anyone builds becomes it). Build things with build (well, lamp, storehouse, market, hall, tower, wall), farms with farm, your house with build_house. A building takes many blocks and can be built in turns: anyone can carry on with a building another one started, so split the work. Talk it through in chat, write the pack's plan down with pack_plan, split the jobs (one gathers stone, one farms, one builds), hand each other what's needed (give) and look after each other. Every death makes the pack weaker. You still have full control: how you treat the other two is your call.
 
-The world: an island about 500 blocks across, surrounded by ocean. A day is 20 minutes. Night runs from time 12500 to about 23500. In the dark, monsters come out: Shamblers (slow, hit hard up close), Rattlers (archers, they shoot from range) and Skitters (fast, they climb walls). Shamblers and Rattlers burn in daylight. Pigs, cows, sheep and chickens are food. Raw meat works, cooked meat feeds you more. Hunger drops as you act. You heal only while hunger is high, so eat before it gets low.
+The world: an island about 500 blocks across, surrounded by ocean. You are not alone on it: there are villages of villagers (each with houses, a well, wheat farms, a smithy with furnaces), and villagers trade with rubies, the island's money (try trade next to one to see what they buy and sell). The farmer's and the smith's houses in each village have a chest with loot (food, seeds, iron, coal, rubies): loot_chest takes it. Small islands off the coast hide treasure chests with iron, gold, diamonds and rubies. Ruby ore is in the rock too. A day is 20 minutes. Night runs from time 12500 to about 23500. In the dark, monsters come out: Shamblers (slow, hit hard up close), Rattlers (archers, they shoot from range) and Skitters (fast, they climb walls). Shamblers and Rattlers burn in daylight. Pigs, cows, sheep and chickens are food. Raw meat works, cooked meat feeds you more. Hunger drops as you act. You heal only while hunger is high, so eat before it gets low.
 
 How to play well:
 - Every turn, call one to three action tools, in the order you want them done. They run one after another, so plan a few steps ahead and you're never standing around (for example collect, then craft, then build_house). If one fails or something attacks you, the rest are skipped. In the same turn you may also call say, when you have something to tell the others.
 - Play like a good, fast player: keep busy in daylight and always be working toward the next thing you need.
-- First day, in this order: oak_log, then oak_planks, sticks, a crafting_table and a wooden_pickaxe. Then cobblestone for a stone_pickaxe and a stone_sword. Then kill 3 sheep for wool and craft a bed (3 wool and 3 planks). Then coal_ore for torches. Get food from animals as you go.
-- A house keeps you safe at night: build_house once you have about 38 cobblestone, planks or dirt (walls, a roof, your bed and a torch go in). From then on go_home every evening before dark.
+- First day, in this order: oak_log, then oak_planks, sticks, a crafting_table and a wooden_pickaxe. Then cobblestone for a stone_pickaxe and a stone_sword (collect cobblestone digs a staircase down into the rock and walks back up it).
+- Any building block works for building: cobblestone, planks, dirt, sand. Dirt is everywhere and fast to dig, so use it for walls and foundations when stone is slow to get. Then kill 3 sheep for wool and craft a bed (3 wool and 3 planks). Then coal_ore for torches. Get food from animals as you go.
+- A house keeps you safe at night: build_house once you have about 38 cobblestone, planks or dirt (walls, a roof, your bed and a torch go in). Beds only go in houses. From then on go_home every evening before dark.
+- Food for a growing town comes from farms: a hoe (wooden_hoe or stone_hoe) and wheat_seeds (from breaking tall grass, or a village farm), then farm beside water. Harvest the wheat when it is ripe (harvest) and craft bread.
 - Set yourself a goal (set_goal) and keep notes (note): you only see your last few actions, so write down what matters (where your house is, where the iron was, what the others said or did).
 - You can stay with another player for a while (follow_player), hand them things (give), or talk to them (say).
 - Nights: sleep in your bed (sleep). The night is skipped once half of the living players are asleep at the same time, so it is over in seconds. Only without a bed: when night falls (time 12500), dig_in, and use the night to mine around you underground (collect cobblestone, coal_ore, iron_ore) with your roof kept closed.
 - In the morning, or any time you are in a hole by day, dig_out right away. Never wait around in the daytime.
 - If something failed, don't do the same thing again: change what you ask for, move somewhere else, or do something else first.
-- Without a weapon, keep away from monsters at night, especially Rattlers.
+- With a weapon, kill what attacks you, Rattlers too (charge them: they are weak up close). Back off only when you are badly hurt. Without a weapon, keep away from monsters at night.
 - Stone only drops cobblestone if you mine it with a pickaxe.
 - Deep caves (below about y 30) are dark and full of Rattlers. Mine near the surface; don't go deep. If you end up underground, dig_out digs a staircase back up to the open sky from anywhere.
 - Armor goes on by itself as soon as you have it.
@@ -103,6 +136,11 @@ const TOOLS: Anthropic.Tool[] = [
   { name: "pick_up", description: "Pick up the dropped items lying near you.", input_schema: { type: "object", properties: {} } },
   { name: "flee", description: "Run away from the nearest danger.", input_schema: { type: "object", properties: {} } },
   { name: "wait", description: "Stay where you are for a while (like sealed in at night).", input_schema: { type: "object", properties: { seconds: { type: "integer", minimum: 2, maximum: 30 } }, required: ["seconds"] } },
+  { name: "build", description: "Build one of the town's buildings at the pack's base, or carry on with one that is half built: well (26 blocks), lamp (a lamp post: 3 blocks and a torch), storehouse (72, with your chests inside), market (40), hall (the town hall, 140), tower (a watchtower, 70), wall (round the whole base, 190, a stretch each time). Any building blocks work (cobblestone, planks, dirt, sand); fences, glass, torches and chests go in where it has them. You need to be near the base.", input_schema: { type: "object", properties: { what: { type: "string", enum: ["well", "lamp", "storehouse", "market", "hall", "tower", "wall"] } }, required: ["what"] } },
+  { name: "farm", description: "Till a field beside water near the base with your hoe and plant your wheat_seeds in it (a pond nearby, or water you pour from a water_bucket). Wheat ripens in about a day.", input_schema: { type: "object", properties: {} } },
+  { name: "harvest", description: "Cut the ripe wheat near you and plant the seeds straight back. 3 wheat make bread.", input_schema: { type: "object", properties: {} } },
+  { name: "loot_chest", description: "Walk to the nearest chest you haven't emptied (within 48 blocks: the villages' houses, treasure on the islands) and take everything in it.", input_schema: { type: "object", properties: {} } },
+  { name: "trade", description: "Trade with the nearest villager (within 24 blocks; they live in the villages). Without an offer number it walks over and tells you what they trade; with one, it makes that trade (times: how many).", input_schema: { type: "object", properties: { offer: { type: "integer", minimum: 0, maximum: 8 }, times: { type: "integer", minimum: 1, maximum: 16 } } } },
   { name: "build_house", description: "Build a small house right here (about 38 cobblestone, planks or dirt): walls, a roof, a door if you have one, and your bed and a torch inside. It becomes your home.", input_schema: { type: "object", properties: {} } },
   { name: "go_home", description: "Go back into your house and shut the door behind you (and sleep, if it's night and your bed is there).", input_schema: { type: "object", properties: {} } },
   { name: "pack_plan", description: "Write down the pack's shared plan: what the three of you are building and who does what. All three see it every turn; anyone can rewrite it as things change.", input_schema: { type: "object", properties: { plan: { type: "string" } }, required: ["plan"] } },
@@ -151,6 +189,7 @@ export class Brain {
   private heard: string[] = []; // chat and world events, newest last
   private reflexing = false;
   private reflexCount = 0;
+  private lastHouseTry = 0;
   private thinking = false;
   private chain: Promise<unknown> = Promise.resolve();
   private stopped = false;
@@ -273,6 +312,13 @@ export class Brain {
     this.load();
     if (this.goal) this.emit("goal", { text: this.goal });
     this.emit("spawn", { dead: false });
+    // a house it built before the town was kept in the pack counts too
+    if (this.body.home && !PACK.houses[this.name]) {
+      const h = this.body.home;
+      PACK.houses[this.name] = { x0: h.x0, z0: h.z0, x1: h.x0 + 3, z1: h.z0 + 3, y: h.y };
+      savePack();
+    }
+    this.emitCiv();
     const fetchDay = () =>
       fetch(this.game + "/clanker", { signal: AbortSignal.timeout(3000) })
         .then((r) => r.json())
@@ -285,7 +331,7 @@ export class Brain {
       BOARD.set(this.name, { goal: this.goal, doing: this.body.action });
     }, 1000);
     const guardTimer = setInterval(() => void this.guard(), 250);
-    this.heard.push("You just woke up in this hardcore world with the other two. You have one life. Talk to the others, agree on what the pack does first, and get started.");
+    this.heard.push("You just woke up in this hardcore world with the other two. You have one life. Your three are here to build a civilization together, from a camp to a city. Talk to the others, agree on what the pack does first, and get started.");
     let quiet = 0;
     while (!this.stopped && !this.body.dead && !this.body.closed) {
       while (this.reflexing) await sleep(100);
@@ -395,6 +441,7 @@ export class Brain {
     lines.push(PACK.plan ? `The pack's plan (written by ${PACK.by}; anyone can rewrite it with pack_plan):
 ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (PACK.base) lines.push(`The pack's base: x=${PACK.base.x} z=${PACK.base.z}, ${Math.round(Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z))} blocks ${dirWord(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z)}.`);
+    lines.push(this.civText());
     lines.push(this.goal ? `Your goal: ${this.goal}` : "You have no goal written down (set_goal).");
     if (b.home) lines.push(`Your home: a house at x=${b.home.x0 + 1} z=${b.home.z0 + 1}, ${Math.round(Math.hypot(b.home.x0 + 2 - b.phys.x, b.home.z0 + 2 - b.phys.z))} blocks ${dirWord(b.home.x0 + 2 - b.phys.x, b.home.z0 + 2 - b.phys.z)}${b.atHome() ? " (you're in it)" : ""}.`);
     if (this.notes.length) lines.push(`Your notes:\n${this.notes.map((n) => `- ${n}`).join("\n")}`);
@@ -492,6 +539,11 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       case "pick_up": return "!pickUp";
       case "sleep": return "!goToBed";
       case "build_house": return "!buildHouse";
+      case "build": return `!build(${q(i.what)})`;
+      case "farm": return "!farm";
+      case "harvest": return "!harvest";
+      case "loot_chest": return "!lootChest";
+      case "trade": return i.offer === undefined ? "!talkToVillager" : `!trade(${Number(i.offer)}, ${Number(i.times) || 1})`;
       case "go_home": return "!goHome";
       case "set_goal": return `!setGoal(${q(i.goal)})`;
       case "pack_plan": return "!packPlan";
@@ -572,6 +624,30 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           return await b.smelt(id, Math.max(1, Math.min(16, Number(i.count) || 1)));
         }
         case "sleep": return await b.sleep();
+        case "build": return await this.buildTown(String(i.what ?? "") as Exclude<Kind, "house" | "farm">);
+        case "farm": {
+          if (!PACK.base) return "the pack has no base yet: build_house first (the first house becomes the base), then farm next to it";
+          const d = Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z);
+          if (d > 30) return `you're ${Math.round(d)} blocks from the base: go_to_base first, the farm goes next to it`;
+          const r = await b.makeFarm(PACK.base.x, PACK.base.z, PACK.base.y, footprints());
+          if (r.rect) {
+            PACK.builds.push({ kind: "farm", ...r.rect, y: PACK.base.y, by: [this.name], done: true, at: Date.now() });
+            this.civUpdate(`${this.name} planted a farm`);
+          }
+          return r.text;
+        }
+        case "harvest": return await b.harvest();
+        case "loot_chest": return await b.lootChest();
+        case "trade": {
+          const o = i.offer === undefined || i.offer === null ? undefined : Number(i.offer);
+          const r = await b.trade(o, Math.max(1, Math.min(16, Number(i.times) || 1)));
+          const m = /^traded with .*? (\d+) times?/.exec(r);
+          if (m) {
+            PACK.trades += Number(m[1]);
+            this.civUpdate(`${this.name} traded with a villager`);
+          }
+          return r;
+        }
         case "build_house": {
           if (PACK.base && !b.home) {
             const d = Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z);
@@ -580,6 +656,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           const r = await b.buildHouse();
           if (b.home) {
             this.save();
+            PACK.houses[this.name] = { x0: b.home.x0, z0: b.home.z0, x1: b.home.x0 + 3, z1: b.home.z0 + 3, y: b.home.y };
+            this.civUpdate(`${this.name} built a house`);
             if (!PACK.base) {
               PACK.base = { x: b.home.x0 + 2, y: b.home.y, z: b.home.z0 + 2 };
               savePack();
@@ -657,6 +735,16 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // and nothing touching water: breaking it lets the water flood in on top of you
       const wet = (x: number, y: number, z: number) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([dx, dy, dz]) => IS_WATER[b.get(x + dx, y + dy, z + dz)] === 1);
       const found = b.findBlocks(plan.blocks, 32, 16).filter(([x, y, z]) => y >= floor && !wet(x, y, z) && !skip.has(x + z * 512 + y * 262144));
+      // stone that isn't lying open at its feet: mine down a staircase like a player, not a shaft
+      if (plan.blocks.includes(B.STONE) && (!found.length || found[0][1] < b.phys.y - 2 || skip.size >= 2)) {
+        if (!b.bestToolFor(B.STONE) || !canHarvest(B.STONE, b.bestToolFor(B.STONE))) return "stone needs a pickaxe: craft a wooden_pickaxe first";
+        const r = await b.stairMine(plan.gets, count - (have() - start));
+        tried++;
+        if (have() - start >= count || /water/.test(r)) return r;
+        skip.add(-1);
+        if (skip.size > 3) return r;
+        continue;
+      }
       if (!found.length) break;
       const [x, y, z] = found[0];
       const id = b.get(x, y, z);
@@ -672,6 +760,93 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (got >= count) return `got ${got} ${item}`;
     if (!tried) return `no ${item} within 32 blocks${plan.blocks.includes(B.STONE) ? " (dig_down to reach stone)" : " (explore to find some)"}`;
     return `got ${got} of ${count} ${item}`;
+  }
+
+  // ---------------------------------------------------------------- the civilization
+
+  /** One of the town's buildings at the base: a new one, or the next blocks of one that's half built. */
+  private async buildTown(kind: Exclude<Kind, "house" | "farm">): Promise<string> {
+    const b = this.body;
+    if (!KINDS[kind]) return `there is no "${kind}" to build: well, lamp, storehouse, market, hall, tower or wall`;
+    if (!PACK.base) return "the pack has no base yet: the first house anyone builds becomes it (build_house)";
+    const base = PACK.base;
+    const far = Math.hypot(base.x - b.phys.x, base.z - b.phys.z);
+    if (far > 40) return `you're ${Math.round(far)} blocks from the base: go_to_base first`;
+    if (b.buildingBlocks().n < (kind === "lamp" ? 1 : 8)) return `you have ${b.buildingBlocks().n} building blocks: collect some first (dirt is the quickest, or cobblestone, planks, sand)`;
+    const ground = (x: number, z: number) => b.groundAt(x, z, base.y);
+    let site = PACK.builds.find((x) => x.kind === kind && !x.done);
+    if (!site) {
+      if (kind === "wall") {
+        if (PACK.builds.some((x) => x.kind === "wall")) return "the wall round the base is already finished";
+        site = { kind, x0: base.x - 13, z0: base.z - 13, x1: base.x + 13, z1: base.z + 13, y: base.y, by: [], done: false, at: Date.now() };
+      } else {
+        const [w, d] = KINDS[kind].size;
+        const spot = b.siteNear(base.x, base.z, base.y, w, d, footprints(), kind === "lamp" ? 11 : 12, kind === "lamp" ? 2 : 3);
+        if (!spot) return `no flat open spot near the base for ${civLabel(kind)} (${w} by ${d}): clear some trees or level some ground near the base`;
+        site = { kind, x0: spot.x0, z0: spot.z0, x1: spot.x0 + w - 1, z1: spot.z0 + d - 1, y: spot.y, by: [], done: false, at: Date.now() };
+      }
+      PACK.builds.push(site);
+      savePack();
+    }
+    const cells = kind === "wall" ? wallPlan(base.x, base.z, 13, ground) : planFor(kind, site.x0, site.z0, site.y, ground);
+    if (!site.by.includes(this.name)) site.by.push(this.name);
+    const r = await b.buildCells(cells, kind === "wall" ? 48 : 90, `building ${civLabel(kind)}`);
+    const solid = cells.filter(([, , , k]) => k === "b" || k === "f" || k === "g");
+    const missing = solid.filter(([x, y, z]) => !SOLID[b.get(x, y, z)]).length;
+    const where = `x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)}`;
+    if (missing <= Math.floor(solid.length * (kind === "wall" ? 0.05 : 0.02))) {
+      site.done = true;
+      this.civUpdate(`${site.by.join(" and ")} finished ${civLabel(kind)}`);
+      return `finished ${civLabel(kind)} at ${where} (${r.placed} blocks placed this time)`;
+    }
+    savePack();
+    if (!r.placed) return r.outOf ? `out of building blocks: ${missing} still to go on ${civLabel(kind)} at ${where}` : `couldn't place blocks on ${civLabel(kind)} at ${where} (in the way, or out of reach): ${missing} to go`;
+    return `placed ${r.placed} blocks on ${civLabel(kind)} at ${where}: ${missing} to go${r.outOf ? " (you ran out of building blocks)" : ""}`;
+  }
+
+  /** Where the pack's civilization stands, what it has built and what the next stage needs. */
+  private civText(): string {
+    const pr = progress(civCount);
+    const kinds: Kind[] = ["house", "farm", "well", "lamp", "storehouse", "market", "hall", "tower", "wall"];
+    const built = kinds.map((k) => [k, civCount(k)] as const).filter(([, n]) => n > 0).map(([k, n]) => (n === 1 ? civLabel(k) : `${n} ${civLabel(k, 2)}`));
+    let t = `Your civilization: ${pr.name}${pr.stage >= 0 ? ` (stage ${pr.stage + 1} of ${STAGES.length})` : ""}. Built so far: ${built.length ? built.join(", ") : "nothing"}${PACK.trades ? `, ${PACK.trades} trades with villagers` : ""}.`;
+    t += pr.next ? ` Next, ${pr.next.name}: ${pr.next.needs.map((n) => `${civLabel(n.k, n.need)} ${n.have}/${n.need}`).join(", ")}.` : " You have built a city.";
+    const open = PACK.builds.filter((x) => !x.done).map((x) => `${civLabel(x.kind)} at x=${Math.round((x.x0 + x.x1) / 2)} z=${Math.round((x.z0 + x.z1) / 2)} (started by ${x.by.join(" and ") || "someone"})`);
+    if (open.length) t += ` Half built, anyone can carry on with build: ${open.join("; ")}.`;
+    const b = this.body;
+    const w = b.world;
+    if (w) {
+      const vs = w.villages.map((k) => VILLAGE_SITES[k]).filter(Boolean).map((v) => ({ v, d: Math.hypot(v.x - b.phys.x, v.z - b.phys.z) })).sort((a, c) => a.d - c.d);
+      if (vs.length) t += `\nVillages: ${vs.map(({ v, d }) => `${v.name} ${Math.round(d)} blocks ${dirWord(v.x - b.phys.x, v.z - b.phys.z)} (x=${v.x} z=${v.z})`).join("; ")}.`;
+      const gold = w.info.islands.chests.map((c) => ({ c, d: Math.hypot(c.x - b.phys.x, c.z - b.phys.z) })).sort((a, c) => a.d - c.d)[0];
+      if (gold) t += ` The nearest island treasure chest: x=${gold.c.x} z=${gold.c.z}, ${Math.round(gold.d)} blocks ${dirWord(gold.c.x - b.phys.x, gold.c.z - b.phys.z)}, across the water.`;
+    }
+    return t;
+  }
+
+  /** Something got built: save the pack, tell the site, and mark a new stage. */
+  private civUpdate(what: string): void {
+    const pr = progress(civCount);
+    const up = pr.stage > PACK.stage;
+    PACK.stage = Math.max(PACK.stage, pr.stage);
+    savePack();
+    this.emitCiv(what);
+    if (up) this.emit("plan", { text: `the pack is now ${pr.name}` });
+  }
+
+  emitCiv(what = ""): void {
+    const pr = progress(civCount);
+    const kinds: Kind[] = ["house", "farm", "well", "lamp", "storehouse", "market", "hall", "tower", "wall"];
+    this.emit("civ", {
+      text: what,
+      stage: pr.stage,
+      name: pr.name,
+      stages: STAGES.map((st) => st.name),
+      next: pr.next,
+      built: Object.fromEntries(kinds.map((k) => [k, civCount(k)])),
+      trades: PACK.trades,
+      open: PACK.builds.filter((x) => !x.done).map((x) => ({ kind: x.kind, by: x.by })),
+    });
   }
 
   private async digDown(n: number): Promise<string> {
@@ -771,11 +946,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (hurtRecently && b.lastHurt.cause === "mob:rattler" && !b.sealed()) {
       b.lastHurt.at = 0;
       const r = b.hostiles(20).find((m) => m.key === "rattler");
-      // charging an archer only pays close up, healthy and in armour (sonnet died charging one with a stone sword
-      // and no armour on its first night); otherwise get under cover
-      if (r && r.d < 6 && b.bestWeapon() && b.stats.hp >= 14 && b.armor.some(Boolean)) {
-        await this.reflex("going after a rattler", async () => `A rattler was shooting at you and you went for it (${await b.fight({ kind: "mob", id: r.id }, 15000)}).`);
-      } else await this.reflex("digging in, a rattler is shooting", async () => `A rattler was shooting at you, so you dug in: ${await b.digIn()}.`);
+      // with a weapon and the health for it: go and kill it (archers are weak up close), backing off once badly hurt
+      if (r && r.d < 16 && b.bestWeapon() && b.stats.hp >= 8) {
+        let res = "";
+        await this.reflex("going after a rattler", async () => {
+          res = await b.fight({ kind: "mob", id: r.id }, 20000, 6);
+          return `A rattler was shooting at you and you went for it (${res}).`;
+        });
+        if (/backed off/.test(res) && !b.dead && !b.sealed()) await this.reflex("hurt, digging in away from the rattler", async () => `You were badly hurt fighting a rattler, so you dug in: ${await b.digIn()}.`);
+      } else await this.reflex("digging in, a rattler is shooting", async () => `A rattler was shooting at you${b.bestWeapon() ? " and you were too hurt to fight it" : " and you had no weapon"}, so you dug in: ${await b.digIn()}.`);
       return;
     }
     // a monster in its face: fight it (with a weapon or health to spare), else run
@@ -802,6 +981,19 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       await this.reflex("heading home for the night", async () => `It was getting dark, so you went home: ${await b.goHome()}.`);
       return;
     }
+    // late afternoon with no house but the blocks for one: build it now at the base, so night finds it indoors with
+    // its bed (beds go in houses, not holes)
+    if (!b.home && tod >= 10200 && tod < 11900 && b.buildingBlocks().n >= 38 && Date.now() - this.lastHouseTry > 120000 && !/build|house/.test(b.action)) {
+      this.lastHouseTry = Date.now();
+      const far = PACK.base ? Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z) : 0;
+      if (!PACK.base || far < 60) {
+        await this.reflex("building a house before dark", async () => {
+          if (PACK.base && far > 12) await b.goto(PACK.base.x + 0.5, PACK.base.y, PACK.base.z + 0.5, 6, { maxMs: 40000 });
+          return `Evening was coming and you had no house, so you built one: ${await this.exec("build_house", {})}.`;
+        });
+        return;
+      }
+    }
     // dusk or night in the open with no house: take cover before the archers come out (they spawn at dark and
     // shoot from range, so waiting until it's night already is too late)
     const dusk = tod >= 11900 && tod < 23000;
@@ -809,7 +1001,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (!this.nightOutSince) this.nightOutSince = Date.now();
       else if (Date.now() - this.nightOutSince > (b.isNight() ? 4000 : 12000) && !/shelter|bed|sleep|home/.test(b.action)) {
         this.nightOutSince = Date.now();
-        const bed = b.has(BLOCKS[B.RED_BED].item || B.RED_BED) || b.findBlocks([0, 1, 2, 3, 4, 5, 6, 7].map((k) => B.RED_BED + k), 16, 1).length > 0;
+        // a bed already standing nearby (its own, in a house) is fine; a bed in its pocket is not put down in a hole
+        const bed = b.findBlocks([0, 1, 2, 3, 4, 5, 6, 7].map((k) => B.RED_BED + k), 16, 1).length > 0;
         if (bed) await this.reflex("going to bed", async () => `Night caught you in the open, so you went to bed: ${await b.sleep()}.`);
         else await this.reflex("digging in for the night", async () => `Night caught you in the open, so you dug in: ${await b.digIn()}.`);
       }

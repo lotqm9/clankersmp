@@ -11,15 +11,37 @@ import { FLAG, OP, decodeBlocks, decodePlayers, encodeMove, readBlockEntries, ty
 import { OP_ANIMALS, OP_ANIMALS_GONE, SPECS as ANIMAL_SPECS, decodeAnimals, decodeGone } from "../shared/animals.ts";
 import { OP_ITEMS, OP_ITEMS_GONE, OP_ITEM_PICKUP, decodeIds, decodeItems, decodePickups, type ItemSnap } from "../shared/drops.ts";
 import { MF, MOB_SPECS, OP_MOBS, OP_MOBS_GONE } from "../shared/mobs.ts";
-import { generateWorld, hashBlocks } from "../shared/worldgen.ts";
+import { generateWorld, hashBlocks, type GenInfo } from "../shared/worldgen.ts";
 import { newPhysState, tickPlayer, type MoveInput, type PhysState } from "../shared/physics.ts";
 import { PathFinder, type PathPoint } from "../server/src/pathfind.ts";
 import { breakTicks } from "../shared/mining.ts";
-import { B, BLOCKS, IS_WATER, SOLID, isFurnace } from "../shared/blocks.ts";
-import { fromWire, itemDef, type Stack } from "../shared/items.ts";
+import { B, BLOCKS, IS_WATER, SOLID, isFarmland, isFurnace, isStorage as isStorageId } from "../shared/blocks.ts";
+import { I, fromWire, isHoe as isHoeId, itemDef, type Stack } from "../shared/items.ts";
+import { canHarvest } from "../shared/mining.ts";
 import { cooldownTicks } from "../shared/combat.ts";
 import { EAT_TICKS } from "../shared/survival.ts";
 import { RECIPES, recipeSize } from "../shared/recipes.ts";
+import { JOBS } from "../shared/villagers.ts";
+
+interface VillagerOffers {
+  vid: number;
+  name: string;
+  job: number;
+  x: number;
+  y: number;
+  z: number;
+  offers: { a: [number, number]; b?: [number, number]; r: [number, number]; n: number; m: number }[];
+}
+export interface Rect {
+  x0: number;
+  z0: number;
+  x1: number;
+  z1: number;
+}
+/** One cell of a building plan: where, and what goes there (b building block, t torch, f fence, g glass, c chest). */
+export type PlanCell = [number, number, number, string];
+const TREE = new Set<number>([B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES, B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG]);
+const itemName = (id: number) => itemDef(id)?.key ?? BLOCKS[id]?.key ?? `item ${id}`;
 
 export const NIGHT_START = 12542;
 export const NIGHT_END = 23459;
@@ -29,7 +51,7 @@ const REACH = 4.3; // a little inside the server's 5 (eye to block centre)
 const HIT_REACH = 2.9;
 
 /** One world for every body in this process: the same seed, the same edits (each body applies them; idempotent). */
-let shared: { key: string; blocks: Uint8Array; hash: number } | null = null;
+let shared: { key: string; blocks: Uint8Array; hash: number; info: GenInfo } | null = null;
 
 export interface Seen {
   id: number;
@@ -107,6 +129,12 @@ export class Body {
   private pf!: PathFinder;
   private crafted: ((n: number) => void) | null = null;
   private smelting: ((r: { n: number; ms: number; why?: string }) => void) | null = null;
+  /** What the world holds beyond the land: which village sites were built, the islands' treasure, the harbour. */
+  world: { villages: number[]; info: GenInfo } | null = null;
+  /** Agent-only requests waiting for the server's one answer, by the answer's type. */
+  private answers = new Map<string, (m: unknown) => void>();
+  /** Chests it has emptied (or found empty): not walked back to. */
+  private looted = new Set<number>();
 
   constructor(name: string) {
     this.name = name;
@@ -187,9 +215,10 @@ export class Body {
         const key = `${m.seed}:${JSON.stringify(m.villages ?? [])}:${JSON.stringify(m.hub ?? null)}`;
         if (!shared || shared.key !== key) {
           const gen = generateWorld(m.seed, undefined, { villages: m.villages ?? [], hub: m.hub ?? { keep: [], roads: m.villages ?? [] } });
-          shared = { key, blocks: gen.blocks, hash: hashBlocks(gen.blocks) };
+          shared = { key, blocks: gen.blocks, hash: hashBlocks(gen.blocks), info: gen.info };
         }
         this.blocks = shared.blocks;
+        this.world = { villages: (m.villages ?? []) as number[], info: shared.info };
         if (shared.hash !== m.genHash) this.send({ t: "resync" });
         this.pf = new PathFinder(this.get);
         this.phys = newPhysState(m.you.x, m.you.y, m.you.z);
@@ -221,6 +250,14 @@ export class Body {
       case "win":
         // the player window (w 0) carries the whole inventory after a click; we never open one, but keep it right
         break;
+      case "looted":
+      case "atrades":
+      case "atraded": {
+        const f = this.answers.get(m.t);
+        this.answers.delete(m.t);
+        f?.(m);
+        break;
+      }
       case "stats":
         this.stats = m.s;
         break;
@@ -1078,6 +1115,71 @@ export class Body {
     return this.abort ? `left the furnace early; the ${r.n} smelted items will drop there when done` : `smelted ${r.n} ${itemDef(item)?.key ?? ""}`;
   }
 
+  /** One agent-only request and the server's answer to it (or `fallback` if none comes). */
+  private ask<T>(msg: Record<string, unknown>, answer: string, fallback: T, ms = 3000): Promise<T> {
+    return new Promise<T>((res) => {
+      const f = (m: unknown) => res(m as T);
+      this.answers.set(answer, f);
+      setTimeout(() => {
+        if (this.answers.get(answer) === f) this.answers.delete(answer);
+        res(fallback);
+      }, ms);
+      this.send(msg as never);
+    });
+  }
+
+  /** Walk to the nearest chest it hasn't emptied yet (village houses and the islands have them) and take everything. */
+  async lootChest(radius = 48): Promise<string> {
+    const ids = [0, 1, 2, 3].map((k) => B.CHEST + k).concat([B.BARREL]);
+    const found = this.findBlocks(ids, radius, 12).filter(([x, y, z]) => !this.looted.has(idx(x, y, z)));
+    if (!found.length) return `no chest within ${radius} blocks that you haven't emptied (the villages' houses have them)`;
+    for (const [x, y, z] of found.slice(0, 3)) {
+      if (this.abort || this.dead) return "interrupted";
+      const cell = idx(x, y, z);
+      const inReach = () => this.reachTo(x, y, z) <= REACH - 0.3;
+      if (!inReach()) await this.goto(x + 0.5, y, z + 0.5, 1.5, { maxMs: 30000, done: inReach });
+      if (!inReach()) {
+        this.looted.add(cell);
+        continue;
+      }
+      this.halt();
+      await this.lookAt(x + 0.5, y + 0.5, z + 0.5, 10);
+      this.action = "opening a chest";
+      const r = await this.ask<{ got: [number, number][]; why?: string }>({ t: "aloot" }, "looted", { got: [], why: "no answer from the server" });
+      if (r.why !== "no room in your inventory") this.looted.add(cell);
+      if (r.got.length) return `opened the chest at ${x} ${y} ${z} and took ${r.got.map(([id, n]) => `${n} ${itemName(id)}`).join(", ")}`;
+      if (r.why === "no room in your inventory") return "the chest has things in it but your inventory is full";
+    }
+    return "the chests you reached were empty";
+  }
+
+  /** The nearest villager (within 24 blocks), what it trades, and a walk over to it. */
+  private async nearVillager(): Promise<VillagerOffers | null> {
+    let v = (await this.ask<{ v: VillagerOffers | null }>({ t: "atrades" }, "atrades", { v: null })).v;
+    for (let k = 0; v && k < 3 && Math.hypot(v.x - this.phys.x, v.z - this.phys.z) > 2.5; k++) {
+      if (this.abort || this.dead) return null;
+      const target = v;
+      await this.goto(target.x, target.y, target.z, 2, { maxMs: 15000, done: () => Math.hypot(target.x - this.phys.x, target.z - this.phys.z) < 2.5 });
+      v = (await this.ask<{ v: VillagerOffers | null }>({ t: "atrades" }, "atrades", { v: null })).v;
+    }
+    if (v) await this.lookAt(v.x, v.y + 1.5, v.z, 8);
+    return v;
+  }
+
+  /** Trade with the nearest villager: no offer = list what it trades; else make offer `o` up to `times` times. */
+  async trade(o: number | undefined, times = 1): Promise<string> {
+    const v = await this.nearVillager();
+    if (!v) return "no villager within 24 blocks (they live in the villages, and stay indoors at night)";
+    const job = JOBS[v.job]?.key ?? "villager";
+    const words = (w: [number, number]) => `${w[1]} ${itemName(w[0])}`;
+    const list = v.offers.map((f, k) => `${k}: ${words(f.a)}${f.b ? ` + ${words(f.b)}` : ""} -> ${words(f.r)}${f.n ? "" : " (sold out)"}`).join("; ");
+    if (o === undefined || !v.offers[o]) return `${v.name} the ${job} trades: ${list}. Rubies are the money.`;
+    this.action = `trading with ${v.name}`;
+    const r = await this.ask<{ n: number; why?: string }>({ t: "atrade", v: v.vid, o, n: times }, "atraded", { n: 0, why: "no answer from the server" });
+    const f = v.offers[o];
+    return r.n ? `traded with ${v.name} the ${job} ${r.n} time${r.n === 1 ? "" : "s"}: ${words(f.a)}${f.b ? ` + ${words(f.b)}` : ""} for ${words(f.r)} each` : `couldn't trade with ${v.name}: ${r.why}`;
+  }
+
   /** Craft a recipe n times. 3x3 recipes go to a crafting table: a near one, or one it puts down. */
   async craft(rid: string, n: number): Promise<{ made: number; why?: string }> {
     const r = this.recipeFor(rid);
@@ -1135,7 +1237,7 @@ export class Body {
   }
 
   /** Fight something until it is dead or gone, it gets away, or time runs out. */
-  async fight(t: Target, maxMs = 25000): Promise<string> {
+  async fight(t: Target, maxMs = 25000, bailHp = 0): Promise<string> {
     const weapon = this.bestWeapon();
     if (weapon) await this.hold(weapon);
     const t0 = Date.now();
@@ -1143,6 +1245,10 @@ export class Body {
     let closest = Infinity;
     let closedAt = Date.now();
     while (!this.abort && !this.dead && Date.now() - t0 < maxMs) {
+      if (bailHp && this.stats.hp < bailHp) {
+        this.halt();
+        return `backed off, down to ${Math.round(this.stats.hp)} health${hits ? ` after ${hits} hits` : ""}`;
+      }
       const p = this.targetPos(t);
       if (!p) {
         this.halt();
@@ -1364,6 +1470,8 @@ export class Body {
     const beds = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => B.RED_BED + k);
     let bed = this.findBlocks(beds, 16, 1)[0];
     const bedItem = BLOCKS[B.RED_BED].item || B.RED_BED;
+    // a bed goes in a house, never down a hole in the open
+    if (!bed && this.has(bedItem) && !this.atHome()) return this.home ? "your bed belongs in your house: go_home and sleep there" : "a bed goes in a house: build_house first (it puts your bed inside), or dig_in for tonight";
     if (!bed && this.has(bedItem)) {
       const fx = Math.floor(this.phys.x);
       const fy = Math.floor(this.phys.y + 0.01);
@@ -1678,6 +1786,254 @@ export class Body {
     const walls = ring.length * 2 - 2 + 16;
     const doorIn = this.get(door[0], y, door[2]) >= B.OAK_DOOR && this.get(door[0], y, door[2]) < B.OAK_DOOR + 16;
     return `built a house at x=${x0 + 1} z=${z0 + 1} (${placed} of ${walls} blocks placed, ${doorIn ? "with a door" : "an open doorway on the north side"})`;
+  }
+
+  // ---------------------------------------------------------------- mining like a player: a staircase
+
+  /** Mine stone (and any ore beside the way) down a staircase: three blocks out per step and one step down, so it
+   *  walks straight back up the same stairs instead of digging a shaft and pillaring out. */
+  async stairMine(gets: number[], count: number, maxSteps = 26): Promise<string> {
+    const have = () => gets.reduce((n, id) => n + this.count(id), 0);
+    const start = have();
+    const fx0 = Math.floor(this.phys.x);
+    const fz0 = Math.floor(this.phys.z);
+    const fy0 = Math.floor(this.phys.y + 0.01);
+    const wetNear = (x: number, y: number, z: number) =>
+      [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].some(([a, b, c]) => IS_WATER[this.get(x + a, y + b, z + c)] === 1);
+    const isOre = (id: number) => !!BLOCKS[id]?.key?.endsWith("_ore");
+    // the way down with the most stone and no water
+    let dir: [number, number] | null = null;
+    let bestScore = -1;
+    for (const [sx, sz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as [number, number][]) {
+      let score = 0;
+      let wet = false;
+      for (let k = 1; k <= 8 && !wet; k++)
+        for (const dy of [-k - 1, -k, -k + 1]) {
+          const id = this.get(fx0 + sx * k, fy0 + dy, fz0 + sz * k);
+          if (IS_WATER[id]) wet = true;
+          if (id === B.STONE || id === B.COBBLESTONE) score += 1;
+          else if (isOre(id)) score += 3;
+        }
+      if (!wet && score > bestScore) [bestScore, dir] = [score, [sx, sz]];
+    }
+    if (!dir) return "water all around here: move somewhere drier to mine";
+    const [sx, sz] = dir;
+    const stairs: [number, number, number][] = [[fx0, fy0, fz0]];
+    let x = fx0;
+    let y = fy0;
+    let z = fz0;
+    this.action = "mining a staircase down";
+    for (let k = 0; k < maxSteps && !this.abort && !this.dead && have() - start < count; k++) {
+      const down = y > 34 && y > fy0 - 14;
+      const nx = x + sx;
+      const nz = z + sz;
+      const ny = down ? y - 1 : y;
+      const cells: [number, number, number][] = [[nx, y + 1, nz], [nx, y, nz]];
+      if (down) cells.push([nx, y - 1, nz]);
+      if (cells.some(([a, b, c]) => wetNear(a, b, c)) || this.get(nx, ny - 1, nz) === B.BEDROCK) break;
+      let ok = true;
+      for (const [a, b, c] of cells) {
+        if (SOLID[this.get(a, b, c)] && !(await this.mine(a, b, c, false))) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok) break;
+      if (!SOLID[this.get(nx, ny - 1, nz)]) {
+        const f = this.fillerBlock();
+        if (!f || !(await this.place(f, nx, ny - 1, nz))) break;
+      }
+      // step in: walking code tiptoes at ledges, so centre over the step and let it drop
+      if (down) await this.dropInto(nx, ny, nz);
+      else await this.center(nx, nz, 30);
+      this.debug(`stair ${k}: ${x} ${y} ${z} -> ${nx} ${ny} ${nz}, now ${this.phys.x.toFixed(1)} ${this.phys.y.toFixed(1)} ${this.phys.z.toFixed(1)} (${cells.map(([a, b, c]) => BLOCKS[this.get(a, b, c)]?.key).join(",")})`);
+      if (Math.floor(this.phys.x) !== nx || Math.floor(this.phys.z) !== nz) break;
+      x = nx;
+      y = ny;
+      z = nz;
+      stairs.push([x, y, z]);
+      // ore in the walls right beside the stairs comes out too
+      for (const [a, b, c] of [[x + sz, y, z + sx], [x - sz, y, z - sx], [x + sz, y + 1, z + sx], [x - sz, y + 1, z - sx]] as [number, number, number][]) {
+        const id = this.get(a, b, c);
+        if (isOre(id) && !wetNear(a, b, c) && canHarvest(id, this.bestToolFor(id))) await this.mine(a, b, c, false);
+      }
+      if (k % 3 === 2) await this.pickUp(3, 1500);
+    }
+    await this.pickUp(3, 2500);
+    const got = have() - start;
+    const depth = fy0 - Math.floor(this.phys.y + 0.01);
+    // and back up the same stairs
+    this.action = "walking back up the stairs";
+    for (let k = stairs.length - 2; k >= 0 && !this.abort && !this.dead; k--) {
+      const [a, b, c] = stairs[k];
+      await this.goto(a + 0.5, b, c + 0.5, 0.5, { maxMs: 4000 });
+    }
+    return `dug a staircase ${stairs.length - 1} steps down (${depth} deep), got ${got} of ${count}, and walked back up to the top`;
+  }
+
+  // ---------------------------------------------------------------- building the settlement
+
+  /** The ground under a column near `near`: the top solid block, -1 for water, -2 for a tree. */
+  groundAt(x: number, z: number, near: number): number {
+    for (let y = Math.min(126, near + 8); y >= Math.max(2, near - 10); y--) {
+      const id = this.get(x, y, z);
+      if (IS_WATER[id]) return -1;
+      if (SOLID[id]) return TREE.has(id) ? -2 : y;
+    }
+    return -1;
+  }
+
+  /** A footprint w by d near (cx, cz), `near` to `far` blocks out: ground within 1 of level, no water or trees, clear
+   *  of the rectangles in `avoid`. The north-west corner and the floor height (one above the highest ground). */
+  siteNear(cx: number, cz: number, cy: number, w: number, d: number, avoid: Rect[], far = 18, near = 3): { x0: number; z0: number; y: number } | null {
+    let best: { x0: number; z0: number; y: number } | null = null;
+    let bd = Infinity;
+    for (let oz = -far; oz <= far; oz++)
+      for (let ox = -far; ox <= far; ox++) {
+        const dist = Math.hypot(ox, oz);
+        if (dist < near || dist > far || dist >= bd) continue;
+        const x0 = cx + ox - Math.floor(w / 2);
+        const z0 = cz + oz - Math.floor(d / 2);
+        if (avoid.some((r) => x0 <= r.x1 + 1 && x0 + w - 1 >= r.x0 - 1 && z0 <= r.z1 + 1 && z0 + d - 1 >= r.z0 - 1)) continue;
+        let lo = 999;
+        let hi = -1;
+        let ok = true;
+        for (let dz = 0; dz < d && ok; dz++)
+          for (let dx = 0; dx < w && ok; dx++) {
+            const g = this.groundAt(x0 + dx, z0 + dz, cy);
+            if (g < 0) ok = false;
+            else {
+              lo = Math.min(lo, g);
+              hi = Math.max(hi, g);
+              if (hi - lo > 1) ok = false;
+            }
+          }
+        if (!ok) continue;
+        for (let dz = 0; dz < d && ok; dz++)
+          for (let dx = 0; dx < w && ok; dx++) for (let yy = hi + 1; yy <= hi + 4 && ok; yy++) if (SOLID[this.get(x0 + dx, yy, z0 + dz)]) ok = false;
+        if (!ok) continue;
+        bd = dist;
+        best = { x0, z0, y: hi + 1 };
+      }
+    return best;
+  }
+
+  /** The block it carries for one cell of a plan: b = any building block, t = torch, f = fence (or a building block),
+   *  g = glass (or a building block), c = chest. 0 if it has none. */
+  blockFor(kind: string): number {
+    if (kind === "t") return this.has(B.TORCH) ? B.TORCH : 0;
+    if (kind === "c") return this.has(B.CHEST) ? B.CHEST : 0;
+    if (kind === "f" && this.has(B.OAK_FENCE)) return B.OAK_FENCE;
+    if (kind === "g" && this.has(B.GLASS)) return B.GLASS;
+    for (const id of [B.COBBLESTONE, B.STONE_BRICKS, B.BRICKS, B.OAK_PLANKS, B.BIRCH_PLANKS, B.STONE, B.DIRT, B.SAND]) if (this.has(id)) return id;
+    return 0;
+  }
+
+  /** Place what is still missing of a plan (cells in build order), up to `max` blocks. */
+  async buildCells(cells: PlanCell[], max: number, label: string): Promise<{ placed: number; left: number; outOf: boolean }> {
+    const missing = ([x, y, z, k]: PlanCell) => (k === "t" ? this.get(x, y, z) !== B.TORCH : k === "c" ? !isStorageId(this.get(x, y, z)) : !SOLID[this.get(x, y, z)]);
+    let placed = 0;
+    let outOf = false;
+    this.action = label;
+    for (const cell of cells.filter(missing)) {
+      if (this.abort || this.dead || placed >= max) break;
+      const [x, y, z, k] = cell;
+      const id = this.blockFor(k);
+      if (!id) {
+        if (k === "b" || k === "f" || k === "g") {
+          outOf = true;
+          break;
+        }
+        continue;
+      }
+      // never wall itself in: step off a cell before a block goes there
+      const fx = Math.floor(this.phys.x);
+      const fz = Math.floor(this.phys.z);
+      const fy = Math.floor(this.phys.y + 0.01);
+      if (fx === x && fz === z && (y === fy || y === fy + 1)) await this.goto(x + 0.5 + (x % 2 ? 1.6 : -1.6), fy, z + 0.5, 0.8, { maxMs: 3000 });
+      if (await this.place(id, x, y, z)) placed++;
+    }
+    return { placed, left: cells.filter(missing).length, outOf };
+  }
+
+  // ---------------------------------------------------------------- farming
+
+  /** Till and plant a field beside water near (cx, cz): a pond it finds, or water it pours from a bucket. */
+  async makeFarm(cx: number, cz: number, cy: number, avoid: Rect[]): Promise<{ text: string; rect?: Rect }> {
+    const hoe = this.inv.find((st) => st && isHoeId(st.id))?.id;
+    if (!hoe) return { text: "you need a hoe to farm (craft wooden_hoe or stone_hoe: 2 planks or cobblestone and 2 sticks)" };
+    if (!this.has(I.WHEAT_SEEDS)) return { text: "you need wheat_seeds (break tall grass for them, or take them from a village farm or the farmer's chest)" };
+    let water: [number, number, number] | null = null;
+    for (const [x, y, z] of this.findBlocks([B.WATER], 22, 40)) {
+      if (Math.hypot(x - cx, z - cz) > 26 || avoid.some((r) => x >= r.x0 - 3 && x <= r.x1 + 3 && z >= r.z0 - 3 && z <= r.z1 + 3)) continue;
+      if (SOLID[this.get(x, y + 1, z)] || IS_WATER[this.get(x, y + 1, z)]) continue;
+      let land = 0;
+      for (let dz = -2; dz <= 2; dz++)
+        for (let dx = -2; dx <= 2; dx++) {
+          const id = this.get(x + dx, y, z + dz);
+          if ((id === B.GRASS || id === B.DIRT) && !SOLID[this.get(x + dx, y + 1, z + dz)]) land++;
+        }
+      if (land >= 8) {
+        water = [x, y, z];
+        break;
+      }
+    }
+    if (!water && this.has(I.WATER_BUCKET)) {
+      const s = this.siteNear(cx, cz, cy, 5, 5, avoid, 16, 4);
+      if (s) {
+        const [wx, wy, wz] = [s.x0 + 2, s.y - 1, s.z0 + 2];
+        if (SOLID[this.get(wx, wy, wz)] && !(await this.mine(wx, wy, wz))) return { text: "couldn't dig the hole for the water" };
+        await this.goto(wx + 1.5, wy + 1, wz + 0.5, 1.5, { maxMs: 8000 });
+        await this.hold(I.WATER_BUCKET);
+        await this.lookAt(wx + 0.5, wy + 0.5, wz + 0.5, 10);
+        this.send({ t: "place", x: wx, y: wy, z: wz, id: B.WATER });
+        this.swing();
+        await this.wait(8);
+        if (IS_WATER[this.get(wx, wy, wz)]) water = [wx, wy, wz];
+      }
+    }
+    if (!water) return { text: "no water near the base for a farm: bring a water_bucket (a bucket is 3 iron_ingot; fill it at any water), or farm beside a pond" };
+    const [wx, wy, wz] = water;
+    let tilled = 0;
+    let planted = 0;
+    this.action = "farming";
+    const field: [number, number][] = [];
+    for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) if ((dx || dz) && Math.abs(dx) + Math.abs(dz) <= 4) field.push([wx + dx, wz + dz]);
+    field.sort((a, b) => Math.hypot(a[0] - this.phys.x, a[1] - this.phys.z) - Math.hypot(b[0] - this.phys.x, b[1] - this.phys.z));
+    for (const [x, z] of field) {
+      if (this.abort || this.dead || !this.has(I.WHEAT_SEEDS)) break;
+      const id = this.get(x, wy, z);
+      if ((id === B.GRASS || id === B.DIRT) && !SOLID[this.get(x, wy + 1, z)]) {
+        if (this.get(x, wy + 1, z) !== B.AIR) await this.mine(x, wy + 1, z); // tall grass on top
+        if (this.reachTo(x, wy, z) > REACH - 0.5) await this.goto(x + 0.5, wy + 1, z + 0.5, 2.2, { maxMs: 6000, done: () => this.reachTo(x, wy, z) <= REACH - 0.5 });
+        await this.hold(hoe);
+        await this.lookAt(x + 0.5, wy + 1, z + 0.5, 8);
+        this.send({ t: "use", x, y: wy, z });
+        this.swing();
+        await this.wait(4);
+        if (isFarmland(this.get(x, wy, z))) tilled++;
+      }
+      if (isFarmland(this.get(x, wy, z)) && this.get(x, wy + 1, z) === B.AIR && (await this.place(I.WHEAT_SEEDS, x, wy + 1, z))) planted++;
+    }
+    if (!planted) return { text: `couldn't plant by the water at x=${wx} z=${wz} (no open grass or dirt right beside it)` };
+    return { text: `tilled ${tilled} and planted ${planted} wheat beside the water at x=${wx} z=${wz}; it ripens in about a day, then harvest`, rect: { x0: wx - 3, z0: wz - 3, x1: wx + 3, z1: wz + 3 } };
+  }
+
+  /** Cut ripe wheat near it and plant seeds straight back. */
+  async harvest(radius = 24): Promise<string> {
+    const ripe = this.findBlocks([B.WHEAT + 7], radius, 40);
+    if (!ripe.length) return `no ripe wheat within ${radius} blocks (wheat ripens about a day after planting)`;
+    const before = this.count(I.WHEAT);
+    let replanted = 0;
+    this.action = "harvesting wheat";
+    for (const [x, y, z] of ripe) {
+      if (this.abort || this.dead) break;
+      if (!(await this.mine(x, y, z))) continue;
+      await this.pickUp(2, 1200);
+      if (this.has(I.WHEAT_SEEDS) && this.get(x, y, z) === B.AIR && isFarmland(this.get(x, y - 1, z)) && (await this.place(I.WHEAT_SEEDS, x, y, z))) replanted++;
+    }
+    await this.pickUp(4, 3000);
+    return `harvested ${this.count(I.WHEAT) - before} wheat and replanted ${replanted} (3 wheat make bread)`;
   }
 
   /** Inside its house: in the room. */

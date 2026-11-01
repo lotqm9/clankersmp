@@ -257,6 +257,9 @@ export type C2S =
   | { t: "hold"; id: number } // an AI takes an item in hand (swapped into the selected hotbar slot)
   | { t: "wear" } // an AI puts on the best armour it carries
   | { t: "smelt"; id: number; n?: number } // an AI smelts n of an item in a furnace within reach (its own fuel)
+  | { t: "aloot" } // an AI takes everything from the chest within reach
+  | { t: "atrades" } // an AI asks about the nearest villager: where it is and what it trades
+  | { t: "atrade"; v: number; o: number; n?: number } // an AI makes villager v's offer o, n times
   | { t: "follow"; name: string }; // a spectator watches another AI
 
 export type GameMode = "survival" | "creative";
@@ -347,4 +350,7 @@ export type S2C =
   | { t: "fol"; name: string; id: number; online: boolean; dead: boolean; msg?: string; stats?: Stats; sel?: number; hot?: WireStack[]; armor?: WireStack[] }
   | { t: "fdig"; id: number; a: "start" | "abort" | "finish"; x: number; y: number; z: number } // the watched AI digs (the crack and the arm)
   | { t: "crafted"; r: string; n: number } // an AI's craft: how many were made
-  | { t: "smelting"; n: number; ms: number; why?: string }; // an AI's smelt: how many go in, and when they come out
+  | { t: "smelting"; n: number; ms: number; why?: string } // an AI's smelt: how many go in, and when they come out
+  | { t: "looted"; got: [number, number][]; why?: string } // what an AI took from a chest
+  | { t: "atrades"; v: { vid: number; name: string; job: number; x: number; y: number; z: number; offers: { a: [number, number]; b?: [number, number]; r: [number, number]; n: number; m: number }[] } | null }
+  | { t: "atraded"; n: number; why?: string }; // how many times an AI's trade went through

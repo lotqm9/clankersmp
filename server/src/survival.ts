@@ -31,6 +31,7 @@ import { litFurnace } from "./containers.ts";
 import type { Player, Shard } from "./shard.ts";
 import type { Villager } from "./villagers.ts";
 import { TALK_REACH_SERVER, villagerTitle } from "../../shared/villagers.ts";
+import { TRADES } from "../../shared/trades.ts";
 
 /** What is saved per player key (with the position). */
 export interface SurvivalData {
@@ -1240,6 +1241,66 @@ export class Survival {
       } else this.sh.items.spawn(st, fx + 0.5, fy + 1.1, fz + 0.5, 0, 0.2, 0);
     }, ms);
     return { n, ms };
+  }
+
+  /** Agents: take everything from the chest (or barrel) within reach. No window: an agent has no screen. */
+  agentLoot(p: Player): { got: [number, number][]; why?: string } {
+    const s = p.sv;
+    if (s.dead || s.win) return { got: [], why: "busy" };
+    const c = this.blockNear(p, isStorage);
+    if (!c) return { got: [], why: "no chest within reach" };
+    const cell = idx(c[0], c[1], c[2]);
+    const items = this.sh.containers.chest(cell);
+    const got: [number, number][] = [];
+    for (let k = 0; k < items.length; k++) {
+      const st = items[k];
+      if (!st) continue;
+      const left = this.give(p, { ...st });
+      if (st.n - left > 0) got.push([st.id, st.n - left]);
+      items[k] = left > 0 ? { ...st, n: left } : null;
+    }
+    if (got.length) {
+      this.sh.containers.onChange(cell, true);
+      this.sh.containers.save();
+      this.updateHeld(p);
+    }
+    return { got, why: got.length ? undefined : items.some(Boolean) ? "no room in your inventory" : "the chest is empty" };
+  }
+
+  /** Agents: the nearest villager within `r` blocks, where it stands and what it trades. */
+  agentTrades(p: Player, r = 24): { vid: number; name: string; job: number; x: number; y: number; z: number; offers: ReturnType<Shard["villagers"]["offers"]> } | null {
+    let best: Villager | null = null;
+    let bd = r;
+    for (const v of this.sh.villagers.villagers.values()) {
+      const d = Math.hypot(v.x - p.x, v.z - p.z);
+      if (d < bd && Math.abs(v.y - p.y) < 8) [bd, best] = [d, v];
+    }
+    if (!best) return null;
+    return { vid: best.id, name: best.def.name, job: best.job, x: +best.x.toFixed(1), y: +best.y.toFixed(1), z: +best.z.toFixed(1), offers: this.sh.villagers.offers(best) };
+  }
+
+  /** Agents: offer `o` of villager `vid`, up to `times` times, standing next to it. */
+  agentTrade(p: Player, vid: number, o: number, times: number): { n: number; why?: string } {
+    const s = p.sv;
+    if (s.dead || s.win) return { n: 0, why: "busy" };
+    const v = this.sh.villager(vid);
+    if (!v) return { n: 0, why: "that villager is gone" };
+    if (Math.hypot(v.x - p.x, v.y - p.y, v.z - p.z) > TALK_REACH_SERVER + 1.5) return { n: 0, why: "too far from the villager" };
+    const before = s.inv.inv.slice();
+    let n = 0;
+    for (let k = 0; k < times; k++) {
+      if (!this.sh.villagers.trade(v, o, s.inv.inv, false)) break;
+      n++;
+    }
+    for (let k = 0; k < 36; k++) if (s.inv.inv[k] !== before[k]) this.markSlot(p, k);
+    if (n) {
+      this.updateHeld(p);
+      this.pushOffers(v);
+      this.sh.villagers.startTalk(v, p.id, p.x, p.z);
+    }
+    this.sh.broadcastNearPoint(v.x, v.z, { t: "fx", k: n ? "trade" : "trade_no", id: v.id, x: +v.x.toFixed(2), y: +(v.y + 1.4).toFixed(2), z: +v.z.toFixed(2) }, 16);
+    const off = TRADES[v.job]?.[o];
+    return { n, why: n ? undefined : !off ? "no such offer" : v.stock[o] <= 0 ? "sold out" : "you can't pay for it (or have no room)" };
   }
 
   /** The nearest block within reach of the eyes that passes `test`. */

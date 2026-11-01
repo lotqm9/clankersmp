@@ -12,6 +12,8 @@ export interface Building extends Rect {
   by: string[];
   done: boolean;
   at: number;
+  /** Turns in a row nobody could place a block on it: a bad spot, given up on after a few. */
+  stuck?: number;
 }
 
 /** What each kind is, for the AIs (and the site). A "house" here is a cottage anyone builds with build: it counts

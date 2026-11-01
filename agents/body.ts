@@ -41,6 +41,7 @@ export interface Rect {
 }
 /** One cell of a building plan: where, and what goes there (b building block, t torch, f fence, g glass, c chest). */
 export type PlanCell = [number, number, number, string];
+const GROUND = new Set<number>([B.GRASS, B.DIRT, B.SAND, B.GRAVEL, B.CLAY, B.STONE] as number[]);
 const TREE = new Set<number>([B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES, B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG]);
 const itemName = (id: number) => itemDef(id)?.key ?? BLOCKS[id]?.key ?? `item ${id}`;
 
@@ -1960,6 +1961,14 @@ export class Body {
     return -1;
   }
 
+  /** The ground under a column if it's natural (grass, dirt, sand, gravel, clay, stone), else -3: a roof, a path or
+   *  somebody's floor is never ground to build on (a well got planned on top of a village house's roof). */
+  naturalGround(x: number, z: number, near: number): number {
+    const g = this.groundAt(x, z, near);
+    if (g < 0) return g;
+    return GROUND.has(this.get(x, g, z)) ? g : -3;
+  }
+
   /** A footprint w by d near (cx, cz), `near` to `far` blocks out: ground within 1 of level, no water or trees, clear
    *  of the rectangles in `avoid`. The north-west corner and the floor height (one above the highest ground). */
   siteNear(cx: number, cz: number, cy: number, w: number, d: number, avoid: Rect[], far = 18, near = 3): { x0: number; z0: number; y: number } | null {
@@ -1977,7 +1986,7 @@ export class Body {
         let ok = true;
         for (let dz = 0; dz < d && ok; dz++)
           for (let dx = 0; dx < w && ok; dx++) {
-            const g = this.groundAt(x0 + dx, z0 + dz, cy);
+            const g = this.naturalGround(x0 + dx, z0 + dz, cy);
             if (g < 0) ok = false;
             else {
               lo = Math.min(lo, g);

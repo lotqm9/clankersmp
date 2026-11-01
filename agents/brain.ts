@@ -350,14 +350,23 @@ export class Brain {
     const guardTimer = setInterval(() => void this.guard(), 250);
     this.heard.push("You just woke up in this hardcore world with the other two. You have one life. Your three are here to build a civilization together, from a camp to a city. Talk to the others, agree on what the pack does first, and get started.");
     let quiet = 0;
+    // the next plan, worked out while the last step of this one is still running, so one move flows into the next
+    // instead of standing still to think between them
+    let ahead: ReturnType<Brain["decide"]> | null = null;
     while (!this.stopped && !this.body.dead && !this.body.closed) {
       while (this.reflexing) await sleep(100);
       const t0 = Date.now();
-      this.thinking = true;
-      const idle = this.whileThinking();
-      const d = await this.decide();
-      this.thinking = false;
-      await idle;
+      let d: Awaited<ReturnType<Brain["decide"]>>;
+      if (ahead) {
+        d = await ahead;
+        ahead = null;
+      } else {
+        this.thinking = true;
+        const idle = this.whileThinking();
+        d = await this.decide();
+        this.thinking = false;
+        await idle;
+      }
       if (!d) {
         await sleep(4000);
         continue;
@@ -379,7 +388,13 @@ export class Brain {
         this.emit("command", { text: a.label });
         this.body.action = a.label;
         this.skill = a.name;
+        // the plan's last step: once it has run a moment, start thinking about what comes after it
+        const early = k === d.actions.length - 1 ? setTimeout(() => {
+          this.heard.push(`(You are still busy with ${a.desc}. Plan what you'll do the moment it's done.)`);
+          ahead = this.decide();
+        }, 1500) : null;
         const res = await this.exclusive(() => this.exec(a.name, a.input));
+        if (early) clearTimeout(early);
         this.skill = "";
         this.body.action = "idle";
         this.emit("result", { text: res.slice(0, 300) });
@@ -393,7 +408,11 @@ export class Brain {
         if (failed) this.failing.set(fk, { n: (this.failing.get(fk)?.n ?? 0) + 1, why: res.slice(0, 180), at: Date.now() });
         else this.failing.delete(fk);
         if (failed && k < d.actions.length - 1) this.heard.push(`The rest of your plan was skipped because ${a.desc} didn't work.`);
-        if (failed || this.reflexCount !== reflexes) break;
+        // a plan made before this failed (or before a reflex cut in) is stale: drop it and think again
+        if (failed || this.reflexCount !== reflexes) {
+          ahead = null;
+          break;
+        }
       }
       if (this.log.length > 14) this.log.splice(0, this.log.length - 14);
       const spent = Date.now() - t0;
@@ -654,7 +673,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           if (!PACK.base) return "the pack has no base yet: build_house first (the first house becomes the base), then farm next to it";
           const d = Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z);
           if (d > 30) return `you're ${Math.round(d)} blocks from the base: go_to_base first, the farm goes next to it`;
-          const r = await b.makeFarm(PACK.base.x, PACK.base.z, PACK.base.y, footprints());
+          // not in a village's own fields either
+          const villageLand: Rect[] = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean).map((v) => ({ x0: v.x - 27, z0: v.z - 27, x1: v.x + 27, z1: v.z + 27 }));
+          const r = await b.makeFarm(PACK.base.x, PACK.base.z, PACK.base.y, [...footprints(), ...villageLand]);
           // a new field is a new farm; more wheat by the same pond is the same farm (it used to count again each time)
           const same = r.rect && PACK.builds.find((f) => f.kind === "farm" && r.rect!.x0 <= f.x1 && r.rect!.x1 >= f.x0 && r.rect!.z0 <= f.z1 && r.rect!.z1 >= f.z0);
           if (r.rect && same) {
@@ -767,14 +788,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const soft = !plan.blocks.includes(B.STONE) && plan.blocks.some((id) => id === B.DIRT || id === B.GRASS || id === B.SAND || id === B.GRAVEL);
     const villages = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean);
     const offLimits = (x: number, z: number) =>
-      (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 18) || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 30) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
+      (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 16) || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 27) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
     let pit: [number, number, number] | null = null;
     while (!b.abort && !b.dead && have() - start < count && Date.now() - t0 < 90000) {
       // nothing deep: the deep caves are where Rattlers wait in the dark
       const floor = Math.max(30, Math.floor(b.phys.y) - 8);
       // and nothing touching water: breaking it lets the water flood in on top of you
       const wet = (x: number, y: number, z: number) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([dx, dy, dz]) => IS_WATER[b.get(x + dx, y + dy, z + dz)] === 1);
-      let found = b.findBlocks(plan.blocks, 32, soft ? 120 : 16).filter(([x, y, z]) => y >= floor && !wet(x, y, z) && !skip.has(x + z * 512 + y * 262144));
+      let found = b.findBlocks(plan.blocks, 32, soft ? 4000 : 16).filter(([x, y, z]) => y >= floor && !wet(x, y, z) && !skip.has(x + z * 512 + y * 262144));
       if (soft) {
         found = found.filter(([x, , z]) => !offLimits(x, z));
         if (pit) {
@@ -829,7 +850,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const far = Math.hypot(base.x - b.phys.x, base.z - b.phys.z);
     if (far > 40) return `you're ${Math.round(far)} blocks from the base: go_to_base first`;
     if (b.buildingBlocks().n < (kind === "lamp" ? 1 : 8)) return `you have ${b.buildingBlocks().n} building blocks: collect some first (dirt is the quickest, or cobblestone, planks, sand)`;
-    const ground = (x: number, z: number) => b.groundAt(x, z, base.y);
+    const ground = (x: number, z: number) => b.naturalGround(x, z, base.y);
+    // never on the villages' land: their houses, roads and farms are theirs (and roofs aren't ground)
+    const villages: Rect[] = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean).map((v) => ({ x0: v.x - 27, z0: v.z - 27, x1: v.x + 27, z1: v.z + 27 }));
     let site = PACK.builds.find((x) => x.kind === kind && !x.done);
     if (!site) {
       if (kind === "wall") {
@@ -837,7 +860,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         site = { kind, x0: base.x - 13, z0: base.z - 13, x1: base.x + 13, z1: base.z + 13, y: base.y, by: [], done: false, at: Date.now() };
       } else {
         const [w, d] = KINDS[kind].size;
-        const spot = b.siteNear(base.x, base.z, base.y, w, d, footprints(), kind === "lamp" ? 11 : 12, kind === "lamp" ? 2 : 3);
+        const spot = b.siteNear(base.x, base.z, base.y, w, d, [...footprints(), ...villages], kind === "lamp" ? 14 : 16, kind === "lamp" ? 2 : 3);
         if (!spot) return `no flat open spot near the base for ${civLabel(kind)} (${w} by ${d}): clear some trees or level some ground near the base`;
         site = { kind, x0: spot.x0, z0: spot.z0, x1: spot.x0 + w - 1, z1: spot.z0 + d - 1, y: spot.y, by: [], done: false, at: Date.now() };
       }
@@ -854,6 +877,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       site.done = true;
       this.civUpdate(`${site.by.join(" and ")} finished ${civLabel(kind)}`);
       return `finished ${civLabel(kind)} at ${where} (${r.placed} blocks placed this time)`;
+    }
+    // a spot where nothing will go in, turn after turn (on a roof, walled off, out of reach): give up on it, so the next
+    // build picks a better one instead of everyone trying the same blocks forever
+    site.stuck = r.placed ? 0 : (site.stuck ?? 0) + 1;
+    if (site.stuck >= 3 && !r.outOf && kind !== "wall") {
+      PACK.builds = PACK.builds.filter((x) => x !== site);
+      savePack();
+      return `gave up on ${civLabel(kind)} at ${where}: nothing would go in there three times (${r.why || "a bad spot"}). build it again and a better spot gets picked`;
     }
     savePack();
     if (!r.placed) return r.outOf ? `out of building blocks: ${missing} still to go on ${civLabel(kind)} at ${where}` : `couldn't place blocks on ${civLabel(kind)} at ${where}: ${r.why || "in the way, or out of reach"}; ${missing} to go`;

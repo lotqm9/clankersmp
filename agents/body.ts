@@ -1938,6 +1938,11 @@ export class Body {
         if (isOre(id) && !wetNear(a, b, c) && canHarvest(id, this.bestToolFor(id))) await this.mine(a, b, c, false);
       }
       if (k % 3 === 2) await this.pickUp(3, 1500);
+      // a torch every few steps down, the way a player lights a mine: monsters spawn in the dark, even by day
+      if (k % 5 === 4 && this.has(B.TORCH) && stairs.length > 2) {
+        const [tx, ty, tz] = stairs[stairs.length - 2];
+        if (this.get(tx, ty, tz) === B.AIR && SOLID[this.get(tx, ty - 1, tz)]) await this.place(B.TORCH, tx, ty, tz, 2000);
+      }
     }
     await this.pickUp(3, 2500);
     const got = have() - start;

@@ -1093,9 +1093,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       } else await this.reflex("digging in, a rattler is shooting", async () => `A rattler was shooting at you${b.bestWeapon() ? " and you were too hurt to fight it" : " and you had no weapon"}, so you dug in: ${await b.digIn()}.`);
       return;
     }
-    // a monster in its face: fight it (with a weapon or health to spare), else run
+    // a monster in its face: fight it (with a weapon or health to spare), else run; badly hurt in a tunnel there is
+    // nowhere to run (sonnet died fighting and fleeing in turns down a one-wide staircase): wall itself in instead
     if (h && (h.d < 3.2 || (hurtRecently && h.d < 6)) && !b.sealed()) {
       const armed = !!b.bestWeapon();
+      if (b.stats.hp < 8 && b.covered()) {
+        await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled yourself in to heal: ${await b.digIn()}.`);
+        return;
+      }
       if ((h.key === "rattler" && !armed && h.d > 3) || (!armed && b.stats.hp < 8)) {
         await this.reflex(`running from a ${h.key}`, async () => {
           await b.flee(h.x, h.z, 90);
@@ -1109,7 +1114,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           res = await b.fight({ kind: "mob", id: h.id }, 15000, 7);
           return `A ${h.key} attacked you and you fought it (${res}).`;
         });
-        if (/backed off/.test(res) && !b.dead) {
+        if (/backed off/.test(res) && !b.dead && b.covered()) {
+          await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${h.key} underground, so you walled yourself in to heal: ${await b.digIn()}.`);
+        } else if (/backed off/.test(res) && !b.dead) {
           await this.reflex(`running from a ${h.key}, badly hurt`, async () => {
             await b.flee(h.x, h.z, 140);
             return `You were badly hurt fighting a ${h.key}, so you broke off and ran.`;

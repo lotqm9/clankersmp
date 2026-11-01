@@ -12,6 +12,7 @@ let wasDead = {};
 let offlineSince = {};
 let civ = { key: '', since: Date.now() };
 let lastEvents = 0;
+let downSince = 0; // a deploy restarts the game for a minute or so: only a longer outage is news
 let events = [];
 
 const say = (agent, kind, text) => {
@@ -112,8 +113,10 @@ for (;;) {
       if (key !== civ.key) civ = { key, since: now };
       else if (now - civ.since > 25 * 60000) say('world', 'no-progress', `the civilization hasn't changed in ${Math.round((now - civ.since) / 60000)} min (${cv.name}; next: ${cv.next ? cv.next.needs.map((n) => `${n.k} ${n.have}/${n.need}`).join(', ') : 'none'})`);
     }
+    downSince = 0;
   } catch (e) {
-    say('world', 'unreachable', `can't read the live game: ${String(e).slice(0, 120)}`);
+    downSince ||= Date.now();
+    if (Date.now() - downSince > 120000) say('world', 'unreachable', `can't read the live game for ${Math.round((Date.now() - downSince) / 1000)}s: ${String(e).slice(0, 120)}`);
   }
   await new Promise((r) => setTimeout(r, 3000));
 }

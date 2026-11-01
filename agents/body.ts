@@ -1275,10 +1275,12 @@ export class Body {
   }
 
   /** Fight something until it is dead or gone, it gets away, or time runs out. */
-  async fight(t: Target, maxMs = 25000, bailHp = 0): Promise<string> {
+  async fight(t: Target, maxMs = 25000, bailHp = 0, leash = 0): Promise<string> {
     const weapon = this.bestWeapon();
     if (weapon) await this.hold(weapon);
     const t0 = Date.now();
+    const x0 = this.phys.x;
+    const z0 = this.phys.z;
     let hits = 0;
     let closest = Infinity;
     let closedAt = Date.now();
@@ -1286,6 +1288,11 @@ export class Body {
       if (bailHp && this.stats.hp < bailHp) {
         this.halt();
         return `backed off, down to ${Math.round(this.stats.hp)} health${hits ? ` after ${hits} hits` : ""}`;
+      }
+      // a leash: never chased off into the dark, away from the hole or the house it was in
+      if (leash && Math.hypot(this.phys.x - x0, this.phys.z - z0) > leash) {
+        this.halt();
+        return `let it go rather than chase it more than ${leash} blocks${hits ? ` (${hits} hits)` : ""}`;
       }
       const p = this.targetPos(t);
       if (!p) {

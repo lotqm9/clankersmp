@@ -1002,11 +1002,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (hurtRecently && b.lastHurt.cause === "mob:rattler" && !b.sealed()) {
       b.lastHurt.at = 0;
       const r = b.hostiles(20).find((m) => m.key === "rattler");
-      // with a weapon and the health for it: go and kill it (archers are weak up close), backing off once badly hurt
-      if (r && r.d < 16 && b.bestWeapon() && b.stats.hp >= 8) {
+      // with a weapon and the health for it: go and kill it (archers are weak up close), backing off once badly hurt.
+      // At night only a close one with nothing else around, and never a chase out into the dark (haiku left its hole
+      // at night to chase one 23 blocks past two shamblers, and died)
+      const night = b.isNight();
+      const others = r ? b.hostiles(14).filter((m) => m.id !== r.id).length : 0;
+      if (r && r.d < (night ? 7 : 14) && b.bestWeapon() && b.stats.hp >= (night ? 12 : 8) && others <= (night ? 0 : 1)) {
         let res = "";
         await this.reflex("going after a rattler", async () => {
-          res = await b.fight({ kind: "mob", id: r.id }, 20000, 6);
+          res = await b.fight({ kind: "mob", id: r.id }, 20000, 6, night ? 8 : 14);
           return `A rattler was shooting at you and you went for it (${res}).`;
         });
         if (/backed off/.test(res) && !b.dead && !b.sealed()) await this.reflex("hurt, digging in away from the rattler", async () => `You were badly hurt fighting a rattler, so you dug in: ${await b.digIn()}.`);

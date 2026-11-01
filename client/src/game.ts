@@ -26,7 +26,7 @@ import { blockBelow, eyeInWater, newPhysState, playerHeight, shapeIntersectsPlay
 import { BF, BOAT_H, BOAT_W, OP_BOATS, OP_BOATS_GONE, decodeBoats, newBoat, paddles, seatPos, tickBoat, type BoatBody, type BoatInput, type BoatSnap } from "../../shared/boats.ts";
 import { BoatView } from "./render/boats.ts";
 import { hydratedAt } from "../../shared/farming.ts";
-import { FLAG, OP, decodeBlocks, decodePlayers, encodeMove, readBlockEntries, type C2S, type CharityInfo, type GameMode, type PlayerInfo, type S2C, type ShardInfo, type Stats, type WindowKind } from "../../shared/protocol.ts";
+import { FLAG, OP, decodeBlocks, decodePlayers, encodeMove, readBlockEntries, type C2S, type GameMode, type PlayerInfo, type S2C, type ShardInfo, type Stats, type WindowKind } from "../../shared/protocol.ts";
 import { Menu, newPlayerInv, type Click, type Items, type PlayerInv } from "../../shared/inventory.ts";
 import { I, fromWire, isHoe, itemDef, itemName, type Stack } from "../../shared/items.ts";
 import { MF, MOB_SPECS, OP_MOBS, OP_MOBS_GONE } from "../../shared/mobs.ts";
@@ -237,7 +237,6 @@ export class Game {
 
   // server
   private shard: ShardInfo = { n: 1, players: 1, cap: MAX_PLAYERS_PER_SHARD };
-  private charity: CharityInfo | null = null;
   private timeBase = { time: 6000, at: performance.now() };
   private rtt = 0;
   private debug = false;
@@ -681,7 +680,7 @@ export class Game {
         if (typeof err.server === "number" && err.server > PROTOCOL_VERSION) {
           if (reloadOnceForUpdate()) return;
         } else {
-          this.startingSoon("The $STEVE Craft server is updating to the new version.");
+          this.startingSoon("The clankersmp server is updating to the new version.");
           return;
         }
       }
@@ -693,7 +692,7 @@ export class Game {
           { label: "Back to Title Screen", onClick: () => this.backToTitle() },
         ]);
       } else {
-        this.startingSoon("Can't reach the $STEVE Craft server right now. It may be restarting.");
+        this.startingSoon("Can't reach the clankersmp server right now. It may be restarting.");
       }
       return;
     }
@@ -797,8 +796,8 @@ export class Game {
       this.bindWatching();
       if (this.fol) this.onFol(this.fol);
     } else {
-      const tip = this.touchMode ? "Stick to walk, drag to look, Dig and Place to build." : "E for your inventory and crafting, T to chat, Tab for players and the charity meter, F5 to see yourself.";
-      this.ui.addChat([{ text: `Welcome to $STEVE Craft, ${this.myName}! `, cls: "y" }, { text: tip, cls: "g" }]);
+      const tip = this.touchMode ? "Stick to walk, drag to look, Dig and Place to build." : "E for your inventory and crafting, T to chat, Tab for players, F5 to see yourself.";
+      this.ui.addChat([{ text: `Welcome to clankersmp, ${this.myName}! `, cls: "y" }, { text: tip, cls: "g" }]);
       this.bindInput();
       window.addEventListener("beforeunload", this.beforeUnload);
       this.state = "play";
@@ -930,7 +929,6 @@ export class Game {
     this.chunks.onError = () => this.ui.notice("Terrain worker stopped. Please refresh the page.");
     this.sky = new Sky();
     this.scenery = new Scenery(solid, water, this.info);
-    this.scenery.setCharity(this.charity);
     const latest = updates[0];
     if (latest) this.scenery.setLatestUpdate({ n: latest.n, title: latest.title, line: latest.line, date: latest.date });
     this.selection = new Selection(atlas);
@@ -1002,10 +1000,7 @@ export class Game {
         this.updateServerLine();
         break;
       case "charity":
-        this.charity = m.c;
-        this.ui.charity = m.c;
-        this.scenery?.setCharity(m.c);
-        break;
+        break; // ($STEVE Craft's charity meter: not part of clankersmp)
       case "pong":
         this.rtt = performance.now() - m.c;
         break;
@@ -3115,7 +3110,7 @@ export class Game {
       // v11: speaking icons (and who you muted) in the list
       const talking = new Set([...this.others.values()].filter((o) => this.voice.talking.has(o.id)).map((o) => o.name));
       if (this.voice.transmitting) talking.add(this.myName);
-      this.ui.showTab(true, `Server ${this.shard.n}`, names, this.myName, this.shard.cap, this.charity, talking, this.voice.muted);
+      this.ui.showTab(true, `Server ${this.shard.n}`, names, this.myName, this.shard.cap, talking, this.voice.muted);
     } else this.ui.showTab(false);
     if (this.debug && this.frames % 10 === 0) this.ui.setDebug(this.debugLines(x, y, z));
   }
@@ -3176,7 +3171,7 @@ export class Game {
     const mins = Math.floor(((tod % 1000) / 1000) * 60);
     const info = this.renderer.info;
     return [
-      `$STEVE Craft (${this.fps} fps, ${this.chunks.pending} sections queued)`,
+      `clankersmp (${this.fps} fps, ${this.chunks.pending} sections queued)`,
       `XYZ: ${x.toFixed(3)} / ${y.toFixed(5)} / ${z.toFixed(3)}`,
       `Block: ${Math.floor(x)} ${Math.floor(y)} ${Math.floor(z)}  Chunk: ${Math.floor(x / 16)} ${Math.floor(y / 16)} ${Math.floor(z / 16)}`,
       `Facing: ${facing} (${wrapDeg(this.yaw).toFixed(1)} / ${this.pitch.toFixed(1)})`,

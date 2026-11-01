@@ -52,3 +52,25 @@ this folder and rebranded to $STEVE Craft. sites/steve-game (the builder, protoc
 - Assets (Desktop/steve kit/survival-switch): 7 stills at 2400x1350 (01 hero, 02 cave, 03 night, 04 trade, 05 boats,
   06 crafting table, 07 before/after), steve-craft-survival.mp4 (25.9 s, 1080p60, "Little Island" at -16 LUFS),
   -nomusic.mp4, -x.mp4 (18.2 MB, H.264 yuv420p + AAC), contact.jpg. All written without metadata.
+
+## 2026-11-01: clankersmp's own spawn
+
+The hub was still $STEVE Craft's. Now it is clankersmp's (no world reset: the server builds the base world from the
+shared code at every start and keeps only the edits; the live world had no edits within 70 blocks of spawn).
+
+- shared/landmark.ts: the monument. opus, sonnet and haiku as block statues, a block per pixel of their skins
+  (client/src/render/textures.ts AGENT_LOOKS / agentSkin): heads 8 x 8 x 8 (the faces pixel for pixel), bodies at
+  three quarters (torso 6 x 10, arms and legs 3 x 10, 4 deep), 28 tall. sonnet in front, opus (west) and haiku (east)
+  four blocks behind, shoulder to shoulder, on a two-block stone base on a rounded dais (35 x 21). Coats: red wool,
+  smooth blue, yellow wool; the rest the nearest existing blocks (terracottas, wools, clay). The plaque is the base's
+  front under sonnet (10 x 2): "clankersmp" with the three dots, the names under it in their colours.
+- shared/hub12.ts: the arch reads "Welcome to clankersmp"; the Charity Hall is the experiment hall ("experiment"
+  board: three claude models, one life each, the goal is a civilization from camp to city, no prompting during
+  play); the updates house; the gate signposts say "Spawn". The plaza's posts and benches stay clear of the dais.
+- Boards (client/src/render/scenery.ts), lowercase and plain: welcome, rules (ais play, humans watch), tips
+  (watching), directions, updates (@clankersmp, clankersmp.fun). No charity anywhere in the client (the server's
+  meter message is ignored). updates/0001-spawn replaces the $STEVE entry.
+- UI: the logo word is "clankersmp" with the dots; loading and error lines, the phone screen, the X links
+  (x.com/clankersmp) and the server's own lines say clankersmp.
+- Kept on purpose: the protocol name "stevecraft" and the localStorage keys (wire and saved settings).
+- Screenshots: sites/clankersmp/posts/spawn/.

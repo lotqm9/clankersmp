@@ -1,14 +1,14 @@
-// DOM user interface in $STEVE Craft's look (the classic grey bevelled buttons, dirt screens, the KenneyMini pixel font,
+// DOM user interface in clankersmp's look (the classic grey bevelled buttons, dirt screens, the KenneyMini pixel font,
 // yellow highlights): the title card, pause and options, loading and error screens, the "what's new" toast, the
-// player list with the charity meter, chat, the creative block picker and the survival screens (death, sleeping, the
-// safe-zone toast, first-join tips). The in-game HUD is native pixel art (pixel-gui.ts): the classic hotbar strip and
+// player list, chat, the creative block picker and the survival screens (death, sleeping, the safe-zone toast,
+// first-join tips). The in-game HUD is native pixel art (pixel-gui.ts): the classic hotbar strip and
 // selection box with counts and durability, hearts/food/air, the held item's name in our pixel font.
 
 import { BLOCKS, PICKER_ORDER, TEX } from "../../shared/blocks.ts";
 import { CHAT_MAX } from "../../shared/constants.ts";
 import { HUD_ARMOR, HUD_BUBBLE, HUD_FOOD, HUD_HEART } from "../../shared/item-textures.ts";
 import { itemName, type Stack } from "../../shared/items.ts";
-import type { CharityInfo, Stats } from "../../shared/protocol.ts";
+import type { Stats } from "../../shared/protocol.ts";
 import type { Settings } from "./settings.ts";
 import { fillSlot } from "./inventory-ui.ts";
 import { textEl } from "./pixel-font.ts";
@@ -23,10 +23,12 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, parent?
   return e;
 }
 
-/** The "$STEVE Craft" logo in the pixel font, with its yellow splash line. */
-function logo(parent: HTMLElement, cls: string, splash = "Now survival!"): HTMLDivElement {
+/** The "clankersmp" logo in the pixel font with the three AIs' dots (opus, sonnet, haiku), and its yellow splash line. */
+function logo(parent: HTMLElement, cls: string, splash = "one life each!"): HTMLDivElement {
   const box = el("div", `logo ${cls}`, parent);
-  el("div", "logo-word", box, "$STEVE Craft");
+  const word = el("div", "logo-word", box, "clankersmp");
+  const dots = el("span", "logo-dots", word);
+  for (const c of ["#e5402f", "#3466ee", "#f6c31c"]) el("i", "", dots).style.background = c;
   if (splash) el("div", "splash", box, splash);
   return box;
 }
@@ -112,7 +114,6 @@ export class UI {
   private dirtUrl = "";
   chatOpen = false;
   pickerOpen = false;
-  charity: CharityInfo | null = null;
 
   constructor(root: HTMLElement, actions: UIActions) {
     this.root = root;
@@ -251,7 +252,7 @@ export class UI {
     this.titleEl.innerHTML = "";
     const box = el("div", "title-box", this.titleEl);
     logo(box, "title-logo");
-    el("p", "title-sub", box, "One shared world: survive and build with everyone.");
+    el("p", "title-sub", box, "three claude models, one hardcore world.");
     el("div", "btn big", box, touch ? "Tap to play" : "Click to play");
     el("p", "title-server", box, serverLine);
     if (!touch) {
@@ -507,14 +508,14 @@ export class UI {
 
   private tabKey = "";
 
-  showTab(on: boolean, serverName = "", names: string[] = [], me = "", cap = 50, charity: CharityInfo | null = null, talking: Set<string> = new Set(), muted: Set<string> = new Set()): void {
+  showTab(on: boolean, serverName = "", names: string[] = [], me = "", cap = 50, talking: Set<string> = new Set(), muted: Set<string> = new Set()): void {
     this.tabEl.classList.toggle("hidden", !on);
     if (!on) {
       this.tabKey = "";
       return;
     }
     // Called every frame while Tab is held: rebuild only when something changed.
-    const key = JSON.stringify([serverName, names, me, cap, charity, [...talking], [...muted]]);
+    const key = JSON.stringify([serverName, names, me, cap, [...talking], [...muted]]);
     if (key === this.tabKey) return;
     this.tabKey = key;
     this.tabEl.innerHTML = "";
@@ -527,7 +528,6 @@ export class UI {
       if (talking.has(n) && !muted.has(n)) row.title = "Talking";
       if (muted.has(n)) row.title = "Muted (voice)";
     }
-    if (charity) this.charityMeter(this.tabEl, charity);
   }
 
   /** v11: the mic pill: "Hold V to talk", "Talking" with a level meter, "Open mic", or the admin's mute. */
@@ -542,30 +542,6 @@ export class UI {
     el("span", "", this.voiceEl, text);
     const meter = el("span", "meter", this.voiceEl);
     el("span", "", meter).style.width = `${Math.round(Math.min(1, v.level) * 100)}%`;
-  }
-
-  /** "Raised for @GamersOutreach": the coin's on-chain total, read by the server about once a minute. */
-  private charityMeter(parent: HTMLElement, c: CharityInfo): void {
-    const box = el("div", "charity", parent);
-    const title = el("div", "ctitle", box, "Raised for ");
-    el("span", "", title, c.x ? `@${c.x}` : c.name || "charity");
-    const bar = el("div", "bar", box);
-    const fill = el("div", "fill", bar);
-    const label = el("div", "amount", bar);
-    if (c.state === "live" && typeof c.totalSol === "number") {
-      const total = c.totalSol;
-      const next = MILESTONES.find((m) => m > total) ?? Math.ceil(total / 10_000 + 1) * 10_000;
-      fill.style.width = `${Math.max(2, Math.min(100, (total / next) * 100))}%`;
-      label.textContent = `${fmtSol(total)} SOL`;
-      const parts: string[] = [];
-      if ((c.donatedSol ?? 0) > 0) parts.push(`${fmtSol(c.donatedSol ?? 0)} donated`);
-      if ((c.pendingSol ?? 0) > 0) parts.push(`${fmtSol(c.pendingSol ?? 0)} on its way`);
-      parts.push(`next milestone ${next.toLocaleString("en-US")} SOL`);
-      el("div", "sub", box, parts.join(" · "));
-    } else {
-      fill.style.width = "0%";
-      label.textContent = c.state === "prelaunch" ? "Starts at launch" : "Total not available yet";
-    }
   }
 
   // ---------------------------------------------------------------- screens
@@ -592,7 +568,7 @@ export class UI {
     s.style.backgroundImage = `url(${this.dirtUrl})`;
     const col = el("div", "col", s);
     logo(col, "screen-logo", "");
-    el("div", "paper-foot", s, "$STEVE Craft · charity coin partnered with @GamersOutreach · stevepumpfun.com");
+    el("div", "paper-foot", s, "clankersmp · three claude models, one hardcore world · clankersmp.fun");
     return { s, col };
   }
 
@@ -654,8 +630,7 @@ export class UI {
     this.button(card, "Back to Title Screen", () => this.actions.backToTitle());
     const foot = el("div", "card-foot", card);
     el("p", "server", foot, serverLine);
-    if (this.charity) el("p", "charity-line", foot, charityLine(this.charity));
-    xLink(foot, "Updates on X: @SteveOnPF");
+    xLink(foot, "updates on x: @clankersmp");
     this.setScreen(s);
   }
 
@@ -864,12 +839,12 @@ export class UI {
   showMobile(): void {
     const { s, col } = this.paperScreen();
     el("h1", "", col, "Best with a keyboard and mouse");
-    el("p", "detail", col, "$STEVE Craft is one shared survival world you play right in the browser. It plays best on a desktop or laptop.");
+    el("p", "detail", col, "clankersmp is three claude models in one hardcore world, live in your browser. It looks best on a desktop or laptop.");
     const row = el("div", "buttons", col);
     this.button(row, "Play with keyboard and mouse", () => this.actions.playDesktop());
     this.button(row, "Try touch controls", () => this.actions.playTouch());
     this.button(row, "Back to Title Screen", () => this.actions.backToTitle());
-    xLink(col, "Updates on X: @SteveOnPF");
+    xLink(col, "updates on x: @clankersmp");
     this.setScreen(s);
   }
 }
@@ -955,28 +930,10 @@ function icon(parent: HTMLElement, name: string): void {
 /** A link to the X account (opens in a new tab). */
 function xLink(parent: HTMLElement, text: string): void {
   const a = el("a", "xlink", parent, text);
-  a.href = "https://x.com/SteveOnPF";
+  a.href = "https://x.com/clankersmp";
   a.target = "_blank";
   a.rel = "noopener";
   a.addEventListener("click", (e) => e.stopPropagation());
 }
 
-const MILESTONES = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
 
-export function charityTitle(c: CharityInfo): string {
-  const who = c.name ? c.name + (c.x ? ` (@${c.x})` : "") : c.x ? `@${c.x}` : "charity";
-  return `Raised for ${who}`;
-}
-
-export function charityLine(c: CharityInfo): string {
-  if (c.state === "live" && typeof c.totalSol === "number") return `${charityTitle(c)}: ${fmtSol(c.totalSol)} SOL`;
-  if (c.state === "prelaunch") return `The coin's fees go to ${c.name || "charity"}. The meter starts at launch.`;
-  return `The coin's fees go to ${c.name || "charity"}.`;
-}
-
-export function fmtSol(v: number): string {
-  if (v < 1) return v.toFixed(3);
-  if (v < 100) return v.toFixed(2);
-  if (v < 10_000) return v.toFixed(1);
-  return Math.round(v).toLocaleString("en-US");
-}

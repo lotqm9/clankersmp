@@ -1,5 +1,5 @@
-/* $STEVE Craft in-game UI: the classic look of the $STEVE Craft builder (sites/steve-game): the KenneyMini pixel font
-   (CC0), grey bevelled buttons, dirt-backed screens, white text with a dark drop shadow and yellow highlights. Sizes
+/* clankersmp in-game UI, in the classic look of the engine it forked: the KenneyMini pixel font (CC0), grey bevelled
+   buttons, dirt-backed screens, white text with a dark drop shadow and yellow highlights. Sizes
    are in GUI pixels (var(--s), set from JS like the classic automatic GUI scale). */
 
 @font-face {
@@ -253,7 +253,7 @@ body {
   color: #8a8a8a;
 }
 
-/* ---------------------------------------------------------------- Tab: players + charity */
+/* ---------------------------------------------------------------- Tab: players */
 
 .tablist {
   position: absolute;
@@ -287,42 +287,6 @@ body {
 .tablist .grid .me {
   color: var(--yellow);
 }
-.tablist .charity {
-  margin-top: calc(var(--s) * 4);
-  padding-top: calc(var(--s) * 3);
-  border-top: var(--s) solid rgba(255, 255, 255, 0.18);
-  text-align: center;
-}
-.tablist .charity .ctitle {
-  margin-bottom: calc(var(--s) * 2);
-}
-.tablist .charity .ctitle span {
-  color: var(--yellow);
-}
-.tablist .charity .bar {
-  position: relative;
-  height: calc(var(--s) * 11);
-  background: rgba(0, 0, 0, 0.6);
-  border: var(--s) solid #000;
-  box-shadow: inset 0 0 0 var(--s) rgba(255, 255, 255, 0.14);
-  overflow: hidden;
-}
-.tablist .charity .fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  background: linear-gradient(#b4ff6e 0, #b4ff6e calc(var(--s) * 2), #6fd42a calc(var(--s) * 2), #4fa81a 100%);
-}
-.tablist .charity .amount {
-  position: relative;
-  line-height: calc(var(--s) * 9);
-}
-.tablist .charity .sub {
-  margin-top: calc(var(--s) * 2);
-  color: var(--gray);
-}
-
 /* ---------------------------------------------------------------- the logo */
 
 .logo {
@@ -336,6 +300,20 @@ body {
   color: #ffffff;
   text-shadow: calc(var(--s) * 2) calc(var(--s) * 2) 0 #3f3f3f;
   white-space: nowrap;
+}
+/* the three AIs' dots after the word (opus, sonnet, haiku), like the site's mark */
+.logo-dots {
+  display: inline-flex;
+  gap: calc(var(--s) * 1.5);
+  margin-left: calc(var(--s) * 4);
+  vertical-align: middle;
+}
+.logo-dots i {
+  display: block;
+  width: calc(var(--s) * 5);
+  height: calc(var(--s) * 5);
+  border-radius: 50%;
+  box-shadow: calc(var(--s) * 1) calc(var(--s) * 1) 0 #3f3f3f;
 }
 .splash {
   position: absolute;

@@ -1,16 +1,15 @@
-// Static scenery: the endless ocean around the island, the world border, the "$STEVE Craft" plaque at the landmark,
-// and the hub's boards: welcome and how to play, the rules, the live charity total, the latest update, the gate beams
-// ("Spawn" inside, "Wilderness" outside) and the starter pavilion's sign; the welcome arch, the tips and directions
-// boards, the halls' names, the Beacon's plaque, the gates' signposts (where each road goes) and the harbour's sign.
-// Text is drawn on canvases in $STEVE Craft's look: the classic pixel font (KenneyMini) in dark ink on oak signs, and
-// white or yellow on dark stone plates.
+// Static scenery: the endless ocean around the island, the world border, the "clankersmp" plaque at the monument (the
+// three AIs' statues), and the hub's boards: welcome, the rules, what the experiment is, the latest update, the gate
+// beams ("Spawn" inside, "Wilderness" outside) and the starter pavilion's sign; the welcome arch, the tips and
+// directions boards, the halls' names, the Beacon's plaque, the gates' signposts (where each road goes) and the
+// harbour's sign. Text is drawn on canvases in the classic look: the pixel font (KenneyMini) in dark ink on oak signs,
+// and white or yellow on dark stone plates. The boards are lowercase and plain, like clankersmp's own voice.
 
 import * as THREE from "three";
 import { TEX } from "../../../shared/blocks.ts";
 import { SEA_LEVEL, WORLD_SIZE } from "../../../shared/constants.ts";
 import type { GenInfo } from "../../../shared/worldgen.ts";
 import type { Panel } from "../../../shared/hub.ts";
-import type { CharityInfo } from "../../../shared/protocol.ts";
 import { borderMaterial, U } from "./shaders.ts";
 
 const FAR = 2400;
@@ -71,12 +70,12 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, x: number, y: number,
   return y;
 }
 
-function fmt(v: number): string {
-  if (v < 1) return v.toFixed(3);
-  if (v < 100) return v.toFixed(2);
-  if (v < 10_000) return v.toFixed(1);
-  return Math.round(v).toLocaleString("en-US");
-}
+/** The three AIs' colours (the site's dots): opus, sonnet, haiku. */
+const AI_COLORS: [string, string][] = [
+  ["opus", "#e5402f"],
+  ["sonnet", "#3466ee"],
+  ["haiku", "#f6c31c"],
+];
 
 /** An oak sign: warm planks with faint grain lines and a darker frame (our own drawing). */
 function oakPlate(ctx: CanvasRenderingContext2D, W: number, H: number): void {
@@ -149,7 +148,6 @@ export class Scenery {
   private borderMat: THREE.ShaderMaterial;
   private sign: THREE.Mesh[] = [];
   private panels: { p: Panel; canvas: HTMLCanvasElement; tex: THREE.CanvasTexture; mat: THREE.ShaderMaterial }[] = [];
-  private charity: CharityInfo | null = null;
   private latest: { n: number; title: string; line: string; date: string } | null = null;
 
   constructor(solidMat: THREE.Material, waterMat: THREE.Material, info: GenInfo) {
@@ -179,12 +177,6 @@ export class Scenery {
 
     this.buildSign(info);
     for (const p of info.hub?.panels ?? []) this.buildPanel(p);
-  }
-
-  /** The charity board shows the live total (the same numbers as the meter). */
-  setCharity(c: CharityInfo | null): void {
-    this.charity = c;
-    for (const x of this.panels) if (x.p.kind === "charity") this.paint(x);
   }
 
   setLatestUpdate(u: { n: number; title: string; line: string; date: string } | null): void {
@@ -257,7 +249,7 @@ export class Scenery {
       ctx.font = `${sz}px KenneyMini, monospace`;
       ctx.textBaseline = "top";
       ctx.fillStyle = blue;
-      ctx.fillText(t.toUpperCase(), pad, y);
+      ctx.fillText(t, pad, y);
       y += sz * 1.7;
     };
     const title = (t: string, scale = 0.13) => {
@@ -275,59 +267,37 @@ export class Scenery {
       for (const l of list) y = wrap(ctx, l, pad, y, W - pad * 2, sz * 1.32) + sz * gap;
     };
     if (p.kind === "welcome") {
-      kicker("Welcome to $STEVE Craft");
-      title("One shared world", 0.12);
-      lines(
-        [
-          "Survive and build with everyone, right in your browser.",
-          "Left click breaks · right click places or uses · E: inventory and crafting · T: chat",
-          "Spawn is safe. Leave by a gate on the ring road to start your adventure.",
-        ],
-        0.054,
-        0.4,
-      );
+      kicker("welcome to clankersmp");
+      title("three ais live here", 0.12);
+      lines(["opus, sonnet and haiku play here on their own.", "humans can't join. you watch through their eyes.", "watch them live at clankersmp.fun"], 0.058, 0.4);
     } else if (p.kind === "rules") {
-      kicker("Server rules");
-      title("Play fair, be kind", 0.12);
-      lines(["1. Be kind in chat. No hate, no harassment.", "2. Don't grief or take from other people's builds.", "3. No cheats, hacks or exploits.", "4. Build big, help new players, have fun."], 0.058, 0.32);
-    } else if (p.kind === "charity") {
-      kicker("Charity coin");
-      const c = this.charity;
-      const live = c && c.state === "live" && typeof c.totalSol === "number";
-      const amount = live ? `${fmt(c!.totalSol!)} SOL raised` : c && c.state === "prelaunch" ? "Starts at launch" : "Coming soon";
-      title(amount, live ? 0.15 : 0.14);
-      const who = c?.x ? `@${c.x}` : c?.name || "charity";
-      lines([`Charity coin partnered with ${who}.`, live ? "The total updates about once a minute, straight from the chain." : "The meter goes live the day the coin launches.", "Updates on X: @SteveOnPF"]);
+      kicker("server rules");
+      title("ais play, humans watch", 0.12);
+      lines(["1. only opus, sonnet and haiku have a body here.", "2. everyone else is a spectator: no chat, no help.", "3. hardcore. one life, no respawn.", "4. what they build stays where they built it."], 0.056, 0.32);
+    } else if (p.kind === "experiment" || p.kind === "charity") {
+      kicker("the experiment");
+      title("three claude models", 0.13);
+      lines(["one life each", "the goal is a civilization, from camp to city", "no prompting during play"], 0.062, 0.42);
     } else if (p.kind === "updates") {
       const u = this.latest;
-      kicker("Latest update");
-      title(u ? u.title : "$STEVE Craft", 0.13);
-      lines([u ? u.line : "New things ship here first.", "Updates on X: @SteveOnPF · stevepumpfun.com"], 0.058, 0.4);
+      kicker("latest update");
+      title(u ? u.title : "clankersmp", 0.13);
+      lines([u ? u.line : "new things ship here first.", "updates on x: @clankersmp · clankersmp.fun"], 0.058, 0.4);
     } else if (p.kind === "tips") {
-      kicker("Tips");
-      title("Getting started", 0.12);
-      lines(
-        [
-          "Punch a tree for wood, then make a crafting table (E). The Workshop has free ones.",
-          "Night brings mobs: build a shelter, or sleep in a bed.",
-          "Villagers trade for rubies. Follow a signposted road.",
-          "Take a boat from the Harbour to the islands.",
-          "Voice chat: turn it on in Options, then hold V to talk.",
-        ],
-        0.048,
-        0.32,
-      );
+      kicker("tips");
+      title("watching", 0.12);
+      lines(["watch all three live at clankersmp.fun", "the main view cuts to whoever has the most going on.", "what they think shows up as whispers in the chat.", "mobs come out at night, and a death is final."], 0.054, 0.34);
     } else if (p.kind === "directions") {
-      kicker("Where to go");
-      title("Roads from spawn", 0.12);
-      lines([...(p.lines ?? []), "Each road leaves by a signposted gate on the ring road."], 0.06, 0.36);
+      kicker("where to go");
+      title("roads from spawn", 0.12);
+      lines([...(p.lines ?? []), "each road leaves by a gate on the ring."], 0.06, 0.36);
     }
     x.tex.needsUpdate = true;
   }
 
   private buildSign(info: GenInfo): void {
     const b = info.board;
-    if (b.x0 < 0) return; // (no sign: the landmark's ground was kept for players' builds)
+    if (b.x0 < 0) return; // (no sign: the monument's ground was kept for players' builds)
     const w = b.x1 + 1 - b.x0;
     const h = b.y1 + 1 - b.y0;
     const c = document.createElement("canvas");
@@ -335,28 +305,54 @@ export class Scenery {
     c.width = w * PPB;
     c.height = h * PPB;
     const ctx = c.getContext("2d")!;
-    // the landmark's plaque: "$STEVE Craft" in yellow on a dark stone plate, the charity line under it
+    // the monument's plaque on a dark stone plate: "clankersmp" in white with the three AIs' dots after it (the site's
+    // mark), and under it their names in their colours, in the order they stand (opus west, sonnet, haiku east)
     const paint = () => {
       stonePlate(ctx, c.width, c.height);
-      ctx.textAlign = "center";
+      ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      const big = Math.round(PPB * 0.82);
+      const big = Math.round(PPB * 0.8);
       ctx.font = `${big}px KenneyMini, monospace`;
+      const word = "clankersmp";
+      const r = Math.round(big * 0.17); // a dot's radius
+      const gap = Math.round(big * 0.12);
+      const ww = ctx.measureText(word).width;
+      const total = ww + gap * 2 + r * 2 * 3 + gap * 2;
+      let x = (c.width - total) / 2;
+      const y = c.height * 0.38;
       const sh = Math.round(big / 9);
       ctx.fillStyle = "#3f3f3f";
-      ctx.fillText("$STEVE Craft", c.width / 2 + sh, c.height * 0.36 + sh);
-      ctx.fillStyle = "#ffff55";
-      ctx.fillText("$STEVE Craft", c.width / 2, c.height * 0.36);
-      const line = "Charity coin partnered with @GamersOutreach";
-      let small = PPB * 0.34;
-      ctx.font = `${Math.round(small)}px KenneyMini, monospace`;
-      small = Math.round(small * Math.min(1, (c.width * 0.9) / ctx.measureText(line).width));
-      ctx.font = `${small}px KenneyMini, monospace`;
-      const sh2 = Math.max(2, Math.round(small / 9));
-      ctx.fillStyle = "#3f3f3f";
-      ctx.fillText(line, c.width / 2 + sh2, c.height * 0.76 + sh2);
+      ctx.fillText(word, x + sh, y + sh);
       ctx.fillStyle = "#ffffff";
-      ctx.fillText(line, c.width / 2, c.height * 0.76);
+      ctx.fillText(word, x, y);
+      x += ww + gap * 2 + r;
+      const dy = y + big * 0.12;
+      for (const [, col] of AI_COLORS) {
+        ctx.fillStyle = "#151515";
+        ctx.beginPath();
+        ctx.arc(x + sh / 2, dy + sh / 2, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(x, dy, r, 0, Math.PI * 2);
+        ctx.fill();
+        x += r * 2 + gap;
+      }
+      // the names
+      const small = Math.round(PPB * 0.36);
+      ctx.font = `${small}px KenneyMini, monospace`;
+      const sep = ctx.measureText("   ").width;
+      const widths = AI_COLORS.map(([n]) => ctx.measureText(n).width);
+      let nx = (c.width - (widths.reduce((a, b) => a + b, 0) + sep * 2)) / 2;
+      const ny = c.height * 0.77;
+      const sh2 = Math.max(2, Math.round(small / 9));
+      AI_COLORS.forEach(([n, col], k) => {
+        ctx.fillStyle = "#151515";
+        ctx.fillText(n, nx + sh2, ny + sh2);
+        ctx.fillStyle = col;
+        ctx.fillText(n, nx, ny);
+        nx += widths[k] + sep;
+      });
     };
     paint();
     void document.fonts?.ready.then(() => {

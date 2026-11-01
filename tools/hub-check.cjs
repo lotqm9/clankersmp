@@ -1,7 +1,7 @@
 // Browser check of the bigger spawn (update 12, protocol v10) in real headless Chrome against a local server with
 // DEV_COMMANDS=1: the client builds the same world from the welcome's hub plan (no full download), you arrive in the
-// courtyard facing north with the welcome arch, the landmark and the Beacon in view; the boards are painted (welcome,
-// rules, tips, directions naming every road, the live charity board in its hall, the latest update in its house);
+// courtyard facing north with the welcome arch, the monument (the three AIs) and the Beacon in view; the boards are
+// painted (welcome, rules, tips, directions naming every road, the experiment in its hall, the latest update in its house);
 // the hub is a safe zone out to r 68 (no building, no hits) and the wild starts past the ring; the Beacon's ladder
 // climbs to the gallery; each gate's signpost names its road and the road reaches its village; boats wait at the
 // harbour and you can row one away; no page errors.
@@ -57,12 +57,12 @@ const check = (ok, what) => {
   // ---- the arrival
   const me = await g(() => ({ x: window.__game.phys.x, y: window.__game.phys.y, z: window.__game.phys.z, yaw: window.__game.yaw }));
   check(Math.abs(me.x - info.spawn.x) < 1 && Math.abs(me.z - info.spawn.z) < 1 && me.z > CZ + 40, `you arrive in the courtyard south of the plaza (${me.x.toFixed(1)}, ${me.z.toFixed(1)})`);
-  check(Math.abs(Math.abs(me.yaw) - 180) < 1, "facing north, to the landmark and the Beacon");
+  check(Math.abs(Math.abs(me.yaw) - 180) < 1, "facing north, to the monument and the Beacon");
   const arch = h.panels.find((p) => p.kind === "arrival" && p.nz === 1);
-  check(!!arch && arch.text === "Welcome to $STEVE Craft" && arch.z < me.z && arch.z > CZ + 30, "under the welcome arch");
+  check(!!arch && arch.text === "Welcome to clankersmp" && arch.z < me.z && arch.z > CZ + 30, "under the welcome arch");
   check(!!h.beacon && (await at(h.beacon.x, h.beacon.top, h.beacon.z)) === 138, "the Beacon stands north of the plaza, a diamond on the tip");
   const kinds = h.panels.map((p) => p.kind);
-  check(["welcome", "rules", "tips", "directions", "charity", "updates", "hall", "news", "starter", "beacon"].every((k) => kinds.includes(k)), "the boards: welcome, rules, tips, directions, the charity and updates boards in their halls");
+  check(["welcome", "rules", "tips", "directions", "experiment", "updates", "hall", "news", "starter", "beacon"].every((k) => kinds.includes(k)), "the boards: welcome, rules, tips, directions, the experiment and updates boards in their halls");
   const dir = h.panels.find((p) => p.kind === "directions");
   check(info.villages.every((v) => dir.lines.some((l) => l.startsWith(`${v.name}: `))) && dir.lines.some((l) => l.startsWith("Harbour: ")), `the directions name every road (${dir.lines.join(" | ")})`);
   // the boards are painted (a board's canvas has ink on it)

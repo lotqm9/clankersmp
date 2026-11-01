@@ -1,5 +1,5 @@
 // The spawn hub (shared/hub12.ts over the old hub, shared/hub.ts): flat out to r 64 with nothing carved under it, the
-// plaza and the "punch a tree" landmark (shared/landmark.ts), the spawn in the arrival courtyard facing it, the
+// plaza and the monument (shared/landmark.ts: clankersmp's three AIs), the spawn in the arrival courtyard facing it, the
 // Beacon (climbable, the highest thing around), avenues, the ring road and a signposted gate per road, the boards and
 // the halls, the Workshop's stations, settled water, lanterns for the night. Plus a planted sapling's tree shape.
 
@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { B, EMIT, SOLID, isFurnace } from "../shared/blocks.ts";
 import { DEFAULT_SEED, SPAWN_X, SPAWN_Z, WORLD_HEIGHT, WORLD_SIZE, idx } from "../shared/constants.ts";
 import { OLD_SAFE_RADIUS, SAFE_RADIUS } from "../shared/hub.ts";
-import { CHEST_ROWS, FACE_ROWS } from "../shared/landmark.ts";
+import { STATUE_HEIGHT, STATUE_LOOKS } from "../shared/landmark.ts";
 import { HUB_R } from "../shared/hub12.ts";
 import { generateWorld, hashBlocks } from "../shared/worldgen.ts";
 import { nextWater } from "../shared/water.ts";
@@ -46,59 +46,70 @@ test("the hub is flat ground at the plaza height out to r 64, with nothing carve
   assert.ok(checked > 1300, `${checked}`);
 });
 
-test("the landmark: a blocky guy in a teal shirt and blue trousers punching a tree; the plaque; the spawn faces it", () => {
+test("the monument: opus, sonnet and haiku as statues built from their skins, on their base; the plaque; the spawn faces them", () => {
   const lm = info.hub.landmark!;
-  assert.ok(lm, "the landmark stands");
-  const { x: sx, z: sz, y0 } = lm.figure;
-  assert.equal(y0, sh + 2, "standing on the dais's lawn");
-  assert.equal(at(sx, sh + 1, sz), B.GRASS);
-  assert.equal(lm.figure.top, y0 + 31, "32 blocks tall");
-  // trousers and shoes, the shirt with the gold "$" on the chest, the face looking east at the tree
-  assert.equal(at(sx, y0 + 6, sz), B.SMOOTH_BLUE, "blue trousers");
-  assert.equal(at(sx, y0, sz), B.WOOL_GREY, "shoes");
-  assert.equal(at(sx - 2, y0 + 16, sz), B.SMOOTH_TEAL, "a teal shirt");
-  let gold = 0;
-  CHEST_ROWS.forEach((row, r) => [...row].forEach((ch, c) => {
-    const id = at(sx + 1, y0 + 23 - r, sz + 3 - c);
-    if (ch === "G") {
-      gold++;
-      assert.equal(id, B.GOLD_BLOCK, `the $ at ${c},${r}`);
-    }
-  }));
-  assert.equal(gold, 9, "the $ sign");
-  assert.equal(FACE_ROWS.length, 8);
-  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) if (FACE_ROWS[r][c] === "W") assert.equal(at(sx + 3, y0 + 31 - r, sz + 3 - c), B.WOOL_WHITE, "an eye");
-  assert.equal(at(sx - 1, y0 + 31, sz), B.WOOL_BROWN, "hair on top");
-  // the right arm straight out at shoulder height, the fist meeting the trunk
-  for (let x = sx + 2; x <= sx + 9; x++) assert.equal(at(x, y0 + 21, sz + 5), B.SMOOTH_TAN, `the arm at ${x - sx}`);
-  assert.equal(at(sx + 10, y0 + 21, sz + 5), B.OAK_LOG, "the fist meets the trunk");
-  assert.equal(at(sx + 4, y0 + 15, sz + 5), B.AIR, "nothing under the arm");
-  assert.equal(lm.tree.x, sx + 10);
-  assert.ok(lm.tree.top > lm.figure.top && lm.tree.top < sh + 45, `the crown over him (${lm.tree.top - sh})`);
-  let leaves = 0;
-  for (let y = y0 + 20; y <= lm.tree.top; y++) for (let z = sz - 6; z <= sz + 20; z++) for (let x = sx; x <= sx + 22; x++) if (at(x, y, z) === B.OAK_LEAVES) leaves++;
-  assert.ok(leaves > 400, `a big crown (${leaves} leaves)`);
-  for (let x = sx - 4; x <= sx + 3; x++) for (let z = sz - 4; z <= sz + 3; z++) assert.notEqual(at(x, y0 + 32, z), B.OAK_LEAVES, "no leaves on his head");
-  // the plaque on the dais's south rim, facing the arrival
-  assert.deepEqual(info.board, { x0: CX - 4, x1: CX + 4, y0: sh + 2, y1: sh + 3, z: CZ + 7 });
-  for (let x = CX - 4; x <= CX + 4; x++) for (let y = sh + 2; y <= sh + 3; y++) assert.equal(at(x, y, CZ + 7), B.STONE_BRICKS, "the plaque's wall");
+  assert.ok(lm, "the monument stands");
+  assert.deepEqual(lm.statues.map((s) => s.name), ["opus", "sonnet", "haiku"], "west to east as you look at them");
+  const [opus, sonnet, haiku] = lm.statues;
+  for (const s of lm.statues) {
+    assert.equal(s.y0, sh + 4, `${s.name}: on the base`);
+    assert.equal(s.top, s.y0 + STATUE_HEIGHT - 1, `${s.name}: ${STATUE_HEIGHT} tall`);
+    for (let x = s.x0 + 3; x <= s.x0 + 8; x++) for (let z = s.zb; z <= s.zb + 3; z++) assert.equal(at(x, sh + 3, z), B.STONE_BRICKS, `${s.name}: the base under its feet`);
+    assert.equal(at(s.x0 + 5, s.top + 1, s.zb), B.AIR, `${s.name}: nothing on its head`);
+  }
+  assert.ok(opus.top < sh + 32, "a little shorter than the old 32-block figure");
+  // sonnet in front, opus and haiku a step behind either side, their inner arms just behind sonnet's
+  assert.equal(opus.zb, sonnet.zb - 4);
+  assert.equal(haiku.zb, sonnet.zb - 4);
+  assert.equal(opus.x0 + 9, sonnet.x0, "opus's left arm behind sonnet's right");
+  assert.equal(haiku.x0, sonnet.x0 + 9, "haiku's right arm behind sonnet's left");
+  // every face and chest is the skin's, a block per pixel; the coats are their own colours
+  STATUE_LOOKS.forEach((L, k) => {
+    const s = lm.statues[k];
+    const hx = s.x0 + 2;
+    const hy = s.y0 + 20;
+    const face = s.zb + 5;
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) assert.equal(at(hx + c, hy + 7 - r, face), L.pal[L.face[r][c]], `${L.name}: the face at ${c},${r}`);
+    for (let r = 0; r < 10; r++) for (let c = 0; c < 6; c++) assert.equal(at(s.x0 + 3 + c, s.y0 + 19 - r, s.zb + 3), L.pal[L.chest[r][c]], `${L.name}: the chest at ${c},${r}`);
+    for (let r = 0; r < 10; r++) assert.equal(at(s.x0 + 4, s.y0 + 9 - r, s.zb + 3), L.pal[L.legs[r]], `${L.name}: the leg at ${r}`);
+    assert.equal(at(s.x0 + 1, s.y0 + 15, s.zb + 3), L.pal.c, `${L.name}: a sleeve`);
+    assert.equal(at(s.x0 + 1, s.y0 + 10, s.zb + 3), L.pal.s, `${L.name}: a hand`);
+    assert.equal(at(hx + 3, hy + 7, s.zb), L.hood ? L.pal.c : L.pal.h, `${L.name}: ${L.hood ? "the hood up" : "hair"} on top`);
+  });
+  assert.equal(at(opus.x0 + 4, opus.y0 + 15, opus.zb + 3), B.WOOL_RED, "opus: a red hoodie");
+  assert.equal(at(sonnet.x0 + 4, sonnet.y0 + 15, sonnet.zb + 3), B.SMOOTH_BLUE, "sonnet: a blue jacket");
+  assert.equal(at(haiku.x0 + 4, haiku.y0 + 15, haiku.zb + 3), B.WOOL_YELLOW, "haiku: a yellow raincoat");
+  assert.equal(at(opus.x0 + 4, opus.y0 + 19, opus.zb + 3), B.WOOL_WHITE, "opus: a drawstring");
+  assert.equal(at(sonnet.x0 + 6, sonnet.y0 + 15, sonnet.zb + 3), B.CLAY, "sonnet: the zip");
+  // the heads stand apart: a clear column between them
+  for (const x of [sonnet.x0 + 1, sonnet.x0 + 10]) for (let z = opus.zb - 2; z <= sonnet.zb + 5; z++) assert.equal(at(x, sonnet.y0 + 24, z), B.AIR, `between the heads at ${x - CX},${z - CZ}`);
+  // the plaque on the base's front under sonnet, facing the arrival
+  assert.deepEqual(info.board, { x0: CX - 5, x1: CX + 4, y0: sh + 2, y1: sh + 3, z: CZ + 4 });
+  for (let x = CX - 5; x <= CX + 4; x++) for (let y = sh + 2; y <= sh + 3; y++) assert.equal(at(x, y, CZ + 4), B.STONE_BRICKS, "the plaque's wall");
+  // the dais round it all: lawn in a rim, clear of the plaza's posts and benches
+  assert.equal(at(CX - 16, sh + 1, CZ - 2), B.GRASS);
+  assert.equal(at(CX + 17, sh + 1, CZ - 2), B.STONE_BRICKS);
+  assert.equal(at(CX + 18, sh + 1, CZ - 2), B.STONE_BRICK_SLAB);
+  for (const [dx, dz] of [[13, -13], [-13, -13], [18, -7], [-18, -7]]) assert.equal(at(CX + dx, sh + 3, CZ + dz), B.LANTERN, `the post at ${dx},${dz}`);
+  for (const [dx, dz] of [[19, -3], [-19, 3]]) assert.ok(at(CX + dx, sh + 1, CZ + dz) >= B.OAK_STAIRS && at(CX + dx, sh + 1, CZ + dz) < B.OAK_STAIRS + 8, `the bench at ${dx},${dz}`);
   // the spawn: in the courtyard south of the plaza, on solid ground with room to stand
   assert.deepEqual(info.spawn, { x: CX + 0.5, y: sh + 1, z: CZ + 44.5 });
   assert.ok(SOLID[at(CX, sh, CZ + 44)] && at(CX, sh + 1, CZ + 44) === B.AIR && at(CX, sh + 2, CZ + 44) === B.AIR);
-  // facing north from there, nothing solid between the eye and the landmark's head, or the Beacon's lantern room
-  // behind it (through the welcome arch, over the punching arm)
+  // facing north from there, through the welcome arch, nothing solid between the eye and any of the three faces
   const eye = [CX + 0.5, sh + 2.62, CZ + 44.5];
-  for (const [aim, stop] of [[[sx - 0.5, y0 + 29, sz - 0.5], sz + 4], [[CX + 0.5, sh + 49, CZ - 35.5], CZ - 31]] as [number[], number][])
+  for (const s of lm.statues) {
+    const aim = [s.x0 + 6, s.y0 + 24.5, s.zb + 6];
     for (let k = 1; k < 400; k++) {
       const t = k / 400;
       const x = Math.floor(eye[0] + (aim[0] - eye[0]) * t);
       const y = Math.floor(eye[1] + (aim[1] - eye[1]) * t);
       const z = Math.floor(eye[2] + (aim[2] - eye[2]) * t);
-      if (z <= stop) break;
-      assert.ok(!SOLID[at(x, y, z)] || at(x, y, z) === B.GLASS_PANE, `the view at ${x - CX},${y - sh},${z - CZ}: ${at(x, y, z)}`);
+      if (z < s.zb + 6) break;
+      assert.ok(!SOLID[at(x, y, z)], `the view of ${s.name} at ${x - CX},${y - sh},${z - CZ}: ${at(x, y, z)}`);
     }
+  }
   const arrival = info.hub.panels.filter((p) => p.kind === "arrival");
-  assert.ok(arrival.some((p) => p.text === "Welcome to $STEVE Craft" && p.nz === 1 && p.z > CZ + 38 && p.z < info.spawn.z), "the welcome arch faces you");
+  assert.ok(arrival.some((p) => p.text === "Welcome to clankersmp" && p.nz === 1 && p.z > CZ + 38 && p.z < info.spawn.z), "the welcome arch faces you");
 });
 
 test("the Beacon: a tower 58 blocks tall north of the plaza, the highest thing for 150 blocks, with a ladder to its gallery", () => {
@@ -154,14 +165,16 @@ test("avenues from the plaza to the ring road, and a signposted gate for every r
   for (const r of h.roads!) assert.ok(r.reached && r.cells > 10, `the road to ${r.to}`);
 });
 
-test("the boards: welcome and rules on the avenue, tips and directions at the arrival, charity and updates in their halls", () => {
+test("the boards: welcome and rules on the avenue, tips and directions at the arrival, the experiment and updates in their halls", () => {
   const p = info.hub.panels;
-  for (const k of ["welcome", "rules", "tips", "directions", "charity", "updates", "hall", "news", "starter", "beacon"]) assert.equal(p.filter((q) => q.kind === k).length, 1, k);
+  for (const k of ["welcome", "rules", "tips", "directions", "experiment", "updates", "hall", "news", "starter", "beacon"]) assert.equal(p.filter((q) => q.kind === k).length, 1, k);
   assert.equal(p.filter((q) => q.kind === "spawn" || q.kind === "wild").length, 0, "the old gates' beams are gone");
   const dir = p.find((q) => q.kind === "directions")!;
   for (const d of info.hub.destinations!) assert.ok(dir.lines!.some((l) => l.startsWith(`${d.name}: `)), `directions to ${d.name}`);
   // the halls: the board inside on the back wall, under a roof, the name over the door
-  for (const kind of ["charity", "updates"] as const) {
+  assert.equal(p.filter((q) => q.kind === "charity").length, 0, "no charity board");
+  assert.deepEqual(p.filter((q) => q.kind === "hall" || q.kind === "news").map((q) => q.text).sort(), ["the experiment", "updates"]);
+  for (const kind of ["experiment", "updates"] as const) {
     const b = p.find((q) => q.kind === kind)!;
     assert.equal(b.nz, -1);
     const x = Math.floor(b.x);

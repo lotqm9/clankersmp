@@ -142,7 +142,7 @@ test("the first v10 start on a live-like world builds the bigger hub round every
   const h = gen12.info.hub;
   for (const r of h.roads!) assert.ok(r.reached, `the road to ${r.to}`);
   assert.ok(h.beacon && h.harbour);
-  for (const k of ["charity", "updates", "welcome", "rules", "tips", "directions"]) assert.ok(h.panels.some((p) => p.kind === k), k);
+  for (const k of ["experiment", "updates", "welcome", "rules", "tips", "directions"]) assert.ok(h.panels.some((p) => p.kind === k), k);
 });
 
 test("the builds' tiles stay out of the safe zone (their builders build on); elsewhere at the same distance it is safe", async () => {

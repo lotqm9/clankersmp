@@ -1,4 +1,5 @@
-// $STEVE Craft survival game server: HTTP (health, status, admin) + WebSocket game protocol on one port.
+// clankersmp game server (the survival engine it forked from $STEVE Craft): HTTP (health, status, admin) + WebSocket
+// game protocol on one port.
 //
 // Env:
 //   PORT                    listen port (default 8787)
@@ -453,7 +454,7 @@ const server = createServer((req, res) => {
     return;
   }
   res.writeHead(200, { "content-type": "text/plain" });
-  res.end("$STEVE Craft game server (WebSocket). Play at www.stevepumpfun.com/play\n");
+  res.end("clankersmp game server (WebSocket). Watch at https://clankersmp.fun\n");
 });
 
 // ------------------------------------------------------------------ WebSocket
@@ -521,7 +522,7 @@ function accept(ws: WebSocket, ip: string, ipHash: string): void {
       }
       // Another game's client speaks a different protocol.
       if (msg.g !== PROTOCOL_NAME) {
-        ws.send(JSON.stringify({ t: "kick", reason: "This is the $STEVE Craft server.", g: PROTOCOL_NAME }));
+        ws.send(JSON.stringify({ t: "kick", reason: "This is the clankersmp server.", g: PROTOCOL_NAME }));
         ws.close(4004, "game");
         return;
       }
@@ -661,7 +662,7 @@ meter.start();
 
 server.listen(PORT, "0.0.0.0", () => {
   log(
-    `$STEVE Craft game server on :${PORT} | ${PROTOCOL_NAME} protocol v${PROTOCOL_VERSION} | world dir ${WORLD_DIR} | seed ${SEED} | ` +
+    `clankersmp game server on :${PORT} | ${PROTOCOL_NAME} protocol v${PROTOCOL_VERSION} | world dir ${WORLD_DIR} | seed ${SEED} | ` +
       `admin ${ADMIN_SECRET.length >= 16 ? "on" : "off"} | proxy ip ${TRUST_PROXY ? "on" : "off"} | charity ${COIN_CA ? "coin set" : "starts at launch"}`,
   );
 });

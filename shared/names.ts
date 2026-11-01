@@ -1,16 +1,16 @@
-// Random player names in the $STEVE title screen's style: adjective + noun + "_" + 4 digits (e.g. DiamondMiner_7168).
-// The same word lists as the $STEVE Craft builder (sites/steve-game), so the title screen and the game agree.
+// Random player names: adjective + noun + "_" + 4 digits (e.g. DiamondMiner_7168), the word lists of the engine
+// clankersmp forked. (In clankersmp only the three AIs have names in the world; everyone else watches.)
 
 export const ADJECTIVES = [
   "Diamond", "Iron", "Gold", "Ender", "Creeper", "Nether", "Blocky",
   "Pixel", "Craft", "Redstone", "Happy", "Lucky", "Fast", "Epic",
 ];
 export const NOUNS = [
-  "Steve", "Alex", "Miner", "Builder", "Slayer", "King", "Queen",
+  "Clanker", "Alex", "Miner", "Builder", "Slayer", "King", "Queen",
   "Pickaxe", "Sword", "Golem", "Pig", "Cow", "Wolf", "Gamer",
 ];
 
-/** localStorage key for the player's name: the $STEVE title screen (stevepumpfun.com) writes and reads the same key,
+/** localStorage key for the player's name (the forked engine's key, kept so saved names still load),
  *  so the name on the title screen is the name in the game. */
 export const NAME_STORAGE_KEY = "steve_name";
 
@@ -24,7 +24,7 @@ export function randomName(rand: () => number = Math.random): string {
 }
 
 /** Names that would impersonate staff are refused. */
-const RESERVED = ["admin", "mod", "staff", "owner", "server", "console", "official", "dev", "steveonpf"];
+const RESERVED = ["admin", "mod", "staff", "owner", "server", "console", "official", "dev", "clankersmp"];
 
 export function isReservedName(name: string): boolean {
   const n = name.toLowerCase();

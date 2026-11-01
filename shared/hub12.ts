@@ -1,13 +1,13 @@
 // The bigger spawn (update 12, protocol v10): the hub grows from a 46-block safe zone to 68 and becomes a place worth a
 // screenshot, built over the old one as the last worldgen step:
-//   - a grand plaza (r 22) round the landmark (shared/landmark.ts): a blocky guy in a teal shirt and blue trousers,
-//     32 blocks tall on a grassy dais, punching an oak; the "$STEVE Craft" plaque; a compass of teal lines
+//   - a grand plaza (r 22) round the monument (shared/landmark.ts): clankersmp's three AIs, opus, sonnet and haiku,
+//     as block statues 28 tall standing together on a grassy dais; the "clankersmp" plaque; a compass of teal lines
 //   - the Beacon: a stone tower 58 blocks tall north of the plaza, with a lantern room and a gallery you can climb to
 //     (a ladder inside), a diamond on each of its four faces and on its tip: seen from far across the island
 //   - four avenues, the north one a reflecting pool to the Beacon; a ring road (r 57); lantern posts everywhere
-//   - the arrival: you spawn in a courtyard south of the plaza facing the landmark and the Beacon, under a welcome arch,
-//     the tips and directions boards either side of you, the welcome and rules boards along the avenue ahead
-//   - the Charity Hall and the Updates House: proper buildings for the live charity board and the latest update
+//   - the arrival: you spawn in a courtyard south of the plaza facing the monument (the Beacon behind it), under a
+//     welcome arch, the tips and directions boards either side of you, the welcome and rules boards along the avenue
+//   - the experiment hall and the updates house: proper buildings for what clankersmp is and the latest update
 //   - the Workshop (free crafting tables and furnaces), a diamond of bluebells, flower beds, the grove, a fountain
 //   - a gate on the ring for every road out: signposted roads (lanterns along them) to each of the world's villages
 //     and to the Harbour on the south coast, where boats wait at the piers (the server keeps them there)
@@ -23,7 +23,7 @@ import { B, IS_WATER, SOLID } from "./blocks.ts";
 import { SEA_LEVEL, SPAWN_X, SPAWN_Z, WORLD_HEIGHT, WORLD_SIZE, idx } from "./constants.ts";
 import { hash2 } from "./noise.ts";
 import { GEM_ROWS, OLD_SAFE_RADIUS, hubTree, settleWater, type HubInfo, type Panel } from "./hub.ts";
-import { buildLandmark } from "./landmark.ts";
+import { buildLandmark, daisDist, type Statue } from "./landmark.ts";
 import { VILLAGE_BLEND, VILLAGE_R, type VillageInfo } from "./villages.ts";
 
 export const SAFE_RADIUS_12 = 68;
@@ -140,8 +140,8 @@ export interface HubExtra {
   roads: { to: string; cells: number; reached: boolean }[];
   harbour: { x: number; y: number; z: number; slots: { x: number; y: number; z: number; yaw: number }[] } | null;
   beacon: { x: number; z: number; top: number } | null;
-  /** The "punch a tree" landmark in the plaza (null where players' builds kept its ground). */
-  landmark: { figure: { x: number; z: number; y0: number; top: number }; tree: { x: number; z: number; top: number } } | null;
+  /** The monument in the plaza, the three AIs' statues (null where players' builds kept its ground). */
+  landmark: { statues: Statue[] } | null;
 }
 export type HubInfo12 = HubInfo & HubExtra;
 
@@ -235,6 +235,8 @@ export function buildHub12(
     }
 
   // ================================================================ the grand plaza and the monument
+  // (the monument's dais is a rounded rectangle centred 2 north of the plaza's centre: shared/landmark.ts)
+  const monument = freeRel(-19, -13, 19, 9);
   for (let dz = -23; dz <= 23; dz++)
     for (let dx = -23; dx <= 23; dx++) {
       const d = dist(dx, dz);
@@ -244,20 +246,18 @@ export function buildHub12(
       else if (d > 20.5) id = B.STONE_BRICKS;
       else if (d > 14 && d <= 15) id = B.STONE;
       else if (d > 6) id = hash2(dx, dz, seed + 1201) < 0.08 ? B.MOSSY_STONE_BRICKS : (dx + dz) % 2 === 0 ? B.STONE_BRICKS : hash2(dx, dz, seed + 1202) < 0.5 ? B.STONE_BRICKS : B.STONE;
-      // the compass: teal lines out to the four avenues (from the landmark's dais)
-      if (d >= 13 && d <= 20 && (dx === 0 || dz === 0)) id = B.SMOOTH_TEAL;
+      // the compass: teal lines out to the four avenues (from the monument's dais)
+      if (d >= 13 && d <= 20 && (dx === 0 || dz === 0) && !(monument && daisDist(dx, dz) <= 1)) id = B.SMOOTH_TEAL;
       floor(dx, dz, id);
     }
-  // the landmark: the figure punching a tree on its grassy dais, and the "$STEVE Craft" plaque facing the arrival
+  // the monument: the three AIs on their dais, and the "clankersmp" plaque facing the arrival (seen whole from the
+  // spawn through the welcome arch; from there sonnet's head stands in front of the Beacon)
   let board = oldBoard;
   let landmark: HubExtra["landmark"] = null;
-  // (its dais is centred 3 north of the plaza's centre, so from the arrival the punching arm passes under the Beacon's
-  // lantern room and the plaque stands clear at the dais's south rim)
-  const monument = freeRel(-13, -16, 13, 11);
   if (monument) {
-    const lm = buildLandmark(set, CX, CZ - 3, sh, seed);
+    const lm = buildLandmark(set, CX, CZ, sh, seed);
     board = lm.board;
-    landmark = { figure: lm.figure, tree: lm.tree };
+    landmark = { statues: lm.statues };
   } else if (!(kept(oldBoard.x0, oldBoard.z) && kept(oldBoard.x1, oldBoard.z))) board = { x0: -1, x1: -1, y0: -1, y1: -1, z: -1 };
   for (const [dx, dz] of [[13, 13], [-13, 13], [13, -13], [-13, -13], [18, 7], [-18, 7], [18, -7], [-18, -7], [7, 18], [-7, 18], [7, -18], [-7, -18]] as [number, number][]) post(dx, dz);
   // benches round the rim, facing the monument (a stair's facing is its back)
@@ -402,15 +402,15 @@ export function buildHub12(
   for (let dz = 38; dz <= 47; dz++) for (let dx = -7; dx <= 7; dx++) floor(dx, dz, Math.abs(dx) === 7 || dz === 47 ? B.COBBLESTONE : (dx + dz) % 2 ? B.STONE_BRICKS : B.STONE);
   floor(0, 44, B.SMOOTH_TEAL);
   if (freeRel(-5, 37, 5, 37)) {
-    // the welcome arch at its north edge, tall enough to frame the landmark and the Beacon from the spawn point: two
-    // pillars and a beam 9 wide, "Welcome to $STEVE Craft" facing you
+    // the welcome arch at its north edge, tall enough to frame the monument from the spawn point: two pillars and a
+    // beam 9 wide, "Welcome to clankersmp" facing you
     for (const side of [-1, 1]) {
       for (let dy = 1; dy <= 8; dy++) put(5 * side, dy, 37, dy === 4 ? B.SMOOTH_TEAL : B.STONE_BRICKS);
       put(5 * side, 9, 37, B.LANTERN);
     }
     for (let dx = -4; dx <= 4; dx++) put(dx, 8, 37, B.STONE_BRICKS);
     for (const side of [-1, 1]) put(4 * side, 7, 37, B.STONE_BRICK_SLAB + 1);
-    panels.push({ kind: "arrival", x: CX + 0.5, y: sh + 8.5, z: CZ + 38 + 0.01, w: 9, h: 0.9, nx: 0, nz: 1, text: "Welcome to $STEVE Craft" });
+    panels.push({ kind: "arrival", x: CX + 0.5, y: sh + 8.5, z: CZ + 38 + 0.01, w: 9, h: 0.9, nx: 0, nz: 1, text: "Welcome to clankersmp" });
     panels.push({ kind: "arrival", x: CX + 0.5, y: sh + 8.5, z: CZ + 37 - 0.01, w: 9, h: 0.9, nx: 0, nz: -1, text: "Arrivals" });
   }
   // the spawn point: the courtyard's teal block, unless a kept tile is that close (then the old spawn on the plaza's
@@ -456,13 +456,13 @@ export function buildHub12(
   boardAt([["x", -5, 27, 1]], "welcome");
   boardAt([["x", 5, 27, -1]], "rules");
 
-  // ================================================================ the Charity Hall (east) and the Updates House (west)
-  const hall = (sx: 1 | -1, kind: "charity" | "updates") => {
+  // ================================================================ the experiment hall (east) and the updates house (west)
+  const hall = (sx: 1 | -1, kind: "experiment" | "updates") => {
     // 11 wide (26..36 out from the centre), 9 deep (z 5..13), open on its avenue side
     const xa = sx > 0 ? 26 : -36;
     const xb = xa + 10;
     if (!freeRel(xa - 1, 3, xb + 1, 14)) return;
-    const stone = kind === "charity";
+    const stone = kind === "experiment";
     const wallId = stone ? B.STONE_BRICKS : B.OAK_PLANKS;
     const cornerId = stone ? B.COBBLESTONE : B.OAK_LOG;
     for (let dz = 5; dz <= 13; dz++) for (let dx = xa; dx <= xb; dx++) floor(dx, dz, stone ? B.STONE_BRICKS : B.OAK_PLANKS);
@@ -496,13 +496,13 @@ export function buildHub12(
     for (const dx of [xa + 1, xb - 1]) put(dx, 1, 12, B.FLOWER_POT + 3);
     // the board on the back wall inside, facing the door; the name over the door
     panels.push({ kind, x: CX + mid + 0.5, y: sh + 3.2, z: CZ + 13 - 0.01, w: 7, h: 3.6, nx: 0, nz: -1 });
-    panels.push({ kind: stone ? "hall" : "news", x: CX + mid + 0.5, y: sh + 5.5, z: CZ + 5 - 0.01, w: 7, h: 0.9, nx: 0, nz: -1, text: stone ? "Charity Hall" : "Updates House" });
+    panels.push({ kind: stone ? "hall" : "news", x: CX + mid + 0.5, y: sh + 5.5, z: CZ + 5 - 0.01, w: 7, h: 0.9, nx: 0, nz: -1, text: stone ? "the experiment" : "updates" });
     // a path from the avenue to the door, flowers either side of it
     for (let dz = 3; dz <= 4; dz++) for (let dx = mid - 1; dx <= mid + 1; dx++) floor(dx, dz, B.COBBLESTONE);
     put(xa, 1, 4, B.FLOWER_POT + 1);
     put(xb, 1, 4, B.FLOWER_POT + 2);
   };
-  hall(1, "charity");
+  hall(1, "experiment");
   hall(-1, "updates");
 
   // ================================================================ the Workshop (north-east): the starter pavilion
@@ -751,7 +751,7 @@ export function buildHub12(
       put(sx, 2, sz, B.OAK_FENCE);
       const text = g.names.map((n) => `${n} · ${destinations.find((q) => q.name === n)!.dist} blocks`).join("  ·  ");
       panels.push({ kind: "gate", x: CX + sx + 0.5 - ux * 0.07, y: sh + 3.1, z: CZ + sz + 0.5 - uz * 0.07, w: 3.6, h: 0.75, nx: -ux, nz: -uz, text });
-      panels.push({ kind: "gate", x: CX + sx + 0.5 + ux * 0.07, y: sh + 3.1, z: CZ + sz + 0.5 + uz * 0.07, w: 3.6, h: 0.75, nx: ux, nz: uz, text: "Spawn · safe zone" });
+      panels.push({ kind: "gate", x: CX + sx + 0.5 + ux * 0.07, y: sh + 3.1, z: CZ + sz + 0.5 + uz * 0.07, w: 3.6, h: 0.75, nx: ux, nz: uz, text: "Spawn" });
       break;
     }
   }

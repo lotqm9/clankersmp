@@ -476,26 +476,22 @@ test("a client of another game (another protocol name) is refused", async () => 
   const kick = await helloKick({ t: "hello", g: "othergame", v: PROTOCOL_VERSION, name: "Other", token: "other-game-token-0123456789" });
   assert.equal(kick.t, "kick");
   assert.equal(kick.g, PROTOCOL_NAME);
-  assert.match(kick.reason, /\$STEVE Craft/);
+  assert.match(kick.reason, /clankersmp/);
 });
 
-test("the generated world has the spawn landmark: the figure punching a tree, and the plaque", () => {
+test("the generated world has the spawn monument: the three AIs' statues, and the plaque", () => {
   const { board, spawnHeight } = gen.info;
-  assert.equal(board.x1 - board.x0 + 1, 9);
+  assert.equal(board.x1 - board.x0 + 1, 10);
   const lm = gen.info.hub.landmark!;
   assert.ok(lm);
-  assert.equal(lm.figure.y0, spawnHeight + 2);
-  let teal = 0;
-  let blue = 0;
-  for (let y = lm.figure.y0; y <= lm.figure.top; y++)
-    for (let z = lm.figure.z - 8; z <= lm.figure.z + 7; z++)
-      for (let x = lm.figure.x - 4; x <= lm.figure.x + 9; x++) {
-        if (base[idx(x, y, z)] === B.SMOOTH_TEAL) teal++;
-        if (base[idx(x, y, z)] === B.SMOOTH_BLUE) blue++;
-      }
-  assert.ok(teal > 300, `a teal shirt (${teal})`);
-  assert.ok(blue > 250, `blue trousers (${blue})`);
-  assert.equal(base[idx(lm.tree.x, lm.figure.y0 + 21, lm.figure.z + 5)], B.OAK_LOG, "the fist meets the tree");
+  assert.deepEqual(lm.statues.map((s) => s.name), ["opus", "sonnet", "haiku"]);
+  const coat = [B.WOOL_RED, B.SMOOTH_BLUE, B.WOOL_YELLOW];
+  lm.statues.forEach((s, k) => {
+    assert.equal(s.y0, spawnHeight + 4);
+    let n = 0;
+    for (let y = s.y0; y <= s.top; y++) for (let z = s.zb - 2; z <= s.zb + 5; z++) for (let x = s.x0; x <= s.x0 + 11; x++) if (base[idx(x, y, z)] === coat[k]) n++;
+    assert.ok(n > 300, `${s.name}'s coat (${n})`);
+  });
 });
 
 test("crouching players are 1.5 tall on the server: under a 1.5-high gap only while crouched", async () => {

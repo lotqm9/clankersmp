@@ -75,7 +75,7 @@ export function acceptableName(name: unknown): name is string {
   if (isReservedName(name)) return false;
   if (matcher.hasMatch(name)) return false;
   const n = normalizeWord(name);
-  // Long extra words match anywhere; short ones ("kys") only as a whole segment, so "BlockySteve" is fine.
+  // Long extra words match anywhere; short ones ("kys") only as a whole segment, so "BlockySky" is fine.
   const segments = name.split(/_|(?<=[a-z])(?=[A-Z0-9])/).map(normalizeWord);
   if (EXTRA_WORDS.some((w) => (w.length >= 5 ? n.includes(w) : segments.includes(w)))) return false;
   return true;

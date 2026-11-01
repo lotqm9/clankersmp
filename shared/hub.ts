@@ -28,7 +28,9 @@ export const HUB_BLEND = 64;
 export interface Panel {
   kind: "welcome" | "rules" | "charity" | "updates" | "spawn" | "wild" | "starter"
     // v10 (update 12): the bigger hub's signs and boards
-    | "arrival" | "beacon" | "hall" | "news" | "tips" | "directions" | "gate" | "harbour";
+    | "arrival" | "beacon" | "hall" | "news" | "tips" | "directions" | "gate" | "harbour"
+    // clankersmp: what the experiment is (in the hall that was the charity's; an old hub's "charity" board shows it too)
+    | "experiment";
   x: number; // centre of the panel face, world coordinates
   y: number;
   z: number;

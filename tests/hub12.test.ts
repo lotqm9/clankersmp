@@ -48,13 +48,14 @@ test("kept tiles stay cell for cell as the old world had them; a building touchi
   const g = generateWorld(DEFAULT_SEED, undefined, { villages: LIVE, hub: { keep, roads: LIVE } });
   for (const t of keep) assert.ok(tileSame(old, g.blocks, t), `tile ${t} untouched`);
   assert.equal(g.info.hub.beacon, null, "no Beacon: its ground holds a build");
-  assert.equal(g.info.hub.panels.filter((p) => p.kind === "charity").length, 0, "no Charity Hall over a build");
-  assert.equal(g.info.hub.panels.filter((p) => p.kind === "updates").length, 1, "the Updates House still stands");
+  assert.equal(g.info.hub.panels.filter((p) => p.kind === "experiment").length, 0, "no experiment hall over a build");
+  assert.equal(g.info.hub.panels.filter((p) => p.kind === "updates").length, 1, "the updates house still stands");
   assert.deepEqual(g.info.hub.keep, keep);
-  // the rest of the hub is there: the landmark, the plaza, the arrival
+  // the rest of the hub is there: the monument, the plaza, the arrival
   const lm = g.info.hub.landmark!;
-  assert.ok(lm, "the landmark");
-  assert.equal(g.blocks[idx(lm.figure.x + 9, lm.figure.y0 + 21, lm.figure.z + 5)], B.SMOOTH_TAN, "its fist");
+  assert.ok(lm, "the monument");
+  const sonnet = lm.statues[1];
+  assert.equal(g.blocks[idx(sonnet.x0 + 4, sonnet.y0 + 15, sonnet.zb + 3)], B.SMOOTH_BLUE, "sonnet's jacket");
   assert.equal(g.info.spawn.z, CZ + 44.5);
   // the safe zone leaves the builds' tiles out
   const zone = new SafeZone(keep);
@@ -73,13 +74,13 @@ test("a build by the arrival: the directions board moves to the plaza's south ri
   assert.equal(generateWorld(DEFAULT_SEED, undefined, { villages: LIVE, hub: { keep: near, roads: LIVE } }).info.spawn.z, CZ + 7.5, "a build on the spawn point itself: the old spawn on the plaza");
 });
 
-test("a build on the landmark's ground: no landmark; the old monument (sign and diamond) stays and keeps its sign", () => {
+test("a build on the monument's ground: no monument; the old hub's monument (sign and diamond) stays and keeps its sign", () => {
   const keep = keepTiles([idx(CX, 47, CZ - 7)]);
   const old = generateWorld(DEFAULT_SEED, undefined, { villages: LIVE, hub: false });
   const g = generateWorld(DEFAULT_SEED, undefined, { villages: LIVE, hub: { keep, roads: LIVE } });
   for (const t of keep) assert.ok(tileSame(old.blocks, g.blocks, t));
   assert.deepEqual(g.info.board, old.info.board, "the old sign, where it stands");
-  assert.equal(g.info.hub.landmark, null, "the landmark is left out whole");
+  assert.equal(g.info.hub.landmark, null, "the monument is left out whole");
 });
 
 test("roads reach every village a world has and the harbour (the live world's three, a fresh world's four), round the others' squares", () => {

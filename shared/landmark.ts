@@ -1,159 +1,207 @@
-// The spawn's landmark ($STEVE Craft survival): a blocky guy in a teal shirt and blue trousers, one fist out,
-// punching a tree ("punch a tree" is the coin's lore). Our own build: one block per pixel of our own player art
-// (client/src/render/textures.ts makeSkin, the gold "$" on the chest included), 32 blocks tall on a grassy dais in the
-// middle of the plaza, facing east into an oak whose trunk his fist meets. Built by shared/hub12.ts; deterministic
-// (integer hashes only), so every client builds exactly the same blocks.
+// The spawn's monument (clankersmp): the three AIs, opus, sonnet and haiku, as block statues standing together in
+// the middle of the plaza, facing the arrival (south). Each is built a block per pixel of its own skin
+// (client/src/render/textures.ts AGENT_LOOKS and agentSkin): the heads at full size (8 x 8 x 8, the faces pixel for
+// pixel), the bodies at three quarters (a 6 x 10 torso, arms and legs 3 x 10, 4 deep), so a statue is 28 blocks tall
+// and all three fit the plaza. sonnet stands in front, opus and haiku a step behind on either side, shoulder to
+// shoulder with it. They stand on a stone base on a grassy dais; the base's front under sonnet is the plaque
+// ("clankersmp" and the three dots, client/src/render/scenery.ts). Built by shared/hub12.ts; deterministic (integer
+// hashes only), so every client builds exactly the same blocks.
 
 import { B } from "./blocks.ts";
 import { hash2 } from "./noise.ts";
 
-/** The face, 8 x 8: row 0 at the top, column 0 on his right (south, as he faces east). H hair, d dark hair, S skin,
- *  W eye white, B eye blue, N shade, M mouth. */
-export const FACE_ROWS = ["HHHHHHHH", "HHHHHHHH", "HHHSSSSd", "dSSSSSSS", "SWBSSBWS", "SSSNNSSS", "SNMMMMNS", "SSSSSSSS"];
-/** The torso's front, 8 x 12: T shirt, S skin (the neck), G gold (the "$"), L belt. */
-export const CHEST_ROWS = [
-  "TTTSSTTT",
-  "TTTSSTTT",
-  "TTTTTTTT",
-  "TTTGTTTT",
-  "TTTGGTTT",
-  "TTGTTTTT",
-  "TTTGTTTT",
-  "TTTTGTTT",
-  "TTGGTTTT",
-  "TTTGTTTT",
-  "TTTTTTTT",
-  "LLLLLLLL",
+const CREAM = B.TERRACOTTA + 1;
+const RUST = B.TERRACOTTA + 2;
+const OCHRE = B.TERRACOTTA + 3;
+const SLATE = B.TERRACOTTA + 4;
+const CHARCOAL = B.TERRACOTTA + 5;
+
+/** A statue's look, read off its skin. Rows run top to bottom; a face or chest row runs from the statue's right
+ *  (west, the viewer's left) to its left. Letters: c coat, k coat shade, D the hood's dark inside, s skin, n skin
+ *  shade, h hair, d hair shade, W eye white, E eye, M mouth, p trousers, f shoe, F sole, and each look's own extras. */
+export interface StatueLook {
+  name: "opus" | "sonnet" | "haiku";
+  /** The hood is up (the head's top, sides and back are the coat). */
+  hood: boolean;
+  face: string[]; // 8 x 8
+  chest: string[]; // 6 x 10
+  legs: string; // 10 rows, the same all round each leg
+  arms: string; // 10 rows, the same all round each arm
+  pal: Record<string, number>;
+}
+
+/** The hood's face (opus and haiku): the rim over the brow, the dark inside at the cheeks, the fringe under it. */
+const HOOD_FACE = ["cccccccc", "DhhhhhhD", "DhdssshD", "DssssssD", "DWEssEWD", "DssnnssD", "DsMMMMsD", "DssssssD"];
+/** sonnet's face: side-swept brown hair, blue eyes. */
+const BARE_FACE = ["hhhhhhhh", "hhhhhhhh", "hhhssssd", "dsssssss", "sWEssEWs", "sssnnsss", "snMMMMns", "ssssssss"];
+
+export const STATUE_LOOKS: StatueLook[] = [
+  {
+    // a red hoodie with the hood up: the neck opening, two white drawstrings, the front pocket; dark trousers, white
+    // trainers
+    name: "opus",
+    hood: true,
+    face: HOOD_FACE,
+    chest: ["cWooWc", "cWccWc", "cWccWc", "cccccc", "cccccc", "ckkkkc", "ckkkkc", "ckkkkc", "cccccc", "kkkkkk"],
+    legs: "pppppppffF",
+    arms: "ccccccckss",
+    pal: { c: B.WOOL_RED, k: RUST, D: RUST, o: CHARCOAL, s: CREAM, n: B.SMOOTH_TAN, h: CHARCOAL, d: B.WOOL_BLACK, W: B.WOOL_WHITE, E: CHARCOAL, M: B.WOOL_BROWN, p: B.WOOL_BLACK, f: B.WOOL_WHITE, F: B.CLAY },
+  },
+  {
+    // a blue jacket: the light collar, a white tee at the neck, the zip, two pocket welts; grey trousers, brown shoes
+    name: "sonnet",
+    hood: false,
+    face: BARE_FACE,
+    chest: ["cLTTLc", "cckzcc", "cckzcc", "cckzcc", "cckzcc", "cckzcc", "cPkzPc", "cckzcc", "cckzcc", "kkkkkk"],
+    legs: "pppppppffF",
+    arms: "ccccccckss",
+    pal: { c: B.SMOOTH_BLUE, k: B.WOOL_BLUE, L: B.WOOL_LIGHT_BLUE, T: B.WOOL_WHITE, z: B.CLAY, P: B.WOOL_BLUE, s: B.SMOOTH_TAN, n: B.TERRACOTTA, h: B.WOOL_BROWN, d: CHARCOAL, W: B.WOOL_WHITE, E: B.SMOOTH_BLUE, M: B.WOOL_BROWN, p: B.WOOL_GREY, f: B.WOOL_BROWN, F: CHARCOAL },
+  },
+  {
+    // a yellow raincoat with the hood up: the collar, the placket, three dark toggles, the skirt over the thighs;
+    // navy trousers and tall boots
+    name: "haiku",
+    hood: true,
+    face: HOOD_FACE,
+    chest: ["cknnkc", "ccktcc", "cckccc", "cckccc", "ccktcc", "cckccc", "cckccc", "ccktcc", "cckccc", "kkkkkk"],
+    legs: "ccckpppppF",
+    arms: "ccccccckss",
+    pal: { c: B.WOOL_YELLOW, k: OCHRE, D: OCHRE, t: CHARCOAL, s: CREAM, n: B.SMOOTH_TAN, h: CHARCOAL, d: B.WOOL_BLACK, W: B.WOOL_WHITE, E: B.WOOL_BLACK, M: B.WOOL_BROWN, p: SLATE, F: B.WOOL_BLACK },
+  },
 ];
 
-const SKIN = B.SMOOTH_TAN;
-const SHADE = B.TERRACOTTA; // plain terracotta: the nose, the mouth's corners
-const HAIR = B.WOOL_BROWN;
-const HAIR_DARK = B.TERRACOTTA + 5; // charcoal
-const SHIRT = B.SMOOTH_TEAL;
-const TROUSERS = B.SMOOTH_BLUE;
-const SHOES = B.WOOL_GREY;
-const BELT = B.TERRACOTTA + 5;
-const FACE: Record<string, number> = { H: HAIR, d: HAIR_DARK, S: SKIN, W: B.WOOL_WHITE, B: B.SMOOTH_BLUE, N: SHADE, M: B.TERRACOTTA + 2 };
-const CHEST: Record<string, number> = { T: SHIRT, S: SKIN, G: B.GOLD_BLOCK, L: BELT };
+export const STATUE_HEIGHT = 28; // legs 10, torso 10, head 8
+
+export interface Statue {
+  name: StatueLook["name"];
+  /** Its west edge (the right arm's outer side; 12 wide), the north row of its body (4 deep; the head reaches 2
+   *  further each way), its feet and the top of its head. */
+  x0: number;
+  zb: number;
+  y0: number;
+  top: number;
+}
 
 export interface Landmark {
-  /** The plaque ("$STEVE Craft") on the dais's south rim, facing the arrival: a 9 x 2 wall. */
+  /** The plaque ("clankersmp" and the dots) on the base's front under sonnet, facing the arrival: a 10 x 2 wall. */
   board: { x0: number; x1: number; y0: number; y1: number; z: number };
-  /** Where the figure stands (its feet), its head's top, and the tree. */
-  figure: { x: number; z: number; y0: number; top: number };
-  tree: { x: number; z: number; top: number };
+  statues: Statue[];
 }
 
 type Set = (x: number, y: number, z: number, id: number) => void;
 
-/** The dais (r 11.5 round CX, CZ, its top at sh + 1), the figure, the tree and the plaque. The caller has checked
- *  that the ground from (CX - 13, CZ - 13) to (CX + 13, CZ + 14) holds no kept tile (the crown overhangs a little). */
+/** One statue, facing south (+z). */
+function buildStatue(set: Set, L: StatueLook, x0: number, zb: number, y0: number): Statue {
+  const P = L.pal;
+  const id = (ch: string) => {
+    const v = P[ch];
+    if (v === undefined) throw new Error(`statue ${L.name}: no block for "${ch}"`);
+    return v;
+  };
+  const box = (xa: number, xb: number, ya: number, yb: number, za: number, zbb: number, f: (x: number, y: number, z: number) => number) => {
+    for (let y = ya; y <= yb; y++) for (let z = za; z <= zbb; z++) for (let x = xa; x <= xb; x++) set(x, y, z, f(x, y, z));
+  };
+  const front = zb + 3;
+  // legs (the right leg west, the left east) and arms hang straight: each row the same all round
+  box(x0 + 3, x0 + 8, y0, y0 + 9, zb, front, (_x, y) => id(L.legs[y0 + 9 - y]));
+  for (const xa of [x0, x0 + 9]) box(xa, xa + 2, y0 + 10, y0 + 19, zb, front, (_x, y) => id(L.arms[y0 + 19 - y]));
+  // the torso: the chest on its front, the coat round the rest with its darker hem
+  box(x0 + 3, x0 + 8, y0 + 10, y0 + 19, zb, front, (x, y, z) => {
+    const row = y0 + 19 - y;
+    if (z === front) return id(L.chest[row][x - x0 - 3]);
+    return id(row === 9 ? "k" : "c");
+  });
+  // the head: 8 x 8 x 8 over the torso, the face looking south
+  const hx = x0 + 2;
+  const hz = zb - 2;
+  const hy = y0 + 20;
+  box(hx, hx + 7, hy, hy + 7, hz, hz + 7, (x, y, z) => {
+    const row = hy + 7 - y;
+    if (z === hz + 7) return id(L.face[row][x - hx]);
+    if (L.hood) {
+      if (row < 7) {
+        // the top, and the sides and the back: the hood, a seam down the back
+        if (z === hz && x === hx + 4 && row > 0) return id("k");
+        return id("c");
+      }
+      return id(z === hz || x === hx || x === hx + 7 ? "k" : "n"); // the hood's hem; the chin's underside
+    }
+    if (row === 0) return id("h");
+    if (z === hz) return id(row === 7 ? "s" : "h"); // the back of the head is hair
+    if (x === hx || x === hx + 7) {
+      if (row <= 2) return id("h");
+      if (row === 4 && z === hz + 2) return id("n"); // the ears
+      return id("s");
+    }
+    return id(row === 7 ? "n" : "s");
+  });
+  return { name: L.name, x0, zb, y0, top: hy + 7 };
+}
+
+/** The monument: the dais (a lawn in a stone-brick rim, a slab step all round, its top at sh + 1; symmetric about
+ *  the plaza's centre column CX), and on it the base, the three statues and the plaque (symmetric about the line
+ *  between columns CX - 1 and CX: the statues are an even number of blocks wide). Its ground runs from (CX - 18,
+ *  CZ - 12) to (CX + 18, CZ + 8) (daisDist); the caller has checked that none of it is kept. */
 export function buildLandmark(set: Set, CX: number, CZ: number, sh: number, seed: number): Landmark {
-  const dist = (dx: number, dz: number) => Math.sqrt(dx * dx + dz * dz);
-  // ---- the dais: a lawn one block up in a stone-brick rim, a slab step all round
-  for (let dz = -13; dz <= 13; dz++)
-    for (let dx = -13; dx <= 13; dx++) {
-      const d = dist(dx, dz);
-      if (d > 12.5) continue;
-      if (d > 11.5) set(CX + dx, sh + 1, CZ + dz, B.STONE_BRICK_SLAB);
-      else if (d > 10.5) set(CX + dx, sh + 1, CZ + dz, B.STONE_BRICKS);
+  // ---- the dais: a rounded rectangle, a lawn one block up in a stone-brick rim, a slab step all round
+  for (let dz = -13; dz <= 9; dz++)
+    for (let dx = -19; dx <= 19; dx++) {
+      const d = daisDist(dx, dz);
+      if (d > 1) continue;
+      const x = CX + dx;
+      const z = CZ + dz;
+      if (d > 0) set(x, sh + 1, z, B.STONE_BRICK_SLAB);
+      else if (d > -1) set(x, sh + 1, z, B.STONE_BRICKS);
       else {
-        set(CX + dx, sh, CZ + dz, B.DIRT);
-        set(CX + dx, sh + 1, CZ + dz, B.GRASS);
+        set(x, sh, z, B.DIRT);
+        set(x, sh + 1, z, B.GRASS);
       }
     }
 
-  // ---- the figure: facing east (+x), so his right side is south (+z). Feet on the lawn.
-  const sx = CX - 6; // the torso spans x sx-2..sx+1 (4 deep)
-  const sz = CZ - 1; // and z sz-4..sz+3 (8 wide)
-  const y0 = sh + 2;
-  const box = (x0: number, x1: number, y0b: number, y1: number, z0: number, z1: number, id: number | ((x: number, y: number, z: number) => number)) => {
-    for (let y = y0b; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) set(x, y, z, typeof id === "number" ? id : id(x, y, z));
-  };
-  // legs: 12 tall, trousers with shoes at the bottom (the right leg south, the left north)
-  box(sx - 2, sx + 1, y0, y0 + 11, sz - 4, sz + 3, (_x, y) => (y - y0 < 3 ? SHOES : TROUSERS));
-  // torso: 12 tall; the front (x = sx + 1) carries the chest, the rest is shirt with the belt round the bottom
-  box(sx - 2, sx + 1, y0 + 12, y0 + 23, sz - 4, sz + 3, (x, y, z) => {
-    const row = y0 + 23 - y;
-    if (x === sx + 1) return CHEST[CHEST_ROWS[row][sz + 3 - z]];
-    return row === 11 ? BELT : SHIRT;
-  });
-  // the left arm (north) hangs at his side: a teal sleeve, then skin
-  box(sx - 2, sx + 1, y0 + 12, y0 + 23, sz - 8, sz - 5, (_x, y) => (y >= y0 + 20 ? SHIRT : SKIN));
-  // the right arm (south) punches straight ahead at shoulder height: the sleeve, then the arm, the fist at the end
-  box(sx - 2, sx + 9, y0 + 20, y0 + 23, sz + 4, sz + 7, (x) => (x <= sx + 1 ? SHIRT : SKIN));
-  // the head: 8 x 8 x 8, hair on top and round the back, the face looking east at the tree
-  box(sx - 4, sx + 3, y0 + 24, y0 + 31, sz - 4, sz + 3, (x, y, z) => {
-    const row = y0 + 31 - y;
-    if (x === sx + 3) return FACE[FACE_ROWS[row][sz + 3 - z]];
-    if (row <= 1) return HAIR; // the top two rows all round
-    if (x === sx - 4) return row <= 6 ? HAIR : SKIN; // the back of the head
-    if ((z === sz - 4 || z === sz + 3) && row === 2) return HAIR; // the sides
-    if ((z === sz - 4 || z === sz + 3) && row === 4 && x === sx - 1) return SHADE; // the ears
-    return SKIN;
-  });
+  // ---- the base, two blocks of stone bricks: wide at the back for opus and haiku, and a step forward for sonnet
+  // whose front is the plaque
+  const onBase = (dx: number, dz: number) => (dx >= -14 && dx <= 13 && dz >= -8 && dz <= -2) || (dx >= -5 && dx <= 4 && dz >= -1 && dz <= 4);
+  for (let dz = -8; dz <= 4; dz++)
+    for (let dx = -14; dx <= 13; dx++) {
+      if (!onBase(dx, dz)) continue;
+      set(CX + dx, sh + 2, CZ + dz, B.STONE_BRICKS);
+      set(CX + dx, sh + 3, CZ + dz, B.STONE_BRICKS);
+    }
 
-  // ---- the tree he is punching: a thick oak (4 x 4 trunk) right where his fist lands, a big round crown above
-  const tx = sx + 10; // the trunk spans x tx..tx+3, z sz+4..sz+7 (in line with the fist)
-  const tz = sz + 4;
-  const trunkTop = y0 + 27;
-  for (let dz = -1; dz <= 4; dz++) for (let dx = -1; dx <= 4; dx++) set(tx + dx, sh + 1, tz + dz, B.GRASS);
-  box(tx, tx + 3, sh + 2, trunkTop, tz, tz + 3, B.OAK_LOG);
-  // roots flaring out at the foot, and two boughs into the crown
-  for (const [rx, rz, h] of [[-1, 1, 2], [4, 2, 2], [1, -1, 1], [2, 4, 3], [4, 0, 1], [-1, 3, 1]] as [number, number, number][])
-    for (let y = sh + 2; y < sh + 2 + h; y++) set(tx + rx, y, tz + rz, B.OAK_LOG);
-  for (let k = 0; k < 4; k++) {
-    set(tx + 4 + k, trunkTop - 3 + (k >> 1), tz + 2, B.OAK_LOG);
-    set(tx + 1, trunkTop - 2 + (k >> 1), tz + 4 + k, B.OAK_LOG);
-  }
-  // the crown: an uneven ball of leaves (kept off his head: it starts 2 blocks east of it)
-  const ccx = tx + 2.5;
-  const ccy = trunkTop + 3;
-  const ccz = tz + 3;
-  const RX = 7.5;
-  const RY = 6;
-  const RZ = 7.5;
-  let crownTop = trunkTop;
-  for (let y = Math.floor(ccy - RY); y <= Math.ceil(ccy + RY); y++)
-    for (let z = Math.floor(ccz - RZ); z <= Math.ceil(ccz + RZ); z++)
-      for (let x = Math.floor(ccx - RX); x <= Math.ceil(ccx + RX); x++) {
-        if (x <= sx + 5 && y <= y0 + 33) continue; // clear of the head
-        const e = ((x - ccx) / RX) ** 2 + ((y - ccy) / RY) ** 2 + ((z - ccz) / RZ) ** 2;
-        if (e > 1 - 0.22 * hash2(x * 7 + y, z * 3 - y, seed + 1301)) continue;
-        if (x >= tx && x <= tx + 3 && z >= tz && z <= tz + 3 && y <= trunkTop) continue; // the trunk
-        set(x, y, z, B.OAK_LEAVES);
-        if (y > crownTop) crownTop = y;
-      }
-  // the trunk shows through the middle of the crown
-  box(tx + 1, tx + 2, trunkTop + 1, trunkTop + 3, tz + 1, tz + 2, B.OAK_LOG);
+  // ---- the statues: sonnet in front, opus (west) and haiku (east) four blocks behind, each with its inner arm just
+  // behind sonnet's
+  const y0 = sh + 4;
+  const [opus, sonnet, haiku] = STATUE_LOOKS;
+  const statues = [buildStatue(set, opus, CX - 15, CZ - 6, y0), buildStatue(set, sonnet, CX - 6, CZ - 2, y0), buildStatue(set, haiku, CX + 3, CZ - 6, y0)];
 
-  // ---- a few flowers and tufts on the lawn, clear of his feet, the roots and the plaque
-  for (let dz = -10; dz <= 10; dz++)
-    for (let dx = -10; dx <= 10; dx++) {
-      if (dist(dx, dz) > 9.6) continue;
+  // ---- a few flowers and tufts on the lawn, clear of the base
+  for (let dz = -11; dz <= 7; dz++)
+    for (let dx = -17; dx <= 17; dx++) {
+      if (daisDist(dx, dz) > -1.5) continue;
+      let near = false;
+      for (let k = -1; k <= 1 && !near; k++) for (let j = -1; j <= 1 && !near; j++) if (onBase(dx + k, dz + j)) near = true;
+      if (near || (dx >= -6 && dx <= 5 && dz >= 4)) continue; // the plaque's front stays clear
       const x = CX + dx;
       const z = CZ + dz;
-      if (x >= sx - 3 && x <= sx + 2 && z >= sz - 9 && z <= sz + 8) continue;
-      if (x >= tx - 2 && x <= tx + 5 && z >= tz - 2 && z <= tz + 5) continue;
-      if (dz >= 7) continue;
       const h = hash2(x, z, seed + 1302);
       if (h < 0.1) set(x, sh + 2, z, B.TALL_GRASS);
       else if (h < 0.15) set(x, sh + 2, z, [B.DANDELION, B.POPPY, B.BLUEBELL][Math.floor(hash2(x, z, seed + 1303) * 3)]);
     }
+  // lanterns on the lawn by the corners
+  for (const [dx, dz] of [[-15, -8], [14, -8], [-13, 5], [12, 5]] as [number, number][]) set(CX + dx, sh + 2, CZ + dz, B.LANTERN);
 
-  // ---- the plaque on the south rim, facing the arrival: a low wall with a slab cap; lanterns on the rim
-  const pz = CZ + 10;
-  for (let x = CX - 4; x <= CX + 4; x++) {
-    set(x, sh + 2, pz, B.STONE_BRICKS);
-    set(x, sh + 3, pz, B.STONE_BRICKS);
-    set(x, sh + 4, pz, B.STONE_BRICK_SLAB);
-  }
-  for (const [dx, dz] of [[8, -8], [-8, -8], [-8, 8], [8, 8]] as [number, number][]) set(CX + dx, sh + 2, CZ + dz, B.LANTERN);
+  return { board: { x0: CX - 5, x1: CX + 4, y0: sh + 2, y1: sh + 3, z: CZ + 4 }, statues };
+}
 
-  return {
-    board: { x0: CX - 4, x1: CX + 4, y0: sh + 2, y1: sh + 3, z: pz },
-    figure: { x: sx, z: sz, y0, top: y0 + 31 },
-    tree: { x: tx, z: tz, top: crownTop },
-  };
+/** How far (dx, dz) from the plaza's centre is outside the dais's lawn and rim (<= 0: on them; 0..1: its slab step;
+ *  > 1: off it). A rounded rectangle 35 x 21 symmetric about the plaza's centre column (+ - * / sqrt only). */
+export function daisDist(dx: number, dz: number): number {
+  const px = Math.abs(dx);
+  const pz = Math.abs(dz + 2);
+  const R = 6;
+  const qx = px - (17 - R);
+  const qz = pz - (9.5 - R);
+  const ox = qx > 0 ? qx : 0;
+  const oz = qz > 0 ? qz : 0;
+  return Math.sqrt(ox * ox + oz * oz) + Math.min(Math.max(qx, qz), 0) - R;
 }

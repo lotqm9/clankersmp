@@ -12,7 +12,8 @@ let wasDead = {};
 let offlineSince = {};
 let civ = { key: '', since: Date.now() };
 let lastEvents = 0;
-let downSince = 0; // a deploy restarts the game for a minute or so: only a longer outage is news
+let downSince = 0;
+let started = 0; // when the relay last started: a deploy restarts everything and bodies jump, so start afresh // a deploy restarts the game for a minute or so: only a longer outage is news
 let events = [];
 
 const say = (agent, kind, text) => {
@@ -48,6 +49,16 @@ for (;;) {
       fetch(RELAY + '/state', { signal: AbortSignal.timeout(5000) }).then((r) => r.json()),
     ]);
     const now = Date.now();
+    if (s.state?.started && s.state.started !== started) {
+      started = s.state.started;
+      for (const k of Object.keys(track)) delete track[k];
+      for (const k of Object.keys(hpLog)) delete hpLog[k];
+    }
+    // the first minute and a half after a restart: bodies rejoin and settle, nothing to judge yet
+    if (now - started < 90000) {
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
     if (now - lastEvents > 20000) {
       const snap = await snapshotEvents();
       if (snap) events = snap.events || [];

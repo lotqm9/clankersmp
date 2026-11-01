@@ -2149,8 +2149,8 @@ export class Body {
       return -1;
     };
     let water: [number, number, number] | null = null;
-    for (const [x, y, z] of this.findBlocks([B.WATER], 30, 60)) {
-      if (Math.hypot(x - cx, z - cz) > 30 || avoid.some((r) => x >= r.x0 - 3 && x <= r.x1 + 3 && z >= r.z0 - 3 && z <= r.z1 + 3)) continue;
+    for (const [x, y, z] of this.findBlocks([B.WATER], 40, 120)) {
+      if (Math.hypot(x - cx, z - cz) > 40 || avoid.some((r) => x >= r.x0 - 3 && x <= r.x1 + 3 && z >= r.z0 - 3 && z <= r.z1 + 3)) continue;
       if (SOLID[this.get(x, y + 1, z)] || IS_WATER[this.get(x, y + 1, z)]) continue;
       let land = 0;
       for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) if (Math.abs(dx) + Math.abs(dz) <= 4 && landAt(x + dx, z + dz, y) >= 0) land++;
@@ -2162,7 +2162,7 @@ export class Body {
     // no pond by the base: fill the empty bucket it carries at any water, and pour it into a hole at the base
     if (!water && !this.has(I.WATER_BUCKET) && this.has(I.BUCKET)) await this.fillBucket();
     if (!water && this.has(I.WATER_BUCKET)) {
-      const s = this.siteNear(cx, cz, cy, 5, 5, avoid, 16, 4);
+      const s = this.siteNear(cx, cz, cy, 5, 5, avoid, 28, 4);
       if (s) {
         const [wx, wy, wz] = [s.x0 + 2, s.y - 1, s.z0 + 2];
         if (SOLID[this.get(wx, wy, wz)] && !(await this.mine(wx, wy, wz))) return { text: "couldn't dig the hole for the water" };
@@ -2175,7 +2175,14 @@ export class Body {
         if (IS_WATER[this.get(wx, wy, wz)]) water = [wx, wy, wz];
       }
     }
-    if (!water) return { text: this.has(I.BUCKET) ? "couldn't fill your bucket or find a spot for the water near the base" : "no pond within 30 blocks of the base: craft a bucket (3 iron_ingot) and farm again, it fills the bucket and brings the water" };
+    if (!water)
+      return {
+        text: this.has(I.WATER_BUCKET)
+          ? "no flat open 5 by 5 patch of grass or dirt within 28 blocks of the base for the field (clear some trees or level a patch, then farm again)"
+          : this.has(I.BUCKET)
+            ? "couldn't fill your bucket or find a spot for the water near the base"
+            : "no pond within 40 blocks of the base: craft a bucket (3 iron_ingot) and farm again, it fills the bucket and brings the water",
+      };
     const [wx, wy, wz] = water;
     let tilled = 0;
     let planted = 0;

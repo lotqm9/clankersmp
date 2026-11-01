@@ -151,7 +151,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: "pick_up", description: "Pick up the dropped items lying near you.", input_schema: { type: "object", properties: {} } },
   { name: "flee", description: "Run away from the nearest danger.", input_schema: { type: "object", properties: {} } },
   { name: "wait", description: "Stay where you are for a while (like sealed in at night).", input_schema: { type: "object", properties: { seconds: { type: "integer", minimum: 2, maximum: 30 } }, required: ["seconds"] } },
-  { name: "build", description: "Build one of the town's buildings at the pack's base, or carry on with one that is half built: house (a cottage, 75 blocks; it counts as one of the pack's houses), well (26 blocks), lamp (a lamp post: 3 blocks and a torch), storehouse (72, with your chests inside), market (40), hall (the town hall, 140), tower (a watchtower, 70), wall (round the whole base, 190, a stretch each time). Any building blocks work (cobblestone, planks, dirt, sand); fences, glass, torches and chests go in where it has them. You need to be near the base.", input_schema: { type: "object", properties: { what: { type: "string", enum: ["house", "well", "lamp", "storehouse", "market", "hall", "tower", "wall"] } }, required: ["what"] } },
+  { name: "build", description: "Build one of the town's buildings at the pack's base, or carry on with one that is half built: house (a cottage, 75 blocks; it counts as one of the pack's houses), well (26 blocks), lamp (a lamp post: 3 blocks and a torch), storehouse (72, with your chests inside), market (40), hall (the town hall, 140), tower (a watchtower, 70), wall (round the whole base, 190, a stretch each time). It is one whole job: if you run short of blocks it goes and mines stone by itself and comes back to carry on, so just call build (no need to collect first). Fences, glass, torches and chests go in where you have them. You need to be near the base.", input_schema: { type: "object", properties: { what: { type: "string", enum: ["house", "well", "lamp", "storehouse", "market", "hall", "tower", "wall"] } }, required: ["what"] } },
   { name: "farm", description: "Till a field beside water near the base with your hoe and plant your wheat_seeds in it: by a pond within 30 blocks of the base, or, with an empty bucket, it fills the bucket at any water and makes the field at the base. Wheat ripens in about a day.", input_schema: { type: "object", properties: {} } },
   { name: "harvest", description: "Cut the ripe wheat near you and plant the seeds straight back. 3 wheat make bread.", input_schema: { type: "object", properties: {} } },
   { name: "loot_chest", description: "Walk to the nearest chest you haven't emptied (within 48 blocks: the villages' houses, treasure on the islands) and take everything in it.", input_schema: { type: "object", properties: {} } },
@@ -849,7 +849,6 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const base = PACK.base;
     const far = Math.hypot(base.x - b.phys.x, base.z - b.phys.z);
     if (far > 40) return `you're ${Math.round(far)} blocks from the base: go_to_base first`;
-    if (b.buildingBlocks().n < (kind === "lamp" ? 1 : 8)) return `you have ${b.buildingBlocks().n} building blocks: collect some first (dirt is the quickest, or cobblestone, planks, sand)`;
     const ground = (x: number, z: number) => b.naturalGround(x, z, base.y);
     // never on the villages' land: their houses, roads and farms are theirs (and roofs aren't ground)
     const villages: Rect[] = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean).map((v) => ({ x0: v.x - 25, z0: v.z - 25, x1: v.x + 25, z1: v.z + 25 }));
@@ -876,20 +875,43 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (!site.by.includes(this.name)) site.by.push(this.name);
     // stand in the middle and build round itself, the way a player does: everything in a small building is in reach
     // from there, so it doesn't circle the building for every block
-    if (kind !== "wall" && kind !== "lamp") {
+    const toMiddle = async () => {
+      if (kind === "wall" || kind === "lamp") return;
       const sx = Math.floor((site.x0 + site.x1) / 2);
       const sz = Math.floor((site.z0 + site.z1) / 2);
-      if (Math.hypot(sx + 0.5 - b.phys.x, sz + 0.5 - b.phys.z) > 1.2) await b.goto(sx + 0.5, site.y, sz + 0.5, 0.8, { maxMs: 15000 });
-    }
-    const r = await b.buildCells(cells, kind === "wall" ? 48 : 90, `building ${civLabel(kind)}`);
-    site.busy = undefined;
+      if (Math.hypot(sx + 0.5 - b.phys.x, sz + 0.5 - b.phys.z) > 1.2) await b.goto(sx + 0.5, site.y, sz + 0.5, 0.8, { maxMs: 30000 });
+    };
     const solid = cells.filter(([, , , k]) => k === "b" || k === "f" || k === "g");
-    const missing = solid.filter(([x, y, z]) => !SOLID[b.get(x, y, z)]).length;
+    const left = () => solid.filter(([x, y, z]) => !SOLID[b.get(x, y, z)]).length;
+    // one job, start to finish: short of blocks, it goes and mines stone (a staircase), comes back to the middle and
+    // carries on, without stopping to think in between; it only hands back when the building is up, the time is up,
+    // or something it can't fix by itself gets in the way
+    const deadline = Date.now() + 5 * 60000;
+    let r: Awaited<ReturnType<typeof b.buildCells>> = { placed: 0, left: left(), outOf: false, why: "" };
+    let placed = 0;
+    let fetched = 0;
+    for (let round = 0; round < 6 && !b.abort && !b.dead && Date.now() < deadline && left() > 0; round++) {
+      site.busy = { by: this.name, at: Date.now() };
+      if (b.buildingBlocks().n < Math.min(left(), 10)) {
+        const before = b.buildingBlocks().n;
+        this.body.action = `getting stone for ${civLabel(kind)}`;
+        await this.collect("cobblestone", Math.min(48, left() - before + 4));
+        fetched += b.buildingBlocks().n - before;
+        if (b.buildingBlocks().n <= before) break; // no stone to be had here: the brain has to decide what next
+      }
+      await toMiddle();
+      r = await b.buildCells(cells, kind === "wall" ? 48 : 90, `building ${civLabel(kind)}`);
+      placed += r.placed;
+      if (!r.placed && !r.outOf) break; // in the way or out of reach: more blocks won't help
+    }
+    r = { ...r, placed };
+    site.busy = undefined;
+    const missing = left();
     const where = `x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)}`;
     if (missing <= Math.floor(solid.length * (kind === "wall" ? 0.05 : 0.02))) {
       site.done = true;
       this.civUpdate(`${site.by.join(" and ")} finished ${civLabel(kind)}`);
-      return `finished ${civLabel(kind)} at ${where} (${r.placed} blocks placed this time)`;
+      return `finished ${civLabel(kind)} at ${where} (${r.placed} blocks placed${fetched ? `, ${fetched} stone mined for it on the way` : ""})`;
     }
     // a spot where nothing will go in, turn after turn (on a roof, walled off, out of reach): give up on it, so the next
     // build picks a better one instead of everyone trying the same blocks forever
@@ -900,7 +922,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return `gave up on ${civLabel(kind)} at ${where}: nothing would go in there three times (${r.why || "a bad spot"}). build it again and a better spot gets picked`;
     }
     savePack();
-    if (!r.placed) return r.outOf ? `out of building blocks: ${missing} still to go on ${civLabel(kind)} at ${where}` : `couldn't place blocks on ${civLabel(kind)} at ${where}: ${r.why || "in the way, or out of reach"}; ${missing} to go`;
+    if (!r.placed) return r.outOf || b.buildingBlocks().n < 4 ? `out of building blocks and couldn't mine more stone here: ${missing} still to go on ${civLabel(kind)} at ${where} (get logs for planks, or stone from somewhere else)` : `couldn't place blocks on ${civLabel(kind)} at ${where}: ${r.why || "in the way, or out of reach"}; ${missing} to go`;
     return `placed ${r.placed} blocks on ${civLabel(kind)} at ${where}: ${missing} to go${r.outOf ? " (you ran out of building blocks)" : ""}`;
   }
 

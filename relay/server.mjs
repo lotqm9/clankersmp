@@ -92,7 +92,8 @@ setInterval(() => {
     if (!live.length) return;
     const cur = state.agents[focus.agent];
     const ranked = live
-        .map((a) => ({ name: a.name, score: (interest[a.name] || 0) + (a.alive ? 0 : -1000) + (a.deathAt && now - a.deathAt < 15000 ? 2000 : 0) }))
+        // someone in a tunnel or a hole shows the inside of the rock: anyone out in the open is better to watch
+        .map((a) => ({ name: a.name, score: (interest[a.name] || 0) + (a.alive ? 0 : -1000) + (a.deathAt && now - a.deathAt < 15000 ? 2000 : 0) + (a.status?.under ? -25 : 0) }))
         .sort((x, y) => y.score - x.score);
     const best = ranked[0];
     const held = now - focus.since;
@@ -100,6 +101,13 @@ setInterval(() => {
     const mustLeave = !cur || !cur.online || (!cur.alive && now - (cur.deathAt || 0) > 15000);
     // nobody wants to watch an AI sit in a hole: cut to one that's doing something
     const idle = (a) => !a.status || /stay|asleep|idle|^$/.test(a.status.action || '');
+    // following one through a tunnel while another is out in the open: cut to the open one after a short hold
+    const open = live.filter((a) => a.alive && !a.status?.under && !idle(a)).sort((x, y) => (interest[y.name] || 0) - (interest[x.name] || 0))[0];
+    if (cur && cur.alive && cur.status?.under && open && open.name !== focus.agent && held > 8000) {
+        focus = { agent: open.name, since: now, reason: 'out of the tunnel' };
+        broadcast({ type: 'focus', t: now, ...focus });
+        return;
+    }
     const busy = live.filter((a) => a.alive && !idle(a)).sort((x, y) => (interest[y.name] || 0) - (interest[x.name] || 0))[0];
     if (cur && cur.alive && idle(cur) && busy && busy.name !== focus.agent && held > 12000) {
         focus = { agent: busy.name, since: now, reason: 'the other one is just waiting' };

@@ -271,7 +271,15 @@ export class Brain {
   private status(): void {
     const b = this.body;
     const armor = b.armor.filter((s): s is Stack => !!s).map((s) => key(s.id));
+    // in a tunnel or a hole (a roof over it, walls round its head): the camera behind it would be inside the rock,
+    // so the director looks for someone out in the open instead
+    const fx = Math.floor(b.phys.x);
+    const fy = Math.floor(b.phys.y + 0.1);
+    const fz = Math.floor(b.phys.z);
+    const walls = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) => SOLID[b.get(fx + dx, fy + 1, fz + dz)]).length;
+    const under = b.covered() && walls >= 3;
     this.emit("status", {
+      under,
       health: Math.round(b.stats.hp * 10) / 10, food: b.stats.food, pos: [Math.round(b.phys.x), Math.round(b.phys.y), Math.round(b.phys.z)],
       time: b.timeOfDay(), day: (this.day || 1) - 1, held: b.heldId() ? key(b.heldId()) : null, armor, items: b.inv.filter(Boolean).length, action: b.action, dimension: "overworld",
     });

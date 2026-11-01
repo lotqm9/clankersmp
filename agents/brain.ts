@@ -852,7 +852,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (b.buildingBlocks().n < (kind === "lamp" ? 1 : 8)) return `you have ${b.buildingBlocks().n} building blocks: collect some first (dirt is the quickest, or cobblestone, planks, sand)`;
     const ground = (x: number, z: number) => b.naturalGround(x, z, base.y);
     // never on the villages' land: their houses, roads and farms are theirs (and roofs aren't ground)
-    const villages: Rect[] = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean).map((v) => ({ x0: v.x - 27, z0: v.z - 27, x1: v.x + 27, z1: v.z + 27 }));
+    const villages: Rect[] = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean).map((v) => ({ x0: v.x - 25, z0: v.z - 25, x1: v.x + 25, z1: v.z + 25 }));
     let site = PACK.builds.find((x) => x.kind === kind && !x.done);
     if (!site) {
       if (kind === "wall") {
@@ -860,7 +860,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         site = { kind, x0: base.x - 13, z0: base.z - 13, x1: base.x + 13, z1: base.z + 13, y: base.y, by: [], done: false, at: Date.now() };
       } else {
         const [w, d] = KINDS[kind].size;
-        const spot = b.siteNear(base.x, base.z, base.y, w, d, [...footprints(), ...villages], kind === "lamp" ? 14 : 16, kind === "lamp" ? 2 : 3);
+        const spot = b.siteNear(base.x, base.z, base.y, w, d, [...footprints(), ...villages], kind === "lamp" ? 16 : 22, kind === "lamp" ? 2 : 3);
         if (!spot) return `no flat open spot near the base for ${civLabel(kind)} (${w} by ${d}): clear some trees or level some ground near the base`;
         site = { kind, x0: spot.x0, z0: spot.z0, x1: spot.x0 + w - 1, z1: spot.z0 + d - 1, y: spot.y, by: [], done: false, at: Date.now() };
       }

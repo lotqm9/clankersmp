@@ -625,7 +625,9 @@ export class Body {
 
   private plan(x: number, y: number, z: number): PathPoint[] | null {
     // around water, not through it (a swim is slow and ends in flooded holes), unless it's already swimming
-    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: 5000, radius: 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z) });
+    // room to find the way round a ridge or a ravine on a long walk home (5000 nodes in 40 blocks gave up at 38 out)
+    const far = Math.hypot(x - this.phys.x, z - this.phys.z) > 24;
+    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z) });
     if (!s) return null;
     const i = s.reached >= 0 ? s.reached : s.closestTo(x, z);
     return s.pathTo(i);
@@ -1991,7 +1993,7 @@ export class Body {
             else {
               lo = Math.min(lo, g);
               hi = Math.max(hi, g);
-              if (hi - lo > 1) ok = false;
+              if (hi - lo > 2) ok = false; // up to two blocks of slope: the plan fills a foundation under the low side
             }
           }
         if (!ok) continue;

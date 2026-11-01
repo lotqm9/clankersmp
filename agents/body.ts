@@ -23,6 +23,8 @@ import { RECIPES, recipeSize } from "../shared/recipes.ts";
 
 export const NIGHT_START = 12542;
 export const NIGHT_END = 23459;
+/** Ground and plants it may dig straight through when they block its way (never what someone built). */
+const NATURAL = new Set<number>([B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES, B.DIRT, B.GRASS, B.SAND, B.GRAVEL, B.CLAY, B.STONE] as number[]);
 const REACH = 4.3; // a little inside the server's 5 (eye to block centre)
 const HIT_REACH = 2.9;
 
@@ -573,13 +575,22 @@ export class Body {
     const arrived = () => (opts.done ? opts.done() : Math.hypot(x - this.phys.x, z - this.phys.z) <= range && Math.abs(y - this.phys.y) < 3);
     let best = Infinity;
     let fails = 0;
+    let unstuck = false;
     while (!this.abort && !this.dead && Date.now() - t0 < maxMs) {
       if (arrived()) break;
       const d = Math.hypot(x - this.phys.x, z - this.phys.z);
       if (d < best - 0.5) {
         best = d;
         fails = 0;
-      } else if (++fails > 3) break;
+      } else if (++fails > 3) {
+        // the same spot four times over: shake loose once (dig through, step round, climb out), then give up
+        if (unstuck) break;
+        unstuck = true;
+        fails = 0;
+        await this.nudge(x, z);
+        await this.unstick();
+        continue;
+      }
       // the path search only starts from somewhere it can stand: out of the water first
       if (this.phys.inWater && !this.plan(x, y, z)?.length) await this.escapeWater(200);
       const path = this.plan(x, y, z);
@@ -601,6 +612,7 @@ export class Body {
     let i = 0;
     let best = Infinity;
     let since = this.tick;
+    let nudges = 0;
     while (i < path.length) {
       if (this.abort || this.dead || arrived()) return;
       // past the nodes it has reached (or walked by)
@@ -629,7 +641,13 @@ export class Body {
       if (di < best - 0.05) {
         best = di;
         since = this.tick;
-      } else if (this.tick - since > 30) {
+      } else if (this.tick - since > 24) {
+        // up against something: dig through soft blocks or step round, then carry on along the same path
+        if (nudges++ < 2 && (await this.nudge(t.x + 0.5, t.z + 0.5))) {
+          best = Infinity;
+          since = this.tick;
+          continue;
+        }
         this.halt();
         return;
       }
@@ -646,7 +664,7 @@ export class Body {
     for (let s = 0.4; s < len; s += 0.4) {
       const px = sx + ((x - sx) * s) / len;
       const pz = sz + ((z - sz) * s) / len;
-      for (const [ox, oz] of [[0, 0], [0.3, 0.3], [-0.3, 0.3], [0.3, -0.3], [-0.3, -0.3]]) {
+      for (const [ox, oz] of [[0, 0], [0.36, 0.36], [-0.36, 0.36], [0.36, -0.36], [-0.36, -0.36]]) {
         const cx = Math.floor(px + ox);
         const cz = Math.floor(pz + oz);
         if (SOLID[this.get(cx, y, cz)] || SOLID[this.get(cx, y + 1, cz)] || IS_WATER[this.get(cx, y, cz)]) return false;
@@ -666,6 +684,45 @@ export class Body {
     }
     this.halt();
     return Math.hypot(x - this.phys.x, z - this.phys.z) < from - 1;
+  }
+
+  /** Blocked on the way to (tx, tz): dig through what's in the way if it's quick to break (leaves, dirt, sand, wood,
+   *  stone with a pickaxe), the way a player does; otherwise back off a step and slide to the side with room. True if
+   *  it changed something. */
+  private async nudge(tx: number, tz: number): Promise<boolean> {
+    const dx = tx - this.phys.x;
+    const dz = tz - this.phys.z;
+    const d = Math.hypot(dx, dz) || 1;
+    const ux = dx / d;
+    const uz = dz / d;
+    const fy = Math.floor(this.phys.y + 0.01);
+    const cx = Math.floor(this.phys.x + ux * 0.8);
+    const cz = Math.floor(this.phys.z + uz * 0.8);
+    const wet = (x: number, y: number, z: number) => [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]].some(([a, b, c]) => IS_WATER[this.get(x + a, y + b, z + c)]);
+    let dug = false;
+    if (fy > 30) {
+      for (const y of [fy + 1, fy]) {
+        const id = this.get(cx, y, cz);
+        if (!SOLID[id] || !NATURAL.has(id) || wet(cx, y, cz)) continue; // never through walls someone built
+        const t = breakTicks(id, this.bestToolFor(id));
+        if (t >= 0 && t <= 40 && (await this.mine(cx, y, cz, false))) dug = true;
+      }
+    }
+    if (dug) return true;
+    // back off and slide sideways, toward whichever side has room for a body
+    const free = (x: number, z: number) => !SOLID[this.get(Math.floor(x), fy, Math.floor(z))] && !SOLID[this.get(Math.floor(x), fy + 1, Math.floor(z))] && SOLID[this.get(Math.floor(x), fy - 1, Math.floor(z))] === 1;
+    const sides: [number, number][] = [[-uz, ux], [uz, -ux]];
+    sides.sort(() => Math.random() - 0.5);
+    const x0 = this.phys.x;
+    const z0 = this.phys.z;
+    for (const [px, pz] of sides) {
+      const sx = x0 - ux * 0.7 + px * 1.2;
+      const sz = z0 - uz * 0.7 + pz * 1.2;
+      if (!free(sx, sz)) continue;
+      await this.walkStraight(sx, sz, 16, () => Math.hypot(sx - this.phys.x, sz - this.phys.z) < 0.4);
+      if (Math.hypot(this.phys.x - x0, this.phys.z - z0) > 0.6) return true;
+    }
+    return false;
   }
 
   /** Out of a hole or a corner: jump around, else build up under itself. */
@@ -797,6 +854,7 @@ export class Body {
       // walk over (to above it, if it's underground), then dig down to it if it's still below reach
       let ok = await this.goto(x + 0.5, y, z + 0.5, 2, { maxMs: 15000, done: () => this.reachTo(x, y, z) <= REACH || (y < this.phys.y - 2 && near()) });
       if (!ok || this.reachTo(x, y, z) > REACH) ok = y < this.phys.y - 2 && near() && (await this.digDownTo(x, y, z));
+      if (!ok && Math.hypot(x + 0.5 - this.phys.x, z + 0.5 - this.phys.z) < 12) ok = await this.tunnelTo(x, y, z);
       if (!ok) {
         this.debug(`can't reach ${BLOCKS[id]?.key} at ${x} ${y} ${z} (from ${this.phys.x.toFixed(1)} ${this.phys.y.toFixed(1)} ${this.phys.z.toFixed(1)})`);
         return false;
@@ -846,6 +904,42 @@ export class Body {
       if (!SOLID[this.get(fx, fy - 1, fz)] && !SOLID[this.get(fx, fy - 2, fz)] && !SOLID[this.get(fx, fy - 3, fz)]) return false;
       if (id !== B.AIR && !(await this.mine(fx, fy, fz, false))) return false;
       await this.dropInto(fx, fy, fz);
+    }
+    return this.reachTo(x, y, z) <= REACH;
+  }
+
+  /** Dig a walkway two blocks high toward a block it can't walk to, a step at a time, until it's in reach: ore inside
+   *  a hillside. Up or down a step at a time toward its height; never into water or below y 30. */
+  async tunnelTo(x: number, y: number, z: number): Promise<boolean> {
+    for (let k = 0; k < 16 && !this.abort && !this.dead; k++) {
+      if (this.reachTo(x, y, z) <= REACH) return true;
+      const fx = Math.floor(this.phys.x);
+      const fz = Math.floor(this.phys.z);
+      const fy = Math.floor(this.phys.y + 0.01);
+      const dx = x + 0.5 - this.phys.x;
+      const dz = z + 0.5 - this.phys.z;
+      const [sx, sz] = Math.abs(dx) >= Math.abs(dz) ? [Math.sign(dx), 0] : [0, Math.sign(dz)];
+      if (!sx && !sz) break;
+      const nx = fx + sx;
+      const nz = fz + sz;
+      const ny = y > fy + 1 ? fy + 1 : y < fy - 1 && fy - 1 > 31 ? fy - 1 : fy;
+      if (ny > fy) {
+        const h = this.get(fx, fy + 2, fz);
+        if (IS_WATER[h]) return false;
+        if (SOLID[h] && !(await this.mine(fx, fy + 2, fz, false))) return false;
+      }
+      for (const cy of [ny + 1, ny]) {
+        const c = this.get(nx, cy, nz);
+        if (IS_WATER[c] || c === B.BEDROCK) return false;
+        if (SOLID[c] && !(await this.mine(nx, cy, nz, false))) return false;
+      }
+      if (IS_WATER[this.get(nx, ny + 2, nz)]) return false;
+      if (!SOLID[this.get(nx, ny - 1, nz)]) {
+        const f = this.fillerBlock();
+        if (!f || !(await this.place(f, nx, ny - 1, nz))) return false;
+      }
+      await this.goto(nx + 0.5, ny, nz + 0.5, 0.45, { maxMs: 3000 });
+      if (Math.floor(this.phys.x) === fx && Math.floor(this.phys.z) === fz) return this.reachTo(x, y, z) <= REACH;
     }
     return this.reachTo(x, y, z) <= REACH;
   }

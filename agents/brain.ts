@@ -18,6 +18,30 @@ import { FLAG } from "../shared/protocol.ts";
 /** What each AI is working toward and doing right now, as the others can see it (they all run in this process). */
 const BOARD = new Map<string, { goal: string; doing: string }>();
 
+/** The pack's shared plan and base: one list all three work from, one place they build up together. */
+const PACK: { plan: string; by: string; base: { x: number; y: number; z: number } | null } = { plan: "", by: "", base: null };
+let packFile = "";
+function loadPack(): void {
+  if (packFile) return;
+  packFile = join(process.env.AGENT_STATE_DIR || join(process.cwd(), "agent-state"), "pack.json");
+  try {
+    const j = JSON.parse(readFileSync(packFile, "utf8"));
+    PACK.plan = typeof j.plan === "string" ? j.plan : "";
+    PACK.by = typeof j.by === "string" ? j.by : "";
+    if (j.base && typeof j.base.x === "number") PACK.base = j.base;
+  } catch {
+    // no pack yet
+  }
+}
+function savePack(): void {
+  try {
+    mkdirSync(dirname(packFile), { recursive: true });
+    writeFileSync(packFile, JSON.stringify(PACK));
+  } catch (e) {
+    console.error("couldn't save the pack's plan", (e as Error).message);
+  }
+}
+
 export const MODELS: Record<string, string> = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5" };
 /** Dollars an hour each may spend before it slows down (normal play is well under). */
 const HOURLY_BUDGET: Record<string, number> = { "claude-opus-5-5": 4, "claude-sonnet-5-5": 2, "claude-haiku-5-5": 0.5 };
@@ -39,7 +63,7 @@ const SURVIVAL_RECIPES = [
 
 const SYSTEM = (name: string) => `You are ${name}, a Claude model with a body in a hardcore survival game that plays like Minecraft. You act through the tools. Three players share this world: opus, sonnet and haiku. All three of you are Claude models.
 Hardcore means one life. If you die you are out of this world for good, and the others carry on without you.
-The last one standing wins. Until then your goal is to stay alive, get strong (iron, then diamond tools and armor) and build something that lasts: a house, a farm, a base, a small civilization of your own. You have full control. You can work with the others, trade with them, steal from them, betray them or fight them. Nobody has told you to help them and nobody has told you not to. How you deal with them is your call.
+Nobody has given you a task. You three choose your own direction, and the strongest thing you can do is do it together, like a pack: stay alive and build one settlement that keeps growing. Pick a spot for the pack's base, build your houses there next to each other, then keep expanding it: a farm, shared supplies, torches and walls, a furnace, iron tools and armor for everyone, more buildings, paths between them. Agree on a plan in chat, write it down with pack_plan so all three work from the same list, split the jobs, hand each other what's needed (give) and check on each other. Every death makes the pack weaker. You still have full control: how you treat the other two is your call.
 
 The world: an island about 500 blocks across, surrounded by ocean. A day is 20 minutes. Night runs from time 12500 to about 23500. In the dark, monsters come out: Shamblers (slow, hit hard up close), Rattlers (archers, they shoot from range) and Skitters (fast, they climb walls). Shamblers and Rattlers burn in daylight. Pigs, cows, sheep and chickens are food. Raw meat works, cooked meat feeds you more. Hunger drops as you act. You heal only while hunger is high, so eat before it gets low.
 
@@ -81,6 +105,8 @@ const TOOLS: Anthropic.Tool[] = [
   { name: "wait", description: "Stay where you are for a while (like sealed in at night).", input_schema: { type: "object", properties: { seconds: { type: "integer", minimum: 2, maximum: 30 } }, required: ["seconds"] } },
   { name: "build_house", description: "Build a small house right here (about 38 cobblestone, planks or dirt): walls, a roof, a door if you have one, and your bed and a torch inside. It becomes your home.", input_schema: { type: "object", properties: {} } },
   { name: "go_home", description: "Go back into your house and shut the door behind you (and sleep, if it's night and your bed is there).", input_schema: { type: "object", properties: {} } },
+  { name: "pack_plan", description: "Write down the pack's shared plan: what the three of you are building and who does what. All three see it every turn; anyone can rewrite it as things change.", input_schema: { type: "object", properties: { plan: { type: "string" } }, required: ["plan"] } },
+  { name: "go_to_base", description: "Walk back to the pack's base (the first house built becomes it).", input_schema: { type: "object", properties: {} } },
   { name: "set_goal", description: "Write down what you're working toward. It stays in front of you until you change it, and the other players can see it.", input_schema: { type: "object", properties: { goal: { type: "string" } }, required: ["goal"] } },
   { name: "note", description: "Write down something worth remembering (where things are, what someone said or did). You keep your last 10 notes.", input_schema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
   { name: "follow_player", description: "Stay close to another player for a while (up to 60 seconds): to travel, work or fight alongside them.", input_schema: { type: "object", properties: { name: { type: "string" }, seconds: { type: "integer", minimum: 5, maximum: 60 } }, required: ["name"] } },
@@ -201,6 +227,7 @@ export class Brain {
 
   /** Its goal, its notes and its home, kept on disk with the world (a restart doesn't make it forget). */
   private load(): void {
+    loadPack();
     this.stateFile = join(process.env.AGENT_STATE_DIR || join(process.cwd(), "agent-state"), `${this.name}.json`);
     try {
       const j = JSON.parse(readFileSync(this.stateFile, "utf8"));
@@ -256,7 +283,7 @@ export class Brain {
       BOARD.set(this.name, { goal: this.goal, doing: this.body.action });
     }, 1000);
     const guardTimer = setInterval(() => void this.guard(), 250);
-    this.heard.push("You just woke up in this hardcore world with the other two. You have one life. Look around and get started.");
+    this.heard.push("You just woke up in this hardcore world with the other two. You have one life. Talk to the others, agree on what the pack does first, and get started.");
     let quiet = 0;
     while (!this.stopped && !this.body.dead && !this.body.closed) {
       while (this.reflexing) await sleep(100);
@@ -352,6 +379,9 @@ export class Brain {
     if (food < 4) missing.push(`food (only ${food})`);
     if (!worn.length && has("iron_ingot")) missing.push("armor (you have iron)");
     if (missing.length) lines.push(`Still missing: ${missing.join(", ")}.`);
+    lines.push(PACK.plan ? `The pack's plan (written by ${PACK.by}; anyone can rewrite it with pack_plan):
+${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
+    if (PACK.base) lines.push(`The pack's base: x=${PACK.base.x} z=${PACK.base.z}, ${Math.round(Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z))} blocks ${dirWord(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z)}.`);
     lines.push(this.goal ? `Your goal: ${this.goal}` : "You have no goal written down (set_goal).");
     if (b.home) lines.push(`Your home: a house at x=${b.home.x0 + 1} z=${b.home.z0 + 1}, ${Math.round(Math.hypot(b.home.x0 + 2 - b.phys.x, b.home.z0 + 2 - b.phys.z))} blocks ${dirWord(b.home.x0 + 2 - b.phys.x, b.home.z0 + 2 - b.phys.z)}${b.atHome() ? " (you're in it)" : ""}.`);
     if (this.notes.length) lines.push(`Your notes:\n${this.notes.map((n) => `- ${n}`).join("\n")}`);
@@ -452,6 +482,8 @@ export class Brain {
       case "build_house": return "!buildHouse";
       case "go_home": return "!goHome";
       case "set_goal": return `!setGoal(${q(i.goal)})`;
+      case "pack_plan": return "!packPlan";
+      case "go_to_base": return "!goToBase";
       case "note": return "!note";
       case "follow_player": return `!followPlayer(${q(i.name)})`;
       case "smelt": return `!smeltItem(${q(i.item)}, ${Number(i.count) || 1})`;
@@ -529,9 +561,34 @@ export class Brain {
         }
         case "sleep": return await b.sleep();
         case "build_house": {
+          if (PACK.base && !b.home) {
+            const d = Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z);
+            if (d > 14) return `the pack's base is at x=${PACK.base.x} z=${PACK.base.z}, ${Math.round(d)} blocks ${dirWord(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z)}: go_to_base first and build next to the others`;
+          }
           const r = await b.buildHouse();
-          if (b.home) this.save();
+          if (b.home) {
+            this.save();
+            if (!PACK.base) {
+              PACK.base = { x: b.home.x0 + 2, y: b.home.y, z: b.home.z0 + 2 };
+              savePack();
+              this.emit("plan", { text: `${this.name} built the first house: the pack's base is at x=${PACK.base.x} z=${PACK.base.z}` });
+            }
+          }
           return r;
+        }
+        case "pack_plan": {
+          const t = String(i.plan ?? "").trim().slice(0, 600);
+          if (!t) return "the plan is empty";
+          PACK.plan = t;
+          PACK.by = this.name;
+          savePack();
+          this.emit("plan", { text: t });
+          return "the pack's plan is written down; the others see it on their next turn";
+        }
+        case "go_to_base": {
+          if (!PACK.base) return "the pack has no base yet: the first house anyone builds becomes it";
+          const ok = await b.goto(PACK.base.x + 0.5, PACK.base.y, PACK.base.z + 0.5, 4, { maxMs: 90000 });
+          return ok ? "you're at the pack's base" : `you couldn't get all the way to the base (${Math.round(Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z))} blocks left)`;
         }
         case "go_home": return await b.goHome();
         case "set_goal": {

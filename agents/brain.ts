@@ -867,7 +867,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         site = { kind, x0: base.x - 13, z0: base.z - 13, x1: base.x + 13, z1: base.z + 13, y: base.y, by: [], done: false, at: Date.now() };
       } else {
         const [w, d] = KINDS[kind].size;
-        const spot = b.siteNear(base.x, base.z, base.y, w, d, [...footprints(), ...villages], kind === "lamp" ? 16 : 22, kind === "lamp" ? 2 : 3);
+        // a lamp post is one block wide: it can stand anywhere round the town, the village's edge included
+        const spot = b.siteNear(base.x, base.z, base.y, w, d, kind === "lamp" ? footprints() : [...footprints(), ...villages], kind === "lamp" ? 24 : 22, kind === "lamp" ? 2 : 3);
         if (!spot) return `no flat open spot near the base for ${civLabel(kind)} (${w} by ${d}): clear some trees or level some ground near the base`;
         site = { kind, x0: spot.x0, z0: spot.z0, x1: spot.x0 + w - 1, z1: spot.z0 + d - 1, y: spot.y, by: [], done: false, at: Date.now() };
       }
@@ -884,7 +885,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // stand in the middle and build round itself, the way a player does: everything in a small building is in reach
     // from there, so it doesn't circle the building for every block
     const toMiddle = async () => {
-      if (kind === "wall" || kind === "lamp") return;
+      // (a watchtower is the exception: inside its hollow it can't climb out to reach the top)
+      if (kind === "wall" || kind === "lamp" || kind === "tower") return;
       const sx = Math.floor((site.x0 + site.x1) / 2);
       const sz = Math.floor((site.z0 + site.z1) / 2);
       if (Math.hypot(sx + 0.5 - b.phys.x, sz + 0.5 - b.phys.z) > 1.2) await b.goto(sx + 0.5, site.y, sz + 0.5, 0.8, { maxMs: 30000 });

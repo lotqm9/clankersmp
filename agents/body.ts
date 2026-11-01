@@ -436,8 +436,17 @@ export class Body {
     const x = Math.floor(this.phys.x);
     const y = Math.floor(this.phys.y + 0.1);
     const z = Math.floor(this.phys.z);
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1]) if (!SOLID[this.get(x + dx, y + dy, z + dz)]) return false;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]])
+      for (const dy of [0, 1]) if (!SOLID[this.get(x + dx, y + dy, z + dz)] && !this.closedNook(x + dx, y + dy, z + dz, dx, dz)) return false;
     return SOLID[this.get(x, y + 2, z)] === 1;
+  }
+
+  /** A torch in a nook dug one block into the wall (lightUp's), shut in by rock on every other side: as good as
+   *  closed. (Counted as a gap, every dig_in with a torch said the hole wasn't closed, and it dug in again.) */
+  private closedNook(x: number, y: number, z: number, dx: number, dz: number): boolean {
+    if (this.get(x, y, z) !== B.TORCH) return false;
+    const round: [number, number, number][] = [[x + dx, y, z + dz], [x + dz, y, z + dx], [x - dz, y, z - dx], [x, y + 1, z]];
+    return round.every(([a, b, c]) => SOLID[this.get(a, b, c)] === 1);
   }
 
   hostiles(radius = 16): (Seen & { d: number; key: string })[] {
@@ -1401,20 +1410,34 @@ export class Body {
       if (!(await this.dropInto(x, y0 - k, z))) return "dug a hole but couldn't get into it";
     }
     for (let k = 0; k < 30 && !this.fillerBlock(); k++) await this.nextTick(); // the dirt it fell onto gets picked up
-    const filler = this.fillerBlock();
-    if (!filler) return "dug down but has nothing to close the roof with";
-    const roof = Math.floor(this.phys.y + 0.1) + 2;
-    if (!SOLID[this.get(x, roof, z)]) {
-      await this.hold(filler);
-      this.wantPitch = -89;
-      await this.wait(8);
-      this.send({ t: "place", x, y: roof, z, id: filler });
-      this.swing();
-      await this.wait(6);
+    if (!this.fillerBlock()) return "dug down but has nothing to close the roof with";
+    await this.sealIn();
+    const lit = await this.lightUp();
+    return (this.sealed() ? "sealed in underground" : "dug in, but the hole isn't fully closed (out of blocks to close it?)") + (lit ? ", with a torch" : "");
+  }
+
+  /** Close every gap round it: the roof over its head and the four sides at its feet and head (dug into a
+   *  staircase or a cave, a hole three blocks down still opens onto the old tunnels). A torch or a plant in a gap
+   *  comes out first. */
+  async sealIn(): Promise<void> {
+    const x = Math.floor(this.phys.x);
+    const y = Math.floor(this.phys.y + 0.1);
+    const z = Math.floor(this.phys.z);
+    const gaps: [number, number, number][] = [[x, y + 2, z]];
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) gaps.push([x + dx, y + 1, z + dz], [x + dx, y, z + dz]);
+    for (const [gx, gy, gz] of gaps) {
+      if (this.abort || this.dead) return;
+      let id = this.get(gx, gy, gz);
+      if (SOLID[id]) continue;
+      if (id !== B.AIR && !IS_WATER[id] && !BLOCKS[id]?.replaceable) {
+        await this.mine(gx, gy, gz, false);
+        id = this.get(gx, gy, gz);
+      }
+      const filler = this.fillerBlock();
+      if (!filler) return;
+      await this.place(filler, gx, gy, gz, 0);
     }
     this.wantPitch = 0;
-    const lit = await this.lightUp();
-    return (this.sealed() ? "sealed in underground" : "dug in, but the hole isn't fully closed") + (lit ? ", with a torch" : "");
   }
 
   /** A torch beside it in a hole (a small nook dug into the wall for it): never sitting in the pitch dark. */
@@ -1428,6 +1451,8 @@ export class Body {
       const nx = x + dx;
       const nz = z + dz;
       if (!SOLID[this.get(nx, y, nz)] || IS_WATER[this.get(nx, y + 1, nz)]) continue; // the nook needs a floor
+      // and rock round it, so the nook doesn't open the hole onto a tunnel beyond
+      if (![[nx + dx, y + 1, nz + dz], [nx + dz, y + 1, nz + dx], [nx - dz, y + 1, nz - dx], [nx, y + 2, nz]].every(([a, b, c]) => SOLID[this.get(a, b, c)] === 1)) continue;
       if (SOLID[this.get(nx, y + 1, nz)] && !(await this.mine(nx, y + 1, nz, false))) continue;
       if (await this.place(B.TORCH, nx, y + 1, nz)) return true;
     }

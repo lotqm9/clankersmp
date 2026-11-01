@@ -529,6 +529,16 @@ export class Shard {
         sz = saved.z;
         yaw = saved.yaw;
         pitch = saved.pitch;
+      } else if (agent) {
+        // clankersmp: its saved spot is taken (asleep in a bed when the server restarted, a block put where it
+        // stood): the nearest free spot right beside it. Sent off across the island instead, an AI asleep in its
+        // house woke up on a hilltop 120 blocks away and fell to its death on the walk home.
+        const near = this.freeSpotNear(saved.x, saved.y, saved.z);
+        if (near) {
+          [sx, sy, sz] = near;
+          yaw = saved.yaw;
+          pitch = 0;
+        }
       }
     }
     if (agent && sx === this.info.spawn.x && sy === this.info.spawn.y && sz === this.info.spawn.z) {
@@ -1721,6 +1731,27 @@ export class Shard {
       return { x: bx + (k - 1) * 3 + 0.5, y: ys[k], z: z + 0.5, yaw };
     }
     return { x: this.info.spawn.x, y: this.info.spawn.y, z: this.info.spawn.z, yaw: 180 };
+  }
+
+  /** A free spot for a body within 3 blocks of (x, y, z), closest first: room for it and solid ground under its feet,
+   *  out of the water, at most a couple of blocks up or down. Null if there is none. */
+  private freeSpotNear(x: number, y: number, z: number): [number, number, number] | null {
+    const fx = Math.floor(x);
+    const fy = Math.floor(y + 0.1);
+    const fz = Math.floor(z);
+    const spots: [number, number, number, number][] = [];
+    for (let dz = -3; dz <= 3; dz++)
+      for (let dx = -3; dx <= 3; dx++)
+        for (const dy of [0, 1, -1, 2, -2]) spots.push([fx + dx, fy + dy, fz + dz, Math.hypot(dx, dz) + Math.abs(dy) * 0.6]);
+    spots.sort((a, b) => a[3] - b[3]);
+    for (const [cx, cy, cz] of spots) {
+      if (cy < 2 || !inWorld(cx, cy, cz)) continue;
+      const below = this.getBlock(cx, cy - 1, cz);
+      if (!SOLID[below] || IS_WATER[this.getBlock(cx, cy, cz)]) continue;
+      if (playerInsideSolid(this.getBlock, cx + 0.5, cy, cz + 0.5, 0.05)) continue;
+      return [cx + 0.5, cy, cz + 0.5];
+    }
+    return null;
   }
 
   /** Where to stand in a column: on its top solid block, dry land only (no water, no tree tops). -1: nowhere. */

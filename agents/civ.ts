@@ -14,8 +14,10 @@ export interface Building extends Rect {
   at: number;
 }
 
-/** What each kind is, for the AIs (and the site). */
-export const KINDS: Record<Exclude<Kind, "house" | "farm">, { size: [number, number]; blocks: number; what: string }> = {
+/** What each kind is, for the AIs (and the site). A "house" here is a cottage anyone builds with build: it counts
+ *  toward the houses as much as a player's own home (build_house). */
+export const KINDS: Record<Exclude<Kind, "farm">, { size: [number, number]; blocks: number; what: string }> = {
+  house: { size: [5, 5], blocks: 75, what: "a cottage: walls 3 high round a 3 by 3 room, a doorway, two windows and a roof" },
   well: { size: [3, 3], blocks: 26, what: "a stone well with a roof: the middle of the town" },
   lamp: { size: [1, 1], blocks: 3, what: "a lamp post with a torch on top (monsters don't spawn in the light)" },
   storehouse: { size: [5, 5], blocks: 72, what: "a storehouse with chests inside for the pack's shared supplies" },
@@ -66,7 +68,7 @@ function rings(x0: number, z0: number, w: number, d: number, y: number, kind = "
 
 /** The plan of a building with its north-west corner at (x0, z0) and its floor at y. `ground` gives the ground under a
  *  column, so low spots get a foundation first. */
-export function planFor(kind: Exclude<Kind, "house" | "farm" | "wall">, x0: number, z0: number, y: number, ground: (x: number, z: number) => number): PlanCell[] {
+export function planFor(kind: Exclude<Kind, "farm" | "wall">, x0: number, z0: number, y: number, ground: (x: number, z: number) => number): PlanCell[] {
   const [w, d] = KINDS[kind].size;
   const cells: PlanCell[] = [];
   for (let dz = 0; dz < d; dz++)
@@ -86,7 +88,10 @@ export function planFor(kind: Exclude<Kind, "house" | "farm" | "wall">, x0: numb
           cells.push([x, yy, z, kindAt ? kindAt(x, yy, z) : win ? "g" : "b"]);
         }
   };
-  if (kind === "lamp") {
+  if (kind === "house") {
+    wallRing(3, [x0 + 2, z0], [[x0, z0 + 2], [x0 + 4, z0 + 2]]);
+    cells.push(...rings(x0, z0, 5, 5, y + 3), [x0 + 1, y, z0 + 3, "t"]);
+  } else if (kind === "lamp") {
     cells.push([x0, y, z0, "b"], [x0, y + 1, z0, "f"], [x0, y + 2, z0, "f"], [x0, y + 3, z0, "t"]);
   } else if (kind === "well") {
     for (let dz = 0; dz < 3; dz++) for (let dx = 0; dx < 3; dx++) if (dx !== 1 || dz !== 1) cells.push([x0 + dx, y, z0 + dz, "b"]);

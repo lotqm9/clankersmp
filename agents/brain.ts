@@ -868,8 +868,21 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       savePack();
     }
     const cells = kind === "wall" ? wallPlan(base.x, base.z, 13, ground) : planFor(kind, site.x0, site.z0, site.y, ground);
+    // one builder at a time: two on the same small building just walk into each other round it
+    if (site.busy && site.busy.by !== this.name && Date.now() - site.busy.at < 45000 && BOARD.get(site.busy.by)) {
+      return `${site.busy.by} is building ${civLabel(kind)} right now: help another way (bring them blocks with give, build something else, or gather what the next stage needs)`;
+    }
+    site.busy = { by: this.name, at: Date.now() };
     if (!site.by.includes(this.name)) site.by.push(this.name);
+    // stand in the middle and build round itself, the way a player does: everything in a small building is in reach
+    // from there, so it doesn't circle the building for every block
+    if (kind !== "wall" && kind !== "lamp") {
+      const sx = Math.floor((site.x0 + site.x1) / 2);
+      const sz = Math.floor((site.z0 + site.z1) / 2);
+      if (Math.hypot(sx + 0.5 - b.phys.x, sz + 0.5 - b.phys.z) > 1.2) await b.goto(sx + 0.5, site.y, sz + 0.5, 0.8, { maxMs: 15000 });
+    }
     const r = await b.buildCells(cells, kind === "wall" ? 48 : 90, `building ${civLabel(kind)}`);
+    site.busy = undefined;
     const solid = cells.filter(([, , , k]) => k === "b" || k === "f" || k === "g");
     const missing = solid.filter(([x, y, z]) => !SOLID[b.get(x, y, z)]).length;
     const where = `x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)}`;

@@ -1230,8 +1230,13 @@ export class Body {
       const near = this.findBlocks([B.CRAFTING_TABLE], 20, 1)[0];
       if (near) await this.goto(near[0] + 0.5, near[1], near[2] + 0.5, 2, { maxMs: 25000, done: () => this.tableInReach() });
       else if (this.has(B.CRAFTING_TABLE)) {
-        const spot = this.spotNearby();
-        if (spot) await this.place(B.CRAFTING_TABLE, ...spot);
+        // put it down here, or a few steps off when there's no room (a thicket, a slope): never give up on the first try
+        for (let k = 0; k < 4 && !this.tableInReach() && !this.abort; k++) {
+          const spot = this.spotNearby();
+          if (spot && (await this.place(B.CRAFTING_TABLE, ...spot))) break;
+          const a = (k * Math.PI) / 2 + 0.6;
+          await this.goto(this.phys.x + Math.cos(a) * 3, this.phys.y, this.phys.z + Math.sin(a) * 3, 1, { maxMs: 4000 });
+        }
       }
       if (!this.tableInReach()) return { made: 0, why: "that needs a crafting table and there is none here (craft one: crafting_table)" };
     }

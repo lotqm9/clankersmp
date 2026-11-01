@@ -802,10 +802,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       await this.reflex("heading home for the night", async () => `It was getting dark, so you went home: ${await b.goHome()}.`);
       return;
     }
-    // a minute of night out in the open: dig in
-    if (b.isNight() && !b.covered() && !b.phys.inWater) {
+    // dusk or night in the open with no house: take cover before the archers come out (they spawn at dark and
+    // shoot from range, so waiting until it's night already is too late)
+    const dusk = tod >= 11900 && tod < 23000;
+    if ((dusk || b.isNight()) && !b.covered() && !b.phys.inWater && !(b.home && !b.atHome() && /home/.test(b.action))) {
       if (!this.nightOutSince) this.nightOutSince = Date.now();
-      else if (Date.now() - this.nightOutSince > 30000 && !/shelter|bed|sleep/.test(b.action)) {
+      else if (Date.now() - this.nightOutSince > (b.isNight() ? 4000 : 12000) && !/shelter|bed|sleep|home/.test(b.action)) {
         this.nightOutSince = Date.now();
         const bed = b.has(BLOCKS[B.RED_BED].item || B.RED_BED) || b.findBlocks([0, 1, 2, 3, 4, 5, 6, 7].map((k) => B.RED_BED + k), 16, 1).length > 0;
         if (bed) await this.reflex("going to bed", async () => `Night caught you in the open, so you went to bed: ${await b.sleep()}.`);

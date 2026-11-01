@@ -3054,6 +3054,7 @@ export class Game {
       if (r && bv) seat = { ...seatPos(bv, r.s, Math.max(1, this.ridersOf(r.b))), yaw: bv.yaw };
       o.update(rt, a, cam.position, this.otherLight.get(o.id) ?? [1, 0], seat, !!r && r.s === 0 && ((bv?.flags ?? 0) & (BF.ROW_L | BF.ROW_R)) !== 0);
       if (o.id === this.folId) o.root.visible = this.view > 0 && !this.camClose; // clankersmp: through its eyes we don't see it; from behind we do
+      o.ownTag = o.id === this.folId; // its own name tag sits right in front of the camera behind its head: never drawn
     }
     // Animals draw up to 64 blocks away (an entity distance, like the classic games), or the render distance if less.
     const far = Math.min(64, (this.renderDist + 0.5) * 16);

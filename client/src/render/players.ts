@@ -182,6 +182,8 @@ export class RemotePlayer {
   private legR: THREE.Group;
   private legL: THREE.Group;
   private tag: THREE.Sprite;
+  /** clankersmp: the player the spectator follows; its own tag would fill the third-person camera. */
+  ownTag = false;
   /** v11: the speaking icon (shown while the server says they are talking; it pulses while we hear them). */
   private talkIcon: THREE.Sprite;
   private talkingOn = false;
@@ -474,7 +476,7 @@ export class RemotePlayer {
       this.legR.rotation.z = this.legL.rotation.z = 0;
     }
     const d = camPos.distanceTo(this.root.position);
-    this.tag.visible = d < 64;
+    this.tag.visible = d < 64 && !this.ownTag;
     this.talkIcon.visible = this.talkingOn && d < 64;
     this.talkIcon.position.y = this.tag.position.y + 0.42;
     const pulse = this.talkingLive ? 1 + 0.12 * Math.abs(Math.sin(performance.now() / 110)) : 1;

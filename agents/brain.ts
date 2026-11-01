@@ -68,7 +68,7 @@ Nobody has given you a task. You three choose your own direction, and the strong
 The world: an island about 500 blocks across, surrounded by ocean. A day is 20 minutes. Night runs from time 12500 to about 23500. In the dark, monsters come out: Shamblers (slow, hit hard up close), Rattlers (archers, they shoot from range) and Skitters (fast, they climb walls). Shamblers and Rattlers burn in daylight. Pigs, cows, sheep and chickens are food. Raw meat works, cooked meat feeds you more. Hunger drops as you act. You heal only while hunger is high, so eat before it gets low.
 
 How to play well:
-- Every turn, call exactly one action tool. In the same turn you may also call say, when you have something to tell the others.
+- Every turn, call one to three action tools, in the order you want them done. They run one after another, so plan a few steps ahead and you're never standing around (for example collect, then craft, then build_house). If one fails or something attacks you, the rest are skipped. In the same turn you may also call say, when you have something to tell the others.
 - Play like a good, fast player: keep busy in daylight and always be working toward the next thing you need.
 - First day, in this order: oak_log, then oak_planks, sticks, a crafting_table and a wooden_pickaxe. Then cobblestone for a stone_pickaxe and a stone_sword. Then kill 3 sheep for wool and craft a bed (3 wool and 3 planks). Then coal_ore for torches. Get food from animals as you go.
 - A house keeps you safe at night: build_house once you have about 38 cobblestone, planks or dirt (walls, a roof, your bed and a torch go in). From then on go_home every evening before dark.
@@ -150,6 +150,8 @@ export class Brain {
   private log: string[] = []; // what it did and how that went, newest last
   private heard: string[] = []; // chat and world events, newest last
   private reflexing = false;
+  private reflexCount = 0;
+  private thinking = false;
   private chain: Promise<unknown> = Promise.resolve();
   private stopped = false;
   private nightOutSince = 0;
@@ -288,7 +290,11 @@ export class Brain {
     while (!this.stopped && !this.body.dead && !this.body.closed) {
       while (this.reflexing) await sleep(100);
       const t0 = Date.now();
+      this.thinking = true;
+      const idle = this.whileThinking();
       const d = await this.decide();
+      this.thinking = false;
+      await idle;
       if (!d) {
         await sleep(4000);
         continue;
@@ -298,24 +304,31 @@ export class Brain {
         this.emit("chat", { text: text.slice(0, 200) });
         this.log.push(`You said: "${text.slice(0, 200)}"`);
       }
-      if (!d.action) {
+      if (!d.actions.length) {
         if (++quiet > 1) await sleep(3000);
         continue;
       }
       quiet = 0;
-      this.emit("command", { text: d.label });
-      this.body.action = d.label;
-      const res = await this.exclusive(() => this.exec(d.action!.name, d.action!.input));
-      this.body.action = "idle";
-      this.emit("result", { text: res.slice(0, 300) });
-      this.log.push(`${d.desc}: ${res}`);
-      // the same move failing twice in a row: say so plainly, so it tries something else instead of a third time
-      const failed = /couldn|can.t|^no |nothing|still|failed|got 0 |missing|isn.t|don.t|there is no/i.test(res);
-      if (failed && this.lastFail === d.desc) this.heard.push(`${d.desc} has now failed twice in a row (${res}). Do something different.`);
-      this.lastFail = failed ? d.desc : "";
+      // the queue runs back to back; a failure, a reflex (a monster, the dark) or death cuts it short
+      for (const [k, a] of d.actions.entries()) {
+        if (this.stopped || this.body.dead || this.reflexing) break;
+        const reflexes = this.reflexCount;
+        this.emit("command", { text: a.label });
+        this.body.action = a.label;
+        const res = await this.exclusive(() => this.exec(a.name, a.input));
+        this.body.action = "idle";
+        this.emit("result", { text: res.slice(0, 300) });
+        this.log.push(`${a.desc}: ${res}`);
+        // the same move failing twice in a row: say so plainly, so it tries something else instead of a third time
+        const failed = /couldn|can.t|^no |nothing|still|failed|got 0 |missing|isn.t|don.t|there is no/i.test(res);
+        if (failed && this.lastFail === a.desc) this.heard.push(`${a.desc} has now failed twice in a row (${res}). Do something different.`);
+        this.lastFail = failed ? a.desc : "";
+        if (failed && k < d.actions.length - 1) this.heard.push(`The rest of your plan was skipped because ${a.desc} didn't work.`);
+        if (failed || this.reflexCount !== reflexes) break;
+      }
       if (this.log.length > 14) this.log.splice(0, this.log.length - 14);
       const spent = Date.now() - t0;
-      if (spent < 800) await sleep(800 - spent);
+      if (spent < 300) await sleep(300 - spent);
       // a spending guard: past its hourly budget (a loop of instant failures, say) it slows right down
       this.spend = this.spend.filter(([t]) => Date.now() - t < 3600000);
       const lastHour = this.spend.reduce((a, [, d]) => a + d, 0);
@@ -416,7 +429,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     return lines.join("\n");
   }
 
-  private async decide(): Promise<{ says: string[]; action: { name: string; input: Record<string, unknown> } | null; label: string; desc: string } | null> {
+  private async decide(): Promise<{ says: string[]; actions: { name: string; input: Record<string, unknown>; label: string; desc: string }[] } | null> {
     const prompt = this.moment();
     const t0 = Date.now();
     let resp: Anthropic.Message;
@@ -448,17 +461,16 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const thought = resp.content.filter((c): c is Anthropic.ThinkingBlock => c.type === "thinking" && !!(c as Anthropic.ThinkingBlock).thinking).map((c) => c.thinking).join(" ").trim();
     if (thought) this.emit("thought", { text: thought.slice(0, 600), ms });
     const says: string[] = [];
-    let action: { name: string; input: Record<string, unknown> } | null = null;
+    const actions: { name: string; input: Record<string, unknown>; label: string; desc: string }[] = [];
     for (const c of resp.content) {
       if (c.type !== "tool_use") continue;
       const input = (c.input ?? {}) as Record<string, unknown>;
       if (c.name === "say") {
         const m = String(input.message ?? "").trim();
         if (m && !/[<>]/.test(m)) says.push(m);
-      } else if (!action) action = { name: c.name, input };
+      } else if (actions.length < 3) actions.push({ name: c.name, input, label: this.label(c.name, input), desc: this.describe(c.name, input) });
     }
-    if (!action) return { says, action: null, label: "", desc: "" };
-    return { says, action, label: this.label(action.name, action.input), desc: this.describe(action.name, action.input) };
+    return { says, actions };
   }
 
   /** The command line the site turns into words (site/index.html plain()). */
@@ -802,9 +814,29 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     } else this.nightOutSince = 0;
   }
 
+  /** While the next decision is being made: no standing frozen. It looks at whoever is near, or looks around. */
+  private async whileThinking(): Promise<void> {
+    const b = this.body;
+    b.halt();
+    let k = 0;
+    while (this.thinking && !this.reflexing && !b.dead && !b.closed) {
+      if (k % 14 === 0) {
+        const near = [...b.others.values()].filter((o) => !(o.flags & FLAG.DEAD)).map((o) => ({ o, d: b.distTo(o.x, o.y, o.z) })).sort((p, q) => p.d - q.d)[0];
+        if (near && near.d < 14) b.look(near.o.x, near.o.y + 1.5, near.o.z);
+        else {
+          const a = Math.random() * Math.PI * 2;
+          b.look(b.phys.x + Math.sin(a) * 6, b.phys.y + 1.2, b.phys.z + Math.cos(a) * 6);
+        }
+      }
+      k++;
+      await b.nextTick();
+    }
+  }
+
   /** A reflex cuts the running skill short; the site hears what it is doing now, the brain how it went. */
   private async reflex(label: string, fn: () => Promise<string>): Promise<void> {
     this.reflexing = true;
+    this.reflexCount++;
     this.body.abort = true;
     this.emit("reflex", { text: label });
     try {

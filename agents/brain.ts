@@ -857,6 +857,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const base = PACK.base;
     const far = Math.hypot(base.x - b.phys.x, base.z - b.phys.z);
     if (far > 40) return `you're ${Math.round(far)} blocks from the base: go_to_base first`;
+    // the town already has as many of these as any stage asks for: point at what the next stage still needs instead
+    // (they put up a third well and a second storehouse while the town hall waited)
+    const most = Math.max(0, ...STAGES.flatMap((st) => st.needs.filter(([k]) => k === kind).map(([, n]) => n)));
+    if (most && civCount(kind) >= most && !PACK.builds.some((x) => x.kind === kind && !x.done)) {
+      const pr = progress(civCount);
+      const want = pr.next ? pr.next.needs.filter((n) => n.have < n.need).map((n) => `${civLabel(n.k, n.need - n.have)}${n.need - n.have > 1 ? ` (${n.need - n.have} more)` : ""}`) : [];
+      return `the town already has all the ${civLabel(kind, 2)} it needs (${civCount(kind)}). to become ${pr.next ? pr.next.name : "more"} it still needs: ${want.join(", ") || "nothing more"}`;
+    }
     const ground = (x: number, z: number) => b.naturalGround(x, z, base.y);
     // never on the villages' land: their houses, roads and farms are theirs (and roofs aren't ground)
     const villages: Rect[] = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean).map((v) => ({ x0: v.x - 25, z0: v.z - 25, x1: v.x + 25, z1: v.z + 25 }));

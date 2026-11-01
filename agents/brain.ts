@@ -1069,7 +1069,21 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           await b.flee(h.x, h.z, 90);
           return `A ${h.key} came at you${armed ? "" : " and you had no weapon"}, so you ran.`;
         });
-      } else await this.reflex(`fighting a ${h.key}`, async () => `A ${h.key} attacked you and you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
+      } else {
+        // fight it, but not to the death: badly hurt, it breaks off and runs (shamblers are slow; opus fought one from
+        // 20 health to 0 without stopping)
+        let res = "";
+        await this.reflex(`fighting a ${h.key}`, async () => {
+          res = await b.fight({ kind: "mob", id: h.id }, 15000, 7);
+          return `A ${h.key} attacked you and you fought it (${res}).`;
+        });
+        if (/backed off/.test(res) && !b.dead) {
+          await this.reflex(`running from a ${h.key}, badly hurt`, async () => {
+            await b.flee(h.x, h.z, 140);
+            return `You were badly hurt fighting a ${h.key}, so you broke off and ran.`;
+          });
+        }
+      }
       return;
     }
     // hungry with food on it: eat (not more than every 10 s)

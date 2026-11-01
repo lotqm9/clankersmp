@@ -1,0 +1,452 @@
+/* Survival UI: item counts and durability, hearts/food/air, the inventory and container screens, the recipe book,
+   the death screen, sleeping, the safe-zone toast. Tokens from style.css. */
+
+/* hearts, food and air over the hotbar like the classic HUD: 9 x 9 icons every 8 GUI pixels, hearts from the
+   hotbar's left edge, food from its right edge, air above the food (icons drawn in code, ui.ts) */
+.stats {
+  position: absolute;
+  left: calc(50% - var(--s) * 91);
+  bottom: calc(var(--s) * 25);
+  width: calc(var(--s) * 182);
+  height: calc(var(--s) * 19);
+  pointer-events: none;
+}
+.stats .row {
+  position: absolute;
+  bottom: 0;
+  display: flex;
+}
+.stats .row.hp {
+  left: 0;
+}
+.stats .row.right {
+  right: 0;
+  flex-direction: row-reverse;
+}
+.stats .row.air {
+  bottom: calc(var(--s) * 10);
+}
+/* v6: armour above the hearts (left), like the classic HUD */
+.stats .row.armor {
+  left: 0;
+  bottom: calc(var(--s) * 10);
+}
+/* v6: the attack indicator just under the crosshair */
+.attackind {
+  position: absolute;
+  left: calc(50% - var(--s) * 8);
+  top: calc(50% + var(--s) * 7);
+  width: calc(var(--s) * 16);
+  height: calc(var(--s) * 4);
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.attackind.ready {
+  left: calc(50% - var(--s) * 5);
+  top: calc(50% + var(--s) * 6);
+  width: calc(var(--s) * 9);
+  height: calc(var(--s) * 9);
+}
+.creative .attackind {
+  display: none;
+}
+.stats .ic {
+  width: calc(var(--s) * 9);
+  height: calc(var(--s) * 9);
+  margin-right: calc(var(--s) * -1);
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+}
+.stats .row.right .ic {
+  margin-right: 0;
+  margin-left: calc(var(--s) * -1);
+}
+.stats.low .hp .ic {
+  animation: hpshake 0.3s steps(2) infinite;
+}
+.stats .hp .ic:nth-child(odd) {
+  animation-delay: 0.12s;
+}
+@keyframes hpshake {
+  0% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(calc(var(--s) * -1));
+  }
+}
+.creative .stats {
+  display: none;
+}
+
+.hurtflash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(255, 0, 0, 0) 45%, rgba(220, 20, 10, 0.55) 100%);
+  opacity: 0;
+  transition: opacity 0.45s ease-out;
+}
+.hurtflash.on {
+  opacity: 1;
+  transition: none;
+}
+
+/* ---------------------------------------------------------------- inventory screens (native look, update 7.2)
+   Every panel, slot, arrow and button is pixel art drawn in client/src/pixel-gui.ts at 1 GUI pixel per canvas
+   pixel; here they are placed on the GUI grid (var(--s) screen pixels per GUI pixel) and scaled up crisply. */
+
+.mc {
+  pointer-events: auto;
+  background: linear-gradient(rgba(16, 16, 16, 0.75), rgba(16, 16, 16, 0.82));
+}
+.mcwrap {
+  position: relative;
+  display: flex;
+  gap: calc(var(--s) * 2);
+  align-items: flex-start;
+}
+/* the recipe book beside the panel (desktop), below it (tall phones), or over it (small screens: with its own X) */
+.mcwrap[data-mode="stack"] {
+  flex-direction: column-reverse;
+  align-items: center;
+}
+.mcwrap[data-mode="over"] .mcbook {
+  position: absolute;
+  left: calc(var(--s) * 14);
+  top: 0;
+  z-index: 5;
+}
+.mcwrap:not([data-mode="over"]) .bookclose {
+  display: none;
+}
+.mcwrap[data-mode="over"] .inv > .mcclose {
+  visibility: hidden;
+}
+.mcpanel {
+  position: relative;
+  flex: none;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+}
+.mcpanel.mcbook {
+  width: calc(var(--s) * 147);
+  height: calc(var(--s) * 166);
+}
+.mcpanel > * {
+  position: absolute;
+}
+.mcpanel .islot {
+  cursor: pointer;
+}
+.islot.dragged::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.32);
+  z-index: 3;
+  pointer-events: none;
+}
+/* the classic white hover over a slot: only where there is a mouse (a tapped slot would keep it on touch) */
+@media (hover: hover) {
+  .islot:hover::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.5);
+    z-index: 3;
+    pointer-events: none;
+  }
+}
+/* the X: touch screens only (keyboards close with E or Esc, like the classic game) */
+.mcclose {
+  display: none;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  cursor: pointer;
+  z-index: 4;
+}
+.mcclose::before {
+  content: "";
+  position: absolute;
+  inset: calc(var(--s) * -5);
+}
+.touch-mode .mcclose,
+.mcwrap[data-mode="over"] .bookclose {
+  display: block;
+}
+@media (pointer: coarse) {
+  .mcclose {
+    display: block;
+  }
+  .mcwrap:not([data-mode="over"]) .bookclose {
+    display: none;
+  }
+}
+.islot .ic,
+.slot .ic,
+.cursor-item .ic {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.islot .cnt,
+.slot .cnt,
+.cursor-item .cnt,
+.rb-item .cnt {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(var(--s) * 18);
+  height: calc(var(--s) * 18);
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  pointer-events: none;
+  z-index: 2;
+}
+.islot .dur,
+.slot .dur,
+.cursor-item .dur {
+  position: absolute;
+  inset: 0;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  pointer-events: none;
+  z-index: 1;
+}
+.mcpreview {
+  overflow: hidden;
+}
+.mcghost {
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.mcpreview canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+#ui .mcflame i,
+#ui .mcarrow i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+}
+.mcbookbtn,
+.mcbtn {
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  cursor: pointer;
+}
+#ui .mcbtn > i {
+  position: absolute;
+  background-color: transparent;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+}
+.mcbtn .rbi {
+  position: absolute;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.rb-item:not(.can) {
+  cursor: default;
+}
+@media (hover: hover) {
+  .rb-item.can:hover::after,
+  .rb-tab:hover::after,
+  .rb-only:hover::after,
+  .rb-page:hover::after,
+  .mcbookbtn:hover::after,
+  .mcclose:hover::after {
+    content: "";
+    position: absolute;
+    inset: calc(var(--s) * 1);
+    background: rgba(255, 255, 255, 0.28);
+    pointer-events: none;
+  }
+}
+.ptext {
+  position: absolute;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.mctip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  pointer-events: none;
+  z-index: 31;
+}
+.cursor-item {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: calc(var(--s) * 16);
+  height: calc(var(--s) * 16);
+  margin: calc(var(--s) * -8) 0 0 calc(var(--s) * -8);
+  pointer-events: none;
+  z-index: 30;
+}
+
+/* ---------------------------------------------------------------- death, sleep, zone toasts, tips */
+
+.screen.dead {
+  background: linear-gradient(rgba(80, 0, 0, 0.45), rgba(160, 20, 20, 0.62));
+  pointer-events: auto;
+}
+.dead-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--s) * 4);
+  text-align: center;
+}
+.dead-box h1 {
+  margin: 0 0 calc(var(--s) * 6);
+  font-size: calc(var(--s) * 16);
+  font-weight: normal;
+  color: #ffffff;
+  text-shadow: calc(var(--s) * 2) calc(var(--s) * 2) 0 #3f3f3f;
+}
+.dead-box p {
+  margin: 0;
+  color: #ffffff;
+  text-shadow: var(--tshadow);
+}
+.dead-box .buttons {
+  margin-top: calc(var(--s) * 8);
+}
+.sleepveil {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 8, 14, 0.94);
+  opacity: 0;
+  transition: opacity 2.2s ease-in;
+  pointer-events: none;
+}
+.sleepveil.on {
+  opacity: 1;
+}
+.sleepbar {
+  position: absolute;
+  left: 50%;
+  bottom: 18%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--s) * 4);
+  pointer-events: auto;
+}
+.sleepbar p {
+  margin: 0;
+  color: #ffffff;
+  text-shadow: var(--tshadow);
+}
+.zonetoast {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--s) * 26);
+  transform: translate(-50%, calc(var(--s) * -3));
+  padding: var(--s) calc(var(--s) * 4);
+  background: rgba(0, 0, 0, 0.5);
+  color: #55ff55;
+  text-shadow: var(--tshadow);
+  opacity: 0;
+  transition: opacity 0.5s, transform 0.5s;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.zonetoast.in {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.zonetoast.wild {
+  color: #ffaa00;
+}
+.tipcard {
+  position: absolute;
+  right: calc(var(--s) * 3);
+  top: calc(var(--s) * 30);
+  width: min(calc(var(--s) * 150), calc(100vw - var(--s) * 6));
+  padding: calc(var(--s) * 4) calc(var(--s) * 5);
+  background: #212121;
+  border: var(--s) solid #000;
+  box-shadow: inset var(--s) var(--s) 0 #555, inset calc(var(--s) * -1) calc(var(--s) * -1) 0 #111;
+  color: #e0e0e0;
+  text-shadow: var(--tshadow);
+  opacity: 0;
+  transform: translateY(calc(var(--s) * -3));
+  transition: opacity 0.6s, transform 0.6s;
+  pointer-events: none;
+}
+.tipcard.in {
+  opacity: 1;
+  transform: none;
+}
+.tipcard h3 {
+  margin: 0 0 calc(var(--s) * 3);
+  font-size: calc(var(--s) * 8);
+  font-weight: normal;
+  color: var(--yellow);
+}
+.tipcard ol {
+  margin: 0;
+  padding-left: calc(var(--s) * 10);
+  font-size: calc(var(--s) * 6);
+  line-height: calc(var(--s) * 9);
+}
+.tipcard .k {
+  font-size: calc(var(--s) * 6);
+  line-height: calc(var(--s) * 8);
+  color: var(--gray);
+  margin: calc(var(--s) * 3) 0 0;
+}
+
+/* v9: the trade window's offers (inventory-ui.ts renderTrades) */
+.trades > *,
+.trow > * {
+  position: absolute;
+}
+.trow {
+  cursor: pointer;
+}
+.trow .tic {
+  cursor: inherit;
+}
+#ui .trow > i {
+  background-color: transparent;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+}
+@media (hover: hover) {
+  .trow.can:hover::after {
+    content: "";
+    position: absolute;
+    inset: calc(var(--s) * 1);
+    background: rgba(255, 255, 255, 0.28);
+    pointer-events: none;
+  }
+}
+.trow.out {
+  cursor: default;
+}

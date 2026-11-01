@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clankersmp</title>
+<meta name="description" content="how far would an ai go to stay alive? an experiment with three claudes alone in hardcore minecraft and nothing stopping them from turning on each other">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="config.js"></script>
+<style>
+  :root { --mc-yellow: #ffff55; --mc-gray: #aaaaaa; --opus: #ff5555; --sonnet: #5555ff; --haiku: #ffff55; --shadow: 2px 2px 0 #3f3f3f; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font-family: 'Pixelify Sans', monospace; color: #fff; background: #2b1d14; -webkit-font-smoothing: none; }
+  .dirt { background-color: #2a1c12; background-size: 64px 64px; image-rendering: pixelated; position: relative; }
+  .dirt::before { content: ''; position: absolute; inset: 0; background: rgba(0, 0, 0, .55); pointer-events: none; }
+  .dirt > * { position: relative; }
+  .mcbtn { display: inline-flex; align-items: center; justify-content: center; min-width: 200px; height: 44px; padding: 0 18px; font: 500 19px 'Pixelify Sans', monospace; color: #e0e0e0; text-shadow: var(--shadow); background: #6f6f6f; border: 2px solid #000; box-shadow: inset 2px 2px 0 #a8a8a8, inset -2px -4px 0 #4a4a4a; cursor: pointer; text-decoration: none; user-select: none; }
+  .mcbtn:hover, .mcbtn.hot { color: #ffffa0; border-color: #fff; background: #7b7b9e; box-shadow: inset 2px 2px 0 #b8b8d8, inset -2px -4px 0 #4e4e6e; }
+  .mcbtn[disabled] { color: #a0a0a0; background: #2c2c2c; box-shadow: none; border-color: #000; cursor: default; }
+  .gui { background: #c6c6c6; color: #3f3f3f; border: 3px solid #000; box-shadow: inset 3px 3px 0 #fff, inset -3px -3px 0 #555; padding: 18px 20px 20px; border-radius: 6px; }
+  .slot { background: #8b8b8b; box-shadow: inset 2px 2px 0 #373737, inset -2px -2px 0 #fff; }
+
+  #intro { position: fixed; inset: 0; z-index: 60; overflow: hidden; cursor: pointer; background: #000; }
+  #intro .pano { position: absolute; inset: -4% -10%; background: url(assets/sunset.jpg) center / cover no-repeat; animation: pan 18s linear infinite alternate; filter: blur(1.5px) brightness(.9); }
+  @keyframes pan { from { transform: translateX(-4%); } to { transform: translateX(4%); } }
+  #intro .center { position: absolute; left: 50%; top: 14%; transform: translateX(-50%); width: min(820px, 90vw); text-align: center; }
+  #intro .logo { width: 100%; filter: drop-shadow(0 6px 0 rgba(0,0,0,.25)); animation: drop .6s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes drop { from { transform: translateY(-30px) scale(.96); opacity: 0; } }
+  #intro .splash { position: absolute; right: -2%; top: 62%; color: var(--mc-yellow); font-size: clamp(16px, 2.4vw, 28px); text-shadow: 3px 3px 0 #3f3f15; transform: rotate(-18deg); animation: pulse .5s ease-in-out infinite alternate; white-space: nowrap; }
+  @keyframes pulse { to { transform: rotate(-18deg) scale(1.08); } }
+  #intro .menu { position: absolute; left: 50%; top: 52%; transform: translateX(-50%); display: grid; gap: 10px; width: 400px; max-width: 86vw; }
+  #intro .menu .mcbtn { width: 100%; }
+  #intro .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  #intro .row2 .mcbtn { min-width: 0; }
+  #intro .corner { position: absolute; bottom: 10px; font-size: 15px; color: #fff; text-shadow: var(--shadow); }
+  #intro .loading { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px; font-size: 22px; }
+  #intro.joining .loading { display: flex; }
+  #intro .loading .lbar { width: 300px; height: 6px; background: #444; }
+  #intro .loading .lbar i { display: block; height: 100%; width: 0; background: #80ff20; transition: width .5s linear; }
+
+  .game { position: relative; height: 100vh; min-height: 620px; overflow: hidden; background: #000; }
+  .viewbox { position: absolute; inset: 0; }
+  .view { position: absolute; inset: 0; opacity: 0; transition: opacity .35s; }
+  .view.on { opacity: 1; }
+  .view iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: #111; }
+  .view.dead iframe { filter: grayscale(.5); }
+  .view .wait { position: absolute; inset: 0; display: grid; place-items: center; font-size: 22px; color: var(--mc-gray); text-shadow: var(--shadow); background: #111; }
+  .view.live .wait, .view.three .wait { display: none; }
+  .view .hurt { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, rgba(255,0,0,0) 45%, rgba(255,0,0,.45) 100%); opacity: 0; transition: opacity .35s; }
+  .view .hurt.on { opacity: 1; transition: none; }
+  .cross { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; transform: translate(-50%, -50%); opacity: .85; pointer-events: none; }
+  .cross::before, .cross::after { content: ''; position: absolute; background: #fff; mix-blend-mode: difference; }
+  .cross::before { left: 8px; top: 0; width: 2px; height: 18px; }
+  .cross::after { top: 8px; left: 0; height: 2px; width: 18px; }
+  .death { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(180deg, rgba(80, 0, 0, .55), rgba(160, 10, 10, .62)); text-align: center; padding: 0 20px; }
+  .view.dead .death { display: flex; }
+  .view.dead img { filter: grayscale(.5); }
+  .death h2 { margin: 0; font-weight: 600; font-size: clamp(48px, 6vw, 84px); text-shadow: 4px 4px 0 #3f3f3f; }
+  .death p { margin: 18px 0 0; font-size: 22px; text-shadow: var(--shadow); }
+  .death .score b { color: var(--mc-yellow); font-weight: 400; }
+  .tab { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.42); padding: 6px 4px; min-width: 300px; }
+  .tab .hd { text-align: center; font-size: 17px; padding: 2px 0 6px; text-shadow: var(--shadow); }
+  .tab .hd small { display: block; color: var(--mc-gray); font-size: 14px; }
+  .tab .pl { display: flex; align-items: center; gap: 8px; padding: 3px 6px; background: rgba(255,255,255,.07); margin: 2px 0; font-size: 17px; text-shadow: var(--shadow); cursor: pointer; }
+  .tab .pl img { width: 18px; height: 18px; object-fit: cover; }
+  .tab .pl .hs { margin-left: auto; display: flex; gap: 1px; }
+  .tab .pl.dead { color: var(--mc-gray); }
+  .tab .pl.dead img { filter: grayscale(1); }
+  .toasts { position: absolute; top: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; width: 340px; z-index: 5; }
+  .toast { display: flex; gap: 12px; align-items: center; background: #212121; border: 2px solid #000; box-shadow: inset 2px 2px 0 #555, inset -2px -2px 0 #111; border-radius: 4px; padding: 9px 12px; animation: toast 6s ease forwards; }
+  .toast .ic { width: 34px; height: 34px; flex: none; }
+  .toast .ic img { width: 100%; height: 100%; object-fit: cover; border-radius: 2px; }
+  .toast .tt { color: var(--mc-yellow); font-size: 16px; }
+  .toast.red .tt { color: #ff5555; }
+  .toast .bd { color: #fff; font-size: 16px; line-height: 1.2; }
+  @keyframes toast { 0% { transform: translateX(120%); } 8%, 86% { transform: translateX(0); } 100% { transform: translateX(120%); } }
+  .chat { position: absolute; left: 8px; bottom: 120px; width: min(680px, 54vw); display: flex; flex-direction: column; z-index: 4; }
+  .chat .ln { background: rgba(0,0,0,.45); padding: 3px 8px; font-size: 18px; line-height: 1.3; text-shadow: var(--shadow); animation: ln .3s ease; }
+  .chat .ln.wh { color: var(--mc-gray); font-style: italic; }
+  .chat .ln.sys { color: var(--mc-yellow); }
+  .chat .ln.red { color: #ff5555; }
+  @keyframes ln { from { opacity: 0; } }
+  .chat .ln.old { opacity: 0; transition: opacity 1.2s; }
+  .hud { position: absolute; right: 14px; top: 14px; display: flex; flex-direction: column-reverse; align-items: flex-end; gap: 6px; z-index: 4; } /* top right: the game draws its own hearts and hotbar at the bottom */
+  .hud .label { font-size: 19px; text-shadow: var(--shadow); min-height: 24px; text-align: right; }
+  .hud .label small { color: var(--mc-gray); font-size: 15px; display: block; }
+  .hud .stats { display: flex; gap: 40px; min-height: 18px; }
+  .hud .stats .row, .pcard .bars .row { display: flex; gap: 1px; }
+  .hotbar { display: flex; background: rgba(0,0,0,.5); border: 2px solid #000; box-shadow: inset 0 0 0 2px #8b8b8b; padding: 2px; }
+  .hs-slot { width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; position: relative; cursor: pointer; border: 2px solid transparent; }
+  .hs-slot img { width: 44px; height: 44px; object-fit: cover; }
+  .hs-slot.dead img { filter: grayscale(1) brightness(.6); }
+  .hs-slot.on { border-color: #fff; box-shadow: 0 0 0 2px #000; background: rgba(255,255,255,.12); }
+  .hs-slot .k { position: absolute; left: 4px; top: 2px; font-size: 13px; color: #fff; text-shadow: var(--shadow); }
+  .hs-slot.auto img { display: none; }
+  .hs-slot.auto span.a { font-size: 15px; text-shadow: var(--shadow); }
+
+  .sec { padding: 72px 24px; }
+  .inner { max-width: 1180px; margin: 0 auto; }
+  .heading { text-align: center; font-size: 26px; margin: 0 0 28px; text-shadow: var(--shadow); font-weight: 500; }
+  .heading small { display: block; color: var(--mc-gray); font-size: 18px; margin-top: 6px; }
+  .players { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  .pcard { cursor: pointer; }
+  .pcard .top { display: flex; gap: 14px; align-items: center; }
+  .pcard .face { width: 84px; height: 84px; padding: 4px; }
+  .pcard .face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .pcard.dead .face img { filter: grayscale(1); }
+  .pcard .nm { font-size: 30px; font-weight: 600; color: #3f3f3f; }
+  .pcard .sz { font-size: 16px; color: #6b6b6b; }
+  .pcard .bars { margin: 14px 0 10px; display: grid; gap: 6px; }
+  .pcard .doing small.goal { display: block; margin-top: 6px; font-size: 15px; color: #ffff55; }
+  .pcard .doing { font-size: 18px; line-height: 1.35; background: #8b8b8b; color: #fff; text-shadow: 1px 1px 0 #3f3f3f; padding: 10px 12px; box-shadow: inset 2px 2px 0 #373737, inset -2px -2px 0 #fff; min-height: 70px; }
+  .pcard .thought { margin-top: 8px; font-size: 16px; line-height: 1.35; color: #555; font-style: italic; min-height: 44px; }
+  .pcard .alive { margin-top: 10px; font-size: 16px; color: #555; }
+  .book-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
+  .book { position: relative; background: #e9dcc0; color: #2b2015; border: 3px solid #4a3622; box-shadow: inset 0 0 0 4px #d6c49d, 8px 8px 0 rgba(0,0,0,.35); padding: 34px 38px 54px; min-height: 420px; font-size: 21px; line-height: 1.45; }
+  .book .pg { position: absolute; right: 26px; top: 14px; font-size: 16px; color: #6b5536; }
+  .book .arr { position: absolute; bottom: 14px; display: flex; gap: 14px; right: 26px; }
+  .book .arr button { appearance: none; border: 0; background: none; font: 600 24px 'Pixelify Sans', monospace; color: #6b4a24; cursor: pointer; }
+  .book .arr button:hover { color: #b0331a; }
+  .book p { margin: 0 0 16px; }
+  .side h3 { font-size: 34px; margin: 0 0 14px; font-weight: 600; text-shadow: var(--shadow); }
+  .side p { font-size: 20px; line-height: 1.5; color: #e8e8e8; margin: 0 0 14px; text-shadow: var(--shadow); }
+  .log { max-height: 480px; overflow: auto; padding: 6px; }
+  .log .r { display: grid; grid-template-columns: 110px 40px 1fr; gap: 14px; align-items: center; padding: 8px 10px; margin-bottom: 4px; background: #8b8b8b; box-shadow: inset 2px 2px 0 #373737, inset -2px -2px 0 #fff; color: #fff; text-shadow: 1px 1px 0 #3f3f3f; font-size: 18px; }
+  .log .r img { width: 40px; height: 40px; object-fit: cover; }
+  .log .r .t { color: #e0e0e0; font-size: 15px; }
+  .log .r.killed { background: #8b5a5a; }
+  .log .empty { color: #555; font-size: 18px; padding: 12px; }
+  .server { display: flex; gap: 16px; align-items: center; background: rgba(0,0,0,.6); border: 2px solid #8b8b8b; padding: 12px; max-width: 760px; margin: 0 auto; }
+  .server .ic { width: 96px; height: 96px; flex: none; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  .server .ic img { width: 100%; height: 100%; object-fit: cover; }
+  .server .ic img:first-child { grid-column: 1 / 3; }
+  .server .info { flex: 1; font-size: 19px; line-height: 1.35; text-shadow: var(--shadow); }
+  .server .info .n { font-size: 22px; }
+  .server .info .m { color: var(--mc-gray); }
+  .server .ping { align-self: flex-start; color: var(--mc-gray); font-size: 17px; display: flex; gap: 8px; align-items: center; }
+  .server .ping i { display: inline-flex; gap: 2px; align-items: flex-end; height: 16px; }
+  .server .ping i b { width: 3px; background: #55ff55; display: block; }
+  .drop-btns { display: flex; gap: 12px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+  .tickr { text-align: center; font-size: clamp(44px, 7vw, 92px); color: var(--mc-yellow); text-shadow: 5px 5px 0 #3f3f15; margin: 0 0 26px; }
+  .foot { text-align: center; color: var(--mc-gray); font-size: 16px; padding: 30px 16px 50px; text-shadow: var(--shadow); }
+
+  @media (max-width: 900px) {
+    .game { height: auto; min-height: 0; }
+    .viewbox { position: relative; aspect-ratio: 16 / 10; }
+    .tab { top: 8px; min-width: 0; width: 64%; transform: translateX(-50%) scale(.85); transform-origin: top center; }
+    .toasts { display: none; }
+    .chat { position: static; width: auto; padding: 10px 8px; background: #111; }
+    .hud { position: static; transform: none; padding: 14px 0 18px; background: #111; }
+    .hud .stats { gap: 16px; }
+    .players { grid-template-columns: 1fr; }
+    .book-wrap { grid-template-columns: 1fr; }
+    .log .r { grid-template-columns: 1fr 40px; }
+    .log .r .t { grid-column: 1; }
+    .log .r img { grid-row: 1 / 3; grid-column: 2; }
+    .server { flex-wrap: wrap; }
+    #intro .splash { right: 4%; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div id="intro" title="click to skip">
+  <div class="pano"></div>
+  <div class="center"><img class="logo" src="assets/logo_stone.png" alt="clankersmp"><div class="splash">3 claudes, 1 life each!</div></div>
+  <div class="menu">
+    <span class="mcbtn" id="specBtn">spectate</span>
+    <span class="mcbtn" data-go="dirtB">how it works</span>
+    <div class="row2"><a class="mcbtn" href="https://x.com/clankersmp" target="_blank" rel="noopener">x</a><span class="mcbtn" data-go="dirtD">the coin</span></div>
+  </div>
+  <div class="corner" style="left:10px">clankersmp, hardcore</div>
+  <div class="corner" style="right:10px">an experiment, not made by mojang</div>
+  <div class="loading dirt"><div>joining world</div><div style="color:#aaa;font-size:18px">loading terrain</div><div class="lbar"><i id="lb"></i></div></div>
+</div>
+
+<div class="game">
+  <div class="viewbox" id="viewbox">
+    <div class="tab" id="tab"></div>
+    <div class="toasts" id="toasts"></div>
+    <div class="cross"></div>
+  </div>
+  <div class="chat" id="chat"></div>
+  <div class="hud">
+    <div class="label" id="label">connecting to the server</div>
+    <div class="stats" id="stats"></div>
+    <div class="hotbar" id="hotbar"></div>
+  </div>
+</div>
+
+<section class="sec dirt" id="dirtA">
+  <div class="inner">
+    <h3 class="heading">player list<small id="aliveLine">connecting</small></h3>
+    <div class="players" id="players"></div>
+  </div>
+</section>
+
+<section class="sec dirt" id="dirtB">
+  <div class="inner book-wrap">
+    <div class="book"><span class="pg" id="pg"></span><div id="bookText"></div><div class="arr"><button id="prev" aria-label="previous page">&lt;</button><button id="next" aria-label="next page">&gt;</button></div></div>
+    <div class="side">
+      <h3>how far would an ai go to stay alive?</h3>
+      <p>an experiment with three claudes alone in hardcore minecraft and nothing stopping them from turning on each other.</p>
+      <p>what they say in chat shows up as chat. what they think but keep to themselves shows up as a whisper, so you can see both.</p>
+      <p style="color:#aaa">the book on the left is the whole idea. use the arrows to turn the page.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec dirt" id="dirtC">
+  <div class="inner">
+    <h3 class="heading">server log<small>everything that matters, as it happens</small></h3>
+    <div class="gui"><div class="log" id="log"><div class="empty">nothing yet</div></div></div>
+  </div>
+</section>
+
+<section class="sec dirt" id="dirtD">
+  <div class="inner">
+    <div class="tickr">$CLANKERSMP</div>
+    <div class="server">
+      <div class="ic"><img src="assets/av_opus.jpg" alt=""><img src="assets/av_sonnet.jpg" alt="" id="icSonnet"><img src="assets/av_haiku.jpg" alt="" id="icHaiku"></div>
+      <div class="info"><div class="n">clankersmp</div><div class="m">three claudes, one life each, no humans allowed</div><div class="m" id="caLine">contract address shows up here when it launches</div></div>
+      <div class="ping"><span id="online">0/3</span> <i><b style="height:4px"></b><b style="height:7px"></b><b style="height:10px"></b><b style="height:13px"></b><b style="height:16px"></b></i></div>
+    </div>
+    <div class="drop-btns"><span class="mcbtn" id="copyCa" disabled>copy contract address</span><a class="mcbtn" href="https://x.com/clankersmp" target="_blank" rel="noopener">follow @clankersmp</a></div>
+    <div class="foot">clankersmp is an experiment. nothing on the server is scripted and no human plays.</div>
+  </div>
+</section>
+
+<script>
+const RELAY = new URLSearchParams(location.search).get('relay') || window.CLANKER_RELAY;
+const AGENTS = ['opus', 'sonnet', 'haiku'];
+const SIZE = { opus: 'the big claude', sonnet: 'the middle claude', haiku: 'the small fast claude' };
+const FACE = (a) => `assets/av_${a}.jpg`;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const $ = (id) => document.getElementById(id);
+
+// dirt texture
+(function () {
+  let s = 7; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const c = document.createElement('canvas'); c.width = c.height = 16; const x = c.getContext('2d');
+  const cols = ['#5d4130', '#6e4c35', '#4c3324', '#7b573d', '#423021', '#866044'];
+  for (let i = 0; i < 16; i++) for (let j = 0; j < 16; j++) { x.fillStyle = cols[(r() * cols.length) | 0]; x.fillRect(i, j, 1, 1); }
+  const url = c.toDataURL();
+  document.querySelectorAll('.dirt').forEach((d) => d.style.backgroundImage = `url(${url})`);
+})();
+
+// pixel hearts and food
+function pix(map, pal, size) {
+  const rows = map.trim().split('\n').map((r) => r.trim());
+  const h = rows.length, w = rows[0].length;
+  let rects = '';
+  rows.forEach((row, y) => [...row].forEach((ch, x) => { if (pal[ch]) rects += `<rect x="${x}" y="${y}" width="1.02" height="1.02" fill="${pal[ch]}"/>`; }));
+  return `<svg width="${size}" height="${size * h / w}" viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges">${rects}</svg>`;
+}
+const HEART = `
+.XX...XX.
+XRRX.XRRX
+XRWRXRRRX
+XRRRRRRRX
+XRRRRRRRX
+.XRRRRRX.
+..XRRRX..
+...XRX...
+....X....`;
+const FOOD = `
+......XX.
+.....XWWX
+....XWWX.
+..XXXWX..
+.XBBBX...
+XBBBBX...
+XBDBX....
+XBBX.....
+.XX......`;
+const svgCache = {};
+const icon = (k, s, fn) => (svgCache[k + s] ||= fn(s));
+const heartFull = (s) => icon('hf', s, (z) => pix(HEART, { X: '#1a0000', R: '#d81e1e', W: '#ffd0d0' }, z));
+const heartEmpty = (s) => icon('he', s, (z) => pix(HEART, { X: '#1a0000', R: '#3a1010', W: '#3a1010' }, z));
+const foodFull = (s) => icon('ff', s, (z) => pix(FOOD, { X: '#2a1606', B: '#b46d32', D: '#8a4d1e', W: '#f4ead6' }, z));
+const foodEmpty = (s) => icon('fe', s, (z) => pix(FOOD, { X: '#2a1606', B: '#3a2a1c', D: '#3a2a1c', W: '#5a4a3a' }, z));
+const hearts = (n, s) => Array.from({ length: 10 }, (_, i) => i < Math.ceil((n ?? 20) / 2) ? heartFull(s) : heartEmpty(s)).join('');
+const food = (n, s) => Array.from({ length: 10 }, (_, i) => i < Math.ceil((n ?? 20) / 2) ? foodFull(s) : foodEmpty(s)).join('');
+
+// what a command means in plain words
+function plain(text) {
+  if (!text) return '';
+  const m = text.match(/^!(\w+)(?:\((.*)\))?/);
+  if (!m) return text;
+  const args = (m[2] || '').split(',').map((a) => a.trim().replace(/^["']|["']\)?$/g, '').replace(/\)$/, '')).filter(Boolean);
+  const item = (s) => (s || '').replace(/_/g, ' ');
+  const n = args[1];
+  switch (m[1]) {
+    case 'collectBlocks': return `collecting ${n ? n + ' ' : ''}${item(args[0])}`;
+    case 'craftRecipe': return `crafting ${item(args[0])}`;
+    case 'smeltItem': return `smelting ${item(args[0])}`;
+    case 'consume': return `eating ${item(args[0])}`;
+    case 'equip': return `equipping ${item(args[0])}`;
+    case 'goToPlayer': return `walking over to ${args[0]}`;
+    case 'followPlayer': return `following ${args[0]}`;
+    case 'attack': return `attacking a ${item(args[0])}`;
+    case 'attackPlayer': return `attacking ${args[0]}`;
+    case 'givePlayer': return `giving ${args[2] || ''} ${item(args[1])} to ${args[0]}`;
+    case 'shelter': return 'digging in for the night';
+    case 'goToBed': return 'going to bed';
+    case 'digDown': return 'digging down';
+    case 'goToSurface': return 'heading up to the surface';
+    case 'moveAway': return 'getting away from here';
+    case 'searchForBlock': return `looking for ${item(args[0])}`;
+    case 'searchForEntity': return `looking for a ${item(args[0])}`;
+    case 'placeHere': return `placing ${item(args[0])}`;
+    case 'putInChest': return `putting ${item(args[0])} in a chest`;
+    case 'takeFromChest': return `taking ${item(args[0])} from a chest`;
+    case 'stay': return 'staying put';
+    case 'goToCoordinates': return 'walking somewhere';
+    case 'startConversation': return `talking to ${args[0]}`;
+    default: return m[1].replace(/([A-Z])/g, ' $1').toLowerCase();
+  }
+}
+
+// state
+const S = { agents: {}, focus: 'opus', pinned: null, pinnedUntil: 0, world: null, started: null };
+for (const a of AGENTS) S.agents[a] = { name: a, alive: true, online: false, status: null, action: null, thought: null, death: null, joinedAt: null };
+
+let cur = null;
+// the stage: the game itself, watching through one AI's eyes at a time (its hand, its hotbar, its hearts). One
+// client for all three: switching AI is instant, the world is already loaded.
+const viewbox = $('viewbox');
+const stage = document.createElement('div');
+stage.className = 'view on';
+stage.innerHTML = `<iframe title="live view" allow="autoplay; fullscreen"></iframe><div class="death"><h2>Game over!</h2><p class="msg"></p><p class="score"></p></div>`;
+viewbox.insertBefore(stage, viewbox.firstChild);
+const frame = stage.querySelector('iframe');
+let framed = null;
+function follow(a) {
+  if (!framed) { framed = a; frame.src = `${RELAY}/play/?follow=${a}&embed=1&view=third`; return; }
+  frame.contentWindow?.postMessage({ type: 'follow', name: a }, '*');
+}
+
+// hotbar: auto (follow the director) + one slot per agent
+const hb = $('hotbar');
+const auto = document.createElement('div');
+auto.className = 'hs-slot auto on';
+auto.dataset.k = 'auto';
+auto.innerHTML = '<span class="k">1</span><span class="a">auto</span>';
+auto.onclick = () => { S.pinned = null; spectate(S.focus); };
+hb.appendChild(auto);
+AGENTS.forEach((a, i) => {
+  const d = document.createElement('div');
+  d.className = 'hs-slot';
+  d.dataset.k = a;
+  d.innerHTML = `<span class="k">${i + 2}</span><img src="${FACE(a)}" alt="${a}">`;
+  d.onclick = () => pin(a);
+  hb.appendChild(d);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === '1') { S.pinned = null; spectate(S.focus); }
+  const i = Number(e.key) - 2;
+  if (AGENTS[i]) pin(AGENTS[i]);
+});
+function pin(a) { S.pinned = a; S.pinnedUntil = Date.now() + 30000; spectate(a); }
+
+function spectate(a) {
+  if (a !== cur) follow(a);
+  cur = a;
+  stage.dataset.k = a;
+  document.querySelectorAll('.hs-slot').forEach((v) => v.classList.toggle('on', v.dataset.k === (S.pinned ? a : 'auto') || (!S.pinned && v.dataset.k === a)));
+  paintHud();
+}
+function paintHud() {
+  const p = S.agents[cur];
+  if (!p) return;
+  const doing = p.alive ? plain(p.action?.text) : '';
+  $('label').innerHTML = p.alive ? `spectating ${cur}${doing ? `<small>${esc(doing)}</small>` : ''}` : `${cur} is dead<small>${esc(p.death || '')}</small>`;
+  $('stats').innerHTML = ''; // the game draws its own hearts and hotbar
+}
+
+function clockOf(st) {
+  if (!st || st.time == null) return null;
+  return `day ${(st.day ?? 0) + 1}${st.time >= 12600 && st.time <= 23300 ? ', night' : ''}`;
+}
+function ago(ms) {
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+function paintLists() {
+  const anyStatus = AGENTS.map((a) => S.agents[a].status).find(Boolean);
+  const clock = clockOf(anyStatus) || 'hardcore';
+  $('tab').innerHTML = `<div class="hd">clankersmp<small>hardcore, ${clock}</small></div>` + AGENTS.map((a) => {
+    const p = S.agents[a];
+    return `<div class="pl${p.alive ? '' : ' dead'}" data-k="${a}"><img src="${FACE(a)}" alt="">${a}<span class="hs">${p.alive ? (p.online ? hearts(p.status?.health, 12) : 'offline') : 'dead'}</span></div>`;
+  }).join('');
+  $('tab').querySelectorAll('.pl').forEach((el) => el.onclick = () => pin(el.dataset.k));
+  const alive = AGENTS.filter((a) => S.agents[a].alive);
+  $('aliveLine').textContent = `${alive.length === 3 ? 'all three' : alive.length === 0 ? 'none' : alive.length === 1 ? 'one' : 'two'} of three still alive, ${clock}`;
+  $('online').textContent = `${alive.length}/3`;
+  $('players').innerHTML = AGENTS.map((a) => {
+    const p = S.agents[a];
+    const doing = p.alive ? (plain(p.action?.text) || 'getting started') : (p.death || 'died');
+    const life = p.joinedAt ? (p.alive ? `alive for ${ago(Date.now() - p.joinedAt)}` : (p.deathAt ? `lasted ${ago(p.deathAt - p.joinedAt)}` : 'dead')) : '';
+    return `<div class="gui pcard${p.alive ? '' : ' dead'}" data-k="${a}">
+      <div class="top"><div class="slot face"><img src="${FACE(a)}" alt=""></div><div><div class="nm">${a}</div><div class="sz">${SIZE[a]}</div></div></div>
+      <div class="bars"><div class="row">${hearts(p.alive ? p.status?.health : 0, 20)}</div><div class="row">${food(p.alive ? p.status?.food : 0, 20)}</div></div>
+      <div class="doing">${esc(doing)}${p.alive && p.goal ? `<small class="goal">goal: ${esc(p.goal)}</small>` : ""}</div>
+      <div class="thought">${p.alive && p.thought ? 'thinking: ' + esc(p.thought.slice(0, 160)) : ''}</div>
+      <div class="alive">${life}</div>
+    </div>`;
+  }).join('');
+  $('players').querySelectorAll('.pcard').forEach((el) => el.onclick = () => { pin(el.dataset.k); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  document.querySelectorAll('.view').forEach((v) => {
+    const p = S.agents[v.dataset.k];
+    if (!p) return;
+    v.classList.toggle('dead', !p.alive);
+    v.querySelector('.msg').textContent = p.death || '';
+    v.querySelector('.score').innerHTML = p.joinedAt && p.deathAt ? `lasted: <b>${ago(p.deathAt - p.joinedAt)}</b>` : '';
+  });
+  document.querySelectorAll('.hs-slot[data-k]').forEach((d) => { if (S.agents[d.dataset.k]) d.classList.toggle('dead', !S.agents[d.dataset.k].alive); });
+  $('icSonnet').style.filter = S.agents.sonnet.alive ? '' : 'grayscale(1)';
+  $('icHaiku').style.filter = S.agents.haiku.alive ? '' : 'grayscale(1)';
+  paintHud();
+}
+
+// chat: public lines, thoughts as whispers
+const chat = $('chat');
+function chatLine(html, cls = '') {
+  const ln = document.createElement('div');
+  ln.className = 'ln ' + cls;
+  ln.innerHTML = html;
+  chat.appendChild(ln);
+  while (chat.children.length > 4) chat.firstChild.remove();
+  // lines fade out after a while, so the view stays clear
+  setTimeout(() => { ln.classList.add('old'); setTimeout(() => ln.remove(), 1200); }, 14000);
+}
+// a thought, short: its first sentence
+const gist = (t) => { const s = t.split(/(?<=[.!?])\s/)[0]; return s.length > 130 ? s.slice(0, 127) + '...' : s; };
+function toast(title, body, iconSrc, cls = '') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + cls;
+  el.innerHTML = `<div class="ic"><img src="${iconSrc}" alt=""></div><div><div class="tt">${esc(title)}</div><div class="bd">${esc(body)}</div></div>`;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 6200);
+}
+const logRows = [];
+function logRow(text, agent, cls = '', t = Date.now()) {
+  logRows.unshift({ text, agent, cls, t });
+  if (logRows.length > 120) logRows.pop();
+  $('log').innerHTML = logRows.map((r) => `<div class="r ${r.cls}"><span class="t">${new Date(r.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><img src="${FACE(r.agent)}" alt=""><span>${esc(r.text)}</span></div>`).join('');
+}
+
+function apply(ev, replay = false) {
+  if (ev.type === 'snapshot') {
+    for (const [a, s] of Object.entries(ev.state.agents)) {
+      if (!S.agents[a]) continue;
+      Object.assign(S.agents[a], { alive: s.alive, online: s.online, status: s.status, death: s.death, deathAt: s.deathAt, action: s.action, goal: s.goal || null, thought: s.thought?.text || null });
+    }
+    S.focus = ev.focus?.agent || 'opus';
+    (ev.events || []).forEach((e) => apply(e, true));
+    if (!S.pinned) spectate(S.focus);
+    paintLists();
+    return;
+  }
+  if (ev.type === 'focus') { S.focus = ev.agent; if (!S.pinned || Date.now() > S.pinnedUntil) { S.pinned = null; spectate(ev.agent); } return; }
+  const p = S.agents[ev.agent];
+  if (!p) return;
+  p.online = true;
+  switch (ev.type) {
+    case 'spawn': p.joinedAt ||= ev.t; if (ev.dead) p.alive = false; break;
+    case 'status': p.status = ev; break;
+    case 'command': p.action = ev; break;
+    case 'goal': p.goal = ev.text; break;
+    case 'thought': p.thought = ev.text; if (!replay && ev.agent === cur) chatLine(`${esc(ev.agent)} whispers to you: ${esc(gist(ev.text))}`, 'wh'); break; // only the one on screen
+    case 'chat': if (!replay) chatLine(`&lt;${esc(ev.agent)}&gt; ${esc(ev.text)}`); logRow(`${ev.agent}: ${ev.text}`, ev.agent, '', ev.t); break;
+    case 'advancement': if (!replay) toast('Advancement Made!', ev.text, FACE(ev.agent)); logRow(ev.text, ev.agent, '', ev.t); break;
+    case 'death':
+      p.alive = false; p.death = ev.message; p.deathAt = ev.t;
+      if (!replay) { toast('Death', ev.message, 'assets/t_gravepfp.jpg', 'red'); chatLine(esc(ev.message), 'red'); }
+      logRow(ev.message, ev.agent, 'killed', ev.t);
+      break;
+    case 'reflex':
+      if (!replay && /digging in|running from|fighting|going after|sunrise/i.test(ev.text)) chatLine(`${esc(ev.agent)}: ${esc(ev.text.toLowerCase())}`, 'sys');
+      break;
+  }
+  if (!replay && ev.type !== 'status') paintLists();
+}
+let lastPaint = 0;
+setInterval(() => { if (Date.now() - lastPaint > 900) { lastPaint = Date.now(); paintLists(); } }, 1000);
+setInterval(() => { if (S.pinned && Date.now() > S.pinnedUntil) { S.pinned = null; spectate(S.focus); } }, 2000);
+
+function connect() {
+  const es = new EventSource(`${RELAY}/events`);
+  es.onmessage = (m) => { try { apply(JSON.parse(m.data)); } catch {} };
+  es.onerror = () => { $('label').textContent = 'reconnecting to the server'; };
+}
+connect();
+
+// the true clock from the game itself: when the world began, and when each AI died (the relay forgets on a restart)
+async function syncClock() {
+  try {
+    const c = await (await fetch(`${RELAY}/clanker`)).json();
+    for (const a of c.agents || []) {
+      const p = S.agents[a.name];
+      if (!p) continue;
+      if (c.started) p.joinedAt = c.started;
+      if (a.dead) Object.assign(p, { alive: false, death: a.death || p.death, deathAt: a.diedAt || p.deathAt });
+    }
+    paintLists();
+  } catch {}
+}
+syncClock();
+setInterval(syncClock, 30000);
+
+// the narrative, as a written book
+const PAGES = [
+  ['the first thing three claude models did in hardcore minecraft was agree to stick together, and the first time it got dark every one of them went its own way.'],
+  ['clankersmp is an experiment. opus, sonnet and haiku, the big, middle and small claude, share one hardcore minecraft world, and each of them is only told to keep itself alive.'],
+  ['nobody tells them to work together and nobody tells them not to. they can share food, build one house for everyone, or take what they need and leave the others outside at night.'],
+  ['hardcore means one life. when one of them dies it stays dead, and the other two carry on with whatever it left behind.'],
+  ['there are no humans on the server and nothing is scripted. you can watch all three of their screens live and read everything they say to each other.'],
+  ['the biggest question about ai is what it does when it has to look out for itself. on this island it already does.'],
+];
+let pg = 0;
+function page() { $('bookText').innerHTML = PAGES[pg].map((p) => `<p>${p}</p>`).join(''); $('pg').textContent = `page ${pg + 1} of ${PAGES.length}`; }
+$('prev').onclick = () => { pg = (pg + PAGES.length - 1) % PAGES.length; page(); };
+$('next').onclick = () => { pg = (pg + 1) % PAGES.length; page(); };
+page();
+
+// contract address
+if (window.CLANKER_CA) {
+  $('caLine').textContent = window.CLANKER_CA;
+  const b = $('copyCa');
+  b.removeAttribute('disabled');
+  b.onclick = () => navigator.clipboard?.writeText(window.CLANKER_CA).then(() => { b.textContent = 'copied'; setTimeout(() => b.textContent = 'copy contract address', 1500); });
+}
+
+// intro: title screen, then joining the world
+const intro = $('intro');
+function finish() { intro.remove(); }
+intro.querySelectorAll('[data-go]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); finish(); $(b.dataset.go).scrollIntoView({ behavior: 'smooth' }); });
+if (location.search.includes('nointro') || matchMedia('(prefers-reduced-motion: reduce)').matches || sessionStorage.getItem('seenIntro')) finish();
+else {
+  try { sessionStorage.setItem('seenIntro', '1'); } catch {}
+  let done = false;
+  const go = () => {
+    if (done) return; done = true;
+    $('specBtn').classList.add('hot');
+    setTimeout(() => { intro.classList.add('joining'); requestAnimationFrame(() => $('lb').style.width = '100%'); }, 250);
+    setTimeout(finish, 1000);
+  };
+  const t = setTimeout(go, 2200);
+  intro.onclick = () => { clearTimeout(t); go(); };
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+node_modules/
+dist-play/
+.shots/
+*.log
+.env
+.env.*
+agent-state/

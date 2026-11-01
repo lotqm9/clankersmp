@@ -1,0 +1,7 @@
+node_modules
+dist-play
+.shots
+data
+*.log
+.claude
+.git

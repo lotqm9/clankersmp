@@ -1,0 +1,13 @@
+{
+  "name": "steve-craft-server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "$STEVE Craft survival game server (prebuilt bundle in dist/).",
+  "scripts": {
+    "start": "node dist/server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

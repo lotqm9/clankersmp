@@ -1963,27 +1963,33 @@ export class Body {
     const hoe = this.inv.find((st) => st && isHoeId(st.id))?.id;
     if (!hoe) return { text: "you need a hoe to farm (craft wooden_hoe or stone_hoe: 2 planks or cobblestone and 2 sticks)" };
     if (!this.has(I.WHEAT_SEEDS)) return { text: "you need wheat_seeds (break tall grass for them, or take them from a village farm or the farmer's chest)" };
+    // ground to till beside water at level wy: grass or dirt at the water's level or one above (a pond's bank)
+    const landAt = (x: number, z: number, wy: number): number => {
+      for (const y of [wy, wy + 1]) {
+        const id = this.get(x, y, z);
+        if ((id === B.GRASS || id === B.DIRT || isFarmland(id)) && !SOLID[this.get(x, y + 1, z)] && !IS_WATER[this.get(x, y + 1, z)]) return y;
+      }
+      return -1;
+    };
     let water: [number, number, number] | null = null;
-    for (const [x, y, z] of this.findBlocks([B.WATER], 22, 40)) {
-      if (Math.hypot(x - cx, z - cz) > 26 || avoid.some((r) => x >= r.x0 - 3 && x <= r.x1 + 3 && z >= r.z0 - 3 && z <= r.z1 + 3)) continue;
+    for (const [x, y, z] of this.findBlocks([B.WATER], 30, 60)) {
+      if (Math.hypot(x - cx, z - cz) > 30 || avoid.some((r) => x >= r.x0 - 3 && x <= r.x1 + 3 && z >= r.z0 - 3 && z <= r.z1 + 3)) continue;
       if (SOLID[this.get(x, y + 1, z)] || IS_WATER[this.get(x, y + 1, z)]) continue;
       let land = 0;
-      for (let dz = -2; dz <= 2; dz++)
-        for (let dx = -2; dx <= 2; dx++) {
-          const id = this.get(x + dx, y, z + dz);
-          if ((id === B.GRASS || id === B.DIRT) && !SOLID[this.get(x + dx, y + 1, z + dz)]) land++;
-        }
-      if (land >= 8) {
+      for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) if (Math.abs(dx) + Math.abs(dz) <= 4 && landAt(x + dx, z + dz, y) >= 0) land++;
+      if (land >= 6) {
         water = [x, y, z];
         break;
       }
     }
+    // no pond by the base: fill the empty bucket it carries at any water, and pour it into a hole at the base
+    if (!water && !this.has(I.WATER_BUCKET) && this.has(I.BUCKET)) await this.fillBucket();
     if (!water && this.has(I.WATER_BUCKET)) {
       const s = this.siteNear(cx, cz, cy, 5, 5, avoid, 16, 4);
       if (s) {
         const [wx, wy, wz] = [s.x0 + 2, s.y - 1, s.z0 + 2];
         if (SOLID[this.get(wx, wy, wz)] && !(await this.mine(wx, wy, wz))) return { text: "couldn't dig the hole for the water" };
-        await this.goto(wx + 1.5, wy + 1, wz + 0.5, 1.5, { maxMs: 8000 });
+        await this.goto(wx + 1.5, wy + 1, wz + 0.5, 1.5, { maxMs: 12000 });
         await this.hold(I.WATER_BUCKET);
         await this.lookAt(wx + 0.5, wy + 0.5, wz + 0.5, 10);
         this.send({ t: "place", x: wx, y: wy, z: wz, id: B.WATER });
@@ -1992,7 +1998,7 @@ export class Body {
         if (IS_WATER[this.get(wx, wy, wz)]) water = [wx, wy, wz];
       }
     }
-    if (!water) return { text: "no water near the base for a farm: bring a water_bucket (a bucket is 3 iron_ingot; fill it at any water), or farm beside a pond" };
+    if (!water) return { text: this.has(I.BUCKET) ? "couldn't fill your bucket or find a spot for the water near the base" : "no pond within 30 blocks of the base: craft a bucket (3 iron_ingot) and farm again, it fills the bucket and brings the water" };
     const [wx, wy, wz] = water;
     let tilled = 0;
     let planted = 0;
@@ -2002,21 +2008,40 @@ export class Body {
     field.sort((a, b) => Math.hypot(a[0] - this.phys.x, a[1] - this.phys.z) - Math.hypot(b[0] - this.phys.x, b[1] - this.phys.z));
     for (const [x, z] of field) {
       if (this.abort || this.dead || !this.has(I.WHEAT_SEEDS)) break;
-      const id = this.get(x, wy, z);
-      if ((id === B.GRASS || id === B.DIRT) && !SOLID[this.get(x, wy + 1, z)]) {
-        if (this.get(x, wy + 1, z) !== B.AIR) await this.mine(x, wy + 1, z); // tall grass on top
-        if (this.reachTo(x, wy, z) > REACH - 0.5) await this.goto(x + 0.5, wy + 1, z + 0.5, 2.2, { maxMs: 6000, done: () => this.reachTo(x, wy, z) <= REACH - 0.5 });
+      const y = landAt(x, z, wy);
+      if (y < 0) continue;
+      if (!isFarmland(this.get(x, y, z))) {
+        if (this.get(x, y + 1, z) !== B.AIR) await this.mine(x, y + 1, z); // tall grass on top
+        if (this.reachTo(x, y, z) > REACH - 0.5) await this.goto(x + 0.5, y + 1, z + 0.5, 2.2, { maxMs: 6000, done: () => this.reachTo(x, y, z) <= REACH - 0.5 });
         await this.hold(hoe);
-        await this.lookAt(x + 0.5, wy + 1, z + 0.5, 8);
-        this.send({ t: "use", x, y: wy, z });
+        await this.lookAt(x + 0.5, y + 1, z + 0.5, 8);
+        this.send({ t: "use", x, y, z });
         this.swing();
         await this.wait(4);
-        if (isFarmland(this.get(x, wy, z))) tilled++;
+        if (isFarmland(this.get(x, y, z))) tilled++;
       }
-      if (isFarmland(this.get(x, wy, z)) && this.get(x, wy + 1, z) === B.AIR && (await this.place(I.WHEAT_SEEDS, x, wy + 1, z))) planted++;
+      if (isFarmland(this.get(x, y, z)) && this.get(x, y + 1, z) === B.AIR && (await this.place(I.WHEAT_SEEDS, x, y + 1, z))) planted++;
     }
     if (!planted) return { text: `couldn't plant by the water at x=${wx} z=${wz} (no open grass or dirt right beside it)` };
     return { text: `tilled ${tilled} and planted ${planted} wheat beside the water at x=${wx} z=${wz}; it ripens in about a day, then harvest`, rect: { x0: wx - 3, z0: wz - 3, x1: wx + 3, z1: wz + 3 } };
+  }
+
+  /** Fill the empty bucket it carries at the nearest water (within 48 blocks). */
+  async fillBucket(): Promise<boolean> {
+    if (!this.has(I.BUCKET)) return false;
+    const w = this.findBlocks([B.WATER], 48, 8).find(([x, y, z]) => !SOLID[this.get(x, y + 1, z)]);
+    if (!w) return false;
+    const [x, y, z] = w;
+    this.action = "filling a bucket";
+    const near = () => this.reachTo(x, y, z) <= REACH - 0.6;
+    if (!near()) await this.goto(x + 0.5, y + 1, z + 0.5, 2.5, { maxMs: 40000, done: near });
+    if (!near()) return false;
+    await this.hold(I.BUCKET);
+    await this.lookAt(x + 0.5, y + 0.8, z + 0.5, 10);
+    this.send({ t: "use", x, y, z });
+    this.swing();
+    for (let k = 0; k < 20 && !this.has(I.WATER_BUCKET); k++) await this.nextTick();
+    return this.has(I.WATER_BUCKET);
   }
 
   /** Cut ripe wheat near it and plant seeds straight back. */

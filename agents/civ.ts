@@ -113,7 +113,12 @@ export function planFor(kind: Exclude<Kind, "farm" | "wall">, x0: number, z0: nu
     cells.push(...rings(x0, z0, 3, 3, y + 7));
     for (const [dx, dz] of [[0, 0], [2, 0], [0, 2], [2, 2]]) cells.push([x0 + dx, y + 8, z0 + dz, "t"]);
   }
-  return cells;
+  // the order a person builds in: a layer at a time from the bottom, each layer walked round once (outside edge
+  // before the middle, for roofs), not left wall, right wall, left wall across the building for every block
+  const cx = x0 + (w - 1) / 2, cz = z0 + (d - 1) / 2;
+  const edge = ([x, , z]: PlanCell) => Math.min(x - x0, x0 + w - 1 - x, z - z0, z0 + d - 1 - z);
+  const angle = ([x, , z]: PlanCell) => (Math.atan2(z - cz, x - cx) + Math.PI * 2) % (Math.PI * 2);
+  return cells.map((c, k) => ({ c, k })).sort((a, b) => a.c[1] - b.c[1] || edge(a.c) - edge(b.c) || angle(a.c) - angle(b.c) || a.k - b.k).map((e) => e.c);
 }
 
 /** The wall round the base: a square `r` blocks out each way, two high on the ground it crosses, a gate three wide

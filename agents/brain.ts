@@ -1755,9 +1755,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return;
     }
     // hungry with food on it: eat (not more than every 10 s)
-    if (b.stats.food <= 8 && Date.now() - this.lastEat > 10000 && b.inv.some((s) => s && itemDef(s.id)?.food && !itemDef(s.id)?.food?.queasy)) {
+    // or hurt and not quite full: a full bar heals half a heart every half second, 18 or 19 only every 4 s (haiku sat
+    // at 6 health with hunger 18 after a rattler, healing at a crawl)
+    const hurtHealing = b.stats.hp <= 12 && b.stats.food < 20 && !b.hostiles(8).length;
+    if ((b.stats.food <= 8 || hurtHealing) && Date.now() - this.lastEat > 10000 && b.inv.some((s) => s && itemDef(s.id)?.food && !itemDef(s.id)?.food?.queasy)) {
       this.lastEat = Date.now();
-      await this.reflex("eating", async () => `You were starving, so you ate: ${await b.eat()}.`);
+      await this.reflex("eating", async () => (b.stats.food <= 8 ? `You were starving, so you ate: ${await b.eat()}.` : `You were hurt, and a full stomach heals fast, so you ate: ${await b.eat()}.`));
       return;
     }
     // dusk with a house: home before dark (and to bed). Not out of a sealed hole (safe there till morning), not

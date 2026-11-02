@@ -946,7 +946,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           // to the foot of that tree, not the log itself: the grove search can pick a log five up the trunk, and a goal
           // up in the canopy had sonnet walking back and forth below it ("ended 0.2 from where it started")
           let foot = grove[1];
-          while (foot > 2 && [B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG].includes(b.get(grove[0], foot - 1, grove[2]))) foot--;
+          while (foot > 2 && ([B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG] as number[]).includes(b.get(grove[0], foot - 1, grove[2]))) foot--;
           const near = () => Math.hypot(grove[0] + 0.5 - b.phys.x, grove[2] + 0.5 - b.phys.z) <= 5;
           await b.goto(grove[0] + 0.5, foot, grove[2] + 0.5, 4, { maxMs: trips === 1 ? 40000 : 120000, done: near });
           // never got there (a cliff, water, no path): that grove is off for 10 minutes, so the next trip, now or on

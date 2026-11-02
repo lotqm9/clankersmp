@@ -63,6 +63,10 @@ function civCount(k: Kind | "trade", tier = 1): number {
 let lastAudit = 0;
 /** Where each agent is mining right now, so two don't work the same tree or the same spot. */
 const MINING = new Map<string, { x: number; z: number; at: number }>();
+/** Groves a logging trip came back from empty-handed (trees up a cliff or across water): left out for 10 minutes, so
+ *  the next trip picks another (sonnet walked 125 blocks out to oaks on a cliff and circled them for minutes). */
+const BAD_GROVES: { x: number; z: number; until: number }[] = [];
+const badGrove = (x: number, z: number) => BAD_GROVES.some((g) => g.until > Date.now() && Math.hypot(g.x - x, g.z - z) < 14);
 const takenByOther = (me: string, x: number, z: number) => [...MINING].some(([n, m]) => n !== me && Date.now() - m.at < 20000 && Math.hypot(m.x - x, m.z - z) < 5);
 function footprints(): Rect[] {
   return [...houseRects(), ...PACK.builds.filter((b) => b.kind !== "house" && b.kind !== "road").map((b) => (b.kind === "wall" ? { x0: b.x0 + 1, z0: b.z0 + 1, x1: b.x0 + 1, z1: b.z0 + 1 } : b))];
@@ -863,6 +867,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const offLimits = (x: number, z: number) => (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 16) || theirs(x, z);
     let pit: [number, number, number] | null = null;
     let trips = 0;
+    let trip: { x: number; z: number; had: number } | null = null;
     const trees = plan.blocks.some((id) => BLOCKS[id]?.key?.endsWith("_log"));
     // stone comes out of the ground away from the town: never the town's own walls (the nearest "cobblestone" was
     // the town hall's, so they took its lower walls apart for a house), and never a village's houses
@@ -933,8 +938,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // left sonnet standing still for 3 minutes "walking out to find coal_ore"
       if (!found.length && trees && trips < 2) {
         trips++;
-        const grove = b.findGrove(plan.blocks, trips === 1 ? 64 : 160, (gx, gz) => theirs(gx, gz));
+        const grove = b.findGrove(plan.blocks, trips === 1 ? 64 : 160, (gx, gz) => theirs(gx, gz) || badGrove(gx, gz));
         if (grove) {
+          trip = { x: grove[0], z: grove[2], had: have() };
           const far = Math.round(Math.hypot(grove[0] - b.phys.x, grove[2] - b.phys.z));
           b.action = `going on a logging trip for ${item}, ${far} blocks out`;
           await b.goto(grove[0] + 0.5, grove[1], grove[2] + 0.5, 4, { maxMs: trips === 1 ? 40000 : 120000 });
@@ -955,6 +961,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (tried > count * 3 + 6) break;
     }
     const got = have() - start;
+    if (trip && have() <= trip.had) BAD_GROVES.push({ x: trip.x, z: trip.z, until: Date.now() + 600000 });
     if (got >= count) return `got ${got} ${item}`;
     if (!tried) return `no ${item} within 32 blocks${plan.blocks.includes(B.STONE) ? " (dig_down to reach stone)" : " (explore to find some)"}`;
     return `got ${got} of ${count} ${item}`;

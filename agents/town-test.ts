@@ -1,11 +1,14 @@
 // clankersmp: every town building at every tier, on a throwaway test server (DEV_COMMANDS=1). Each body takes some
 // kinds: it finds a spot, gets the materials the plan needs with /give, builds tier 1 with buildCells, checks every
 // cell, then upgrades the same building to tier 2 and tier 3 (mining out what the upgrade replaces), checking each
-// time. With SHOTS=1 a picture of each building at each tier is taken through the game client (.local/cam.cjs).
+// time. With SHOTS=1 a picture of each building at each tier is taken through the game client (tools/cam.cjs).
 //   AGENT_SECRET=... node agents/town-test.ts [ws://127.0.0.1:8789]
 //   KINDS=house,well BODIES=opus AT=288,216 SHOTS=1 node agents/town-test.ts
+//   (SHOTS=1: tools/cam.cjs with the client served by vite; SERVER=ws://... for the camera, CENTRES=x,z;x,z;... a patch of
+//   ground for each body, outside the spawn hub)
 import { execFile } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Body } from "./body.ts";
 import { KINDS, cellTarget, itemOf, planFor, sizeFacing, wallPlan, type Plain } from "./civ.ts";
 import { B, BLOCKS } from "../shared/blocks.ts";
@@ -16,7 +19,7 @@ const kinds = (process.env.KINDS || "house,well,lamp,storehouse,market,hall,towe
 const names = (process.env.BODIES || "opus,sonnet,haiku").split(",");
 const [ax, az] = (process.env.AT || "288,216").split(",").map(Number);
 const shots = process.env.SHOTS === "1";
-const OUT = process.env.OUT || "C:/Users/vincu/clankersmp-buildings/.local/shots";
+const OUT = process.env.OUT || fileURLToPath(new URL("../.local/shots", import.meta.url));
 mkdirSync(OUT, { recursive: true });
 const used: { x0: number; z0: number; x1: number; z1: number }[] = [];
 const results: string[] = [];
@@ -96,7 +99,7 @@ async function shot(b: Body, name: string, file: string, s: { kind: string; x0: 
   writeFileSync(spec, JSON.stringify(poses));
   // (not execFileSync: a blocked event loop stops the body's moves and the server drops it)
   await new Promise<void>((res) =>
-    execFile("node", ["C:/Users/vincu/clankersmp-buildings/.local/cam.cjs", spec], { env: { ...process.env, FOLLOW: name }, timeout: 150000 }, (e, out) => {
+    execFile("node", [fileURLToPath(new URL("../tools/cam.cjs", import.meta.url)), spec], { env: { ...process.env, FOLLOW: name }, timeout: 150000 }, (e, out) => {
       console.log(e ? `${name} shot failed: ${e.message}` : out.trim());
       res();
     }),

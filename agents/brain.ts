@@ -944,6 +944,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         fetched += b.townBlocks() - before;
         if (b.townBlocks() <= before) break; // nothing to be had here: the brain has to decide what next
       }
+      // back up to the town first: from a tunnel under the site the path planner stops right below the cells, so it
+      // shuffled about 15 blocks under the watchtower "building" it (opus, after mining stone down there)
+      if (b.phys.y < site.y - 3) {
+        this.body.action = `climbing back up to ${civLabel(kind)}`;
+        await b.digOut();
+      }
       await toMiddle();
       r = await b.buildCells(cells, kind === "wall" ? 48 : 90, `building ${civLabel(kind)}`);
       placed += r.placed;

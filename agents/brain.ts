@@ -915,8 +915,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       site.busy = { by: this.name, at: Date.now() };
       if (b.buildingBlocks().n < Math.min(left(), 10)) {
         const before = b.buildingBlocks().n;
-        this.body.action = `getting stone for ${civLabel(kind)}`;
-        await this.collect("cobblestone", Math.min(48, left() - before + 4));
+        // the pickaxe broke mid-job (sonnet, 47 blocks short of the town hall): make another from what it carries,
+        // and when it can't, dig dirt instead, which needs no tool, so the building still goes up
+        const pick = () => { const t = b.bestToolFor(B.STONE); return !!t && canHarvest(B.STONE, t); };
+        for (const rid of ["oak_planks", "birch_planks", "oak_planks_from_palm", "sticks", "stone_pickaxe", "wooden_pickaxe"]) {
+          if (pick() || b.abort) break;
+          await b.craft(rid, 1);
+        }
+        this.body.action = `getting ${pick() ? "stone" : "dirt"} for ${civLabel(kind)}`;
+        await this.collect(pick() ? "cobblestone" : "dirt", Math.min(48, left() - before + 4));
         fetched += b.buildingBlocks().n - before;
         if (b.buildingBlocks().n <= before) break; // no stone to be had here: the brain has to decide what next
       }

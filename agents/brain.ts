@@ -1694,7 +1694,19 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           return `A rattler was shooting at you and you went for it (${res}).`;
         });
         if (/backed off/.test(res) && !b.dead && !b.sealed()) await this.reflex("hurt, digging in away from the rattler", async () => `You were badly hurt fighting a rattler, so you dug in: ${await b.digIn()}.`);
-      } else await this.reflex("digging in, a rattler is shooting", async () => `A rattler was shooting at you${b.bestWeapon() ? " and you were too hurt to fight it" : " and you had no weapon"}, so you dug in: ${await b.digIn()}.`);
+      } else {
+        // a shambler or a skitter close by as well: no digging in (it follows into the hole, and three blocks down
+        // takes seconds of its hits: sonnet dug in from a rattler with a shambler near and died there, season 9), run
+        const melee = b.hostiles(7).filter((m) => m.key !== "rattler");
+        if (melee.length) {
+          const mx = melee.reduce((a, m) => a + m.x, 0) / melee.length;
+          const mz = melee.reduce((a, m) => a + m.z, 0) / melee.length;
+          await this.reflex(`running from a rattler and a ${melee[0].key}`, async () => {
+            await b.flee(mx, mz, 140);
+            return `A rattler was shooting at you with a ${melee[0].key} close by, so you ran instead of digging in.`;
+          });
+        } else await this.reflex("digging in, a rattler is shooting", async () => `A rattler was shooting at you${b.bestWeapon() ? " and you were too hurt to fight it" : " and you had no weapon"}, so you dug in: ${await b.digIn()}.`);
+      }
       return;
     }
     // a monster in its face: fight it (with a weapon or health to spare), else run; badly hurt in a tunnel there is

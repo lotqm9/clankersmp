@@ -1099,10 +1099,19 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     };
     const req = cells.filter(([, , , k]) => !cellTarget(k)?.optional && k !== "?p");
     // paths are dug with a shovel: make one if it has none (a stone one from a cobblestone and two sticks)
-    if (cells.some(([, , , k]) => k === "p" || k === "?p") && !b.inv.some((st) => st && itemDef(st.id)?.tool?.kind === "shovel")) {
-      if (!b.has(I.STICK, 2)) await b.craft(b.has(B.OAK_PLANKS, 2) ? "sticks" : "oak_planks", 1);
-      if (!b.has(I.STICK, 2)) await b.craft("sticks", 1);
-      if (!(b.has(B.COBBLESTONE) && (await b.craft("stone_shovel", 1)).made)) await b.craft("wooden_shovel", 1);
+    // (with no planks for the sticks, any log will do: sonnet had no wood at all, made no shovel, and every road cell
+    // failed "in the way, or out of reach")
+    const shovel = () => b.inv.some((st) => st && itemDef(st.id)?.tool?.kind === "shovel");
+    if (cells.some(([, , , k]) => k === "p" || k === "?p") && !shovel()) {
+      for (let tries = 0; tries < 2 && !shovel() && !b.abort && !b.dead; tries++) {
+        if (!b.has(I.STICK, 2) && !b.has(B.OAK_PLANKS, 2) && !b.has(B.BIRCH_PLANKS, 2)) for (const p of ["oak_planks", "birch_planks"]) if (!b.has(B.OAK_PLANKS, 2) && !b.has(B.BIRCH_PLANKS, 2)) await b.craft(p, 1);
+        if (!b.has(I.STICK, 2)) await b.craft("sticks", 1);
+        if (!(b.has(B.COBBLESTONE) && (await b.craft("stone_shovel", 1)).made)) await b.craft("wooden_shovel", 1);
+        if (!shovel() && tries === 0) {
+          b.action = "getting wood for a shovel";
+          await this.collect("log", 3);
+        }
+      }
     }
     const left = () => req.filter((c) => b.needsWork(c)).length;
     // one job, start to finish: short of something, it goes and gets it (mines stone, chops oak, smelts, crafts the

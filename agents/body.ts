@@ -2404,6 +2404,7 @@ export class Body {
       }
       if (k0 === "p" || k0 === "?p") {
         if (await this.makePath(x, y, z)) placed++;
+        else if (!why && !this.inv.some((st) => st && itemDef(st.id)?.tool?.kind === "shovel")) why = "no shovel to dig the path with (a shovel is a cobblestone or planks and two sticks)";
         continue;
       }
       const want = this.wantFor(k);

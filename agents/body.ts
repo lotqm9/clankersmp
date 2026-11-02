@@ -6,7 +6,8 @@
 
 import WebSocket from "ws";
 import { inflateRawSync } from "node:zlib";
-import { EYE_HEIGHT, PROTOCOL_NAME, PROTOCOL_VERSION, WORLD_SIZE, idx, inWorld } from "../shared/constants.ts";
+import { EYE_HEIGHT, PROTOCOL_NAME, PROTOCOL_VERSION, SPAWN_X, SPAWN_Z, WORLD_SIZE, idx, inWorld } from "../shared/constants.ts";
+import { HUB_R } from "../shared/hub12.ts";
 import { FLAG, OP, decodeBlocks, decodePlayers, encodeMove, readBlockEntries, type S2C, type Stats } from "../shared/protocol.ts";
 import { OP_ANIMALS, OP_ANIMALS_GONE, SPECS as ANIMAL_SPECS, decodeAnimals, decodeGone } from "../shared/animals.ts";
 import { OP_ITEMS, OP_ITEMS_GONE, OP_ITEM_PICKUP, decodeIds, decodeItems, decodePickups, type ItemSnap } from "../shared/drops.ts";
@@ -41,6 +42,10 @@ export interface Rect {
 }
 /** One cell of a building plan: where, and what goes there (b building block, t torch, f fence, g glass, c chest). */
 export type PlanCell = [number, number, number, string];
+
+/** The spawn hub (its plaza, paths, boards and monument) is the world's landmark and is never dug up: sonnet
+ *  staircase-mined for cobblestone 49 blocks from spawn on day 1 of season 7 and tore up its paths. */
+export const inHub = (x: number, z: number) => Math.hypot(x + 0.5 - SPAWN_X, z + 0.5 - SPAWN_Z) < HUB_R + 4;
 
 /** Town building materials: stone walls, wooden corners, trim and roofs. Dirt, sand and whatever was growing there
  *  never stay in a town building above the ground: they get dug out and the right block goes in. */
@@ -967,6 +972,7 @@ export class Body {
 
   /** Mine one block: walk into reach, the best tool, look at it, dig for as long as it takes, then make sure it went. */
   async mine(x: number, y: number, z: number, approach = true): Promise<boolean> {
+    if (inHub(x, z) && y >= (this.world?.info.spawnHeight ?? 0) - 6) return false;
     const id = this.get(x, y, z);
     if (id === B.AIR || IS_WATER[id] || BLOCKS[id]?.breakTicks < 0) return false;
     if (this.reachTo(x, y, z) > REACH) {

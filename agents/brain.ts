@@ -7,7 +7,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { Body, NIGHT_END, NIGHT_START, type Rect, type Target } from "./body.ts";
+import { Body, NIGHT_END, NIGHT_START, inHub, type Rect, type Target } from "./body.ts";
+import { SPAWN_X, SPAWN_Z } from "../shared/constants.ts";
+import { HUB_R } from "../shared/hub12.ts";
 import { KINDS, STAGES, label as civLabel, planFor, progress, wallPlan, type Building, type Kind } from "./civ.ts";
 import { VILLAGE_SITES } from "../shared/villages.ts";
 import { B, BLOCKS, IS_WATER, SOLID } from "../shared/blocks.ts";
@@ -46,6 +48,9 @@ function civCount(k: Kind | "trade"): number {
 }
 /** Everything built or being built: where new buildings must not go. */
 let lastAudit = 0;
+/** Where each agent is mining right now, so two don't work the same tree or the same spot. */
+const MINING = new Map<string, { x: number; z: number; at: number }>();
+const takenByOther = (me: string, x: number, z: number) => [...MINING].some(([n, m]) => n !== me && Date.now() - m.at < 20000 && Math.hypot(m.x - x, m.z - z) < 5);
 function footprints(): Rect[] {
   return [...houseRects(), ...PACK.builds.filter((b) => b.kind !== "house").map((b) => (b.kind === "wall" ? { x0: b.x0 + 1, z0: b.z0 + 1, x1: b.x0 + 1, z1: b.z0 + 1 } : b))];
 }
@@ -807,26 +812,30 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // the villages: a player digs a quarry, not a hole here and a hole there all over the base
     const soft = !plan.blocks.includes(B.STONE) && plan.blocks.some((id) => id === B.DIRT || id === B.GRASS || id === B.SAND || id === B.GRAVEL);
     const villages = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean);
-    const theirs = (x: number, z: number) => villages.some((v) => Math.hypot(x - v.x, z - v.z) < 27) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
+    const theirs = (x: number, z: number) => inHub(x, z) || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 27) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
     const offLimits = (x: number, z: number) => (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 16) || theirs(x, z);
     let pit: [number, number, number] | null = null;
     // stone comes out of the ground away from the town: never the town's own walls (the nearest "cobblestone" was
     // the town hall's, so they took its lower walls apart for a house), and never a village's houses
     const stone = plan.blocks.includes(B.STONE);
-    if (stone && offLimits(b.phys.x, b.phys.z) && PACK.base) {
+    // out of the spawn hub, or out of the town, before mining stone
+    const away = inHub(b.phys.x, b.phys.z) || !PACK.base
+      ? { x: SPAWN_X, z: SPAWN_Z, r: HUB_R + 14, y: b.world?.info.spawnHeight ?? Math.floor(b.phys.y), what: "the spawn hub" }
+      : { x: PACK.base.x, z: PACK.base.z, r: 20, y: PACK.base.y, what: "the town" };
+    if (stone && offLimits(b.phys.x, b.phys.z)) {
       // out on the ground, not through the rock: in a tunnel under the town it stood still for 3 minutes aiming at a
       // spot 20 blocks out at its own depth (opus)
-      if (b.phys.y < PACK.base.y - 3) {
+      if (b.phys.y < away.y - 3) {
         b.action = `climbing up out of the tunnel`;
         await b.digOut();
       }
-      const a = Math.atan2(b.phys.z - PACK.base.z, b.phys.x - PACK.base.x);
-      const tx = Math.floor(PACK.base.x + Math.cos(a) * 20);
-      const tz = Math.floor(PACK.base.z + Math.sin(a) * 20);
-      const g = b.groundAt(tx, tz, PACK.base.y);
-      b.action = `walking out of the town to mine`;
-      await b.goto(tx + 0.5, g >= 0 ? g + 1 : PACK.base.y, tz + 0.5, 3, { maxMs: 25000 });
-      if (offLimits(b.phys.x, b.phys.z)) return `couldn't get out of the town to mine stone (it never comes out of the town's own ground): walk out of the base a little (explore), then collect`;
+      const a = Math.atan2(b.phys.z - away.z, b.phys.x - away.x);
+      const tx = Math.floor(away.x + Math.cos(a) * away.r);
+      const tz = Math.floor(away.z + Math.sin(a) * away.r);
+      const g = b.groundAt(tx, tz, away.y);
+      b.action = `walking out of ${away.what} to mine`;
+      await b.goto(tx + 0.5, g >= 0 ? g + 1 : away.y, tz + 0.5, 3, { maxMs: 30000 });
+      if (offLimits(b.phys.x, b.phys.z)) return `couldn't get out of ${away.what} to mine stone (stone never comes out of ${away.what}'s ground): walk out a little further (explore), then collect`;
     }
     while (!b.abort && !b.dead && have() - start < count && Date.now() - t0 < 90000) {
       // nothing deep: the deep caves are where Rattlers wait in the dark
@@ -836,6 +845,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       let found = b.findBlocks(plan.blocks, 32, soft ? 4000 : stone ? 400 : 16).filter(([x, y, z]) => y >= floor && !wet(x, y, z) && !skip.has(x + z * 512 + y * 262144));
       if (stone) found = found.filter(([x, , z]) => !offLimits(x, z)).slice(0, 16);
       else if (!soft) found = found.filter(([x, , z]) => !theirs(x, z));
+      // not where another agent is already working (all three went for the same oak at the start of season 7)
+      const free = found.filter(([x, , z]) => !takenByOther(this.name, x, z));
+      if (free.length) found = free;
       if (soft) {
         found = found.filter(([x, , z]) => !offLimits(x, z));
         if (pit) {
@@ -868,6 +880,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       const tool = b.bestToolFor(id);
       if (!canHarvest(id, tool)) return `${BLOCKS[id]?.key ?? item} drops nothing without the right tool (craft a pickaxe first)`;
       tried++;
+      MINING.set(this.name, { x, z, at: Date.now() });
       const ok = await b.mine(x, y, z);
       if (!ok) skip.add(x + z * 512 + y * 262144);
       else await b.pickUp(5, 5000);

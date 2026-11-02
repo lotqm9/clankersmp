@@ -21,7 +21,7 @@ import { I, fromWire, isHoe as isHoeId, itemDef, type Stack } from "../shared/it
 import { canHarvest } from "../shared/mining.ts";
 import { cooldownTicks } from "../shared/combat.ts";
 import { EAT_TICKS } from "../shared/survival.ts";
-import { RECIPES, recipeSize } from "../shared/recipes.ts";
+import { RECIPES, recipeNeeds, recipeSize } from "../shared/recipes.ts";
 import { JOBS } from "../shared/villagers.ts";
 import { door, isDoor } from "../shared/shapes.ts";
 
@@ -1308,7 +1308,15 @@ export class Body {
     this.send({ t: "craft", r: rid, n });
     const made = await got;
     if (made < 0) return { made: 0, why: "no answer from the server" };
-    if (made === 0) return { made: 0, why: "missing ingredients" };
+    if (made === 0) {
+      // say exactly what's short, so it goes and gets that instead of asking again (sonnet asked for planks three
+      // times in a row with no logs, told only "missing ingredients")
+      const short = recipeNeeds(r)
+        .map(([ing, need]) => ({ ing, need: need * n, have: ing.reduce((t, id) => t + this.count(id), 0) }))
+        .filter((x) => x.have < x.need)
+        .map((x) => `${x.need - x.have} more ${itemName(x.ing[0])}${x.ing.length > 1 ? " (or the like)" : ""}`);
+      return { made: 0, why: short.length ? `missing ingredients: ${short.join(", ")}` : "missing ingredients" };
+    }
     await this.wait(3); // the inventory slots arrive with the next server tick
     return { made };
   }

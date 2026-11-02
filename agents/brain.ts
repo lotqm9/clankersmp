@@ -1394,7 +1394,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return `${n === 1 ? civLabel(k) : `${n} ${civLabel(k, 2)}`}${t2 ? ` (${t2} at tier 2${t3 ? `, ${t3} at tier 3` : ""})` : ""}`;
     }).filter(Boolean);
     const road = PACK.builds.find((x) => x.kind === "road");
-    if (road) built.push(`roads joining ${civCount("road", 1)} buildings`);
+    if (road) built.push(`roads joining ${civCount("road", 1)} building${civCount("road", 1) === 1 ? "" : "s"}`);
     let t = `Your civilization: ${pr.name}${pr.stage >= 0 ? ` (stage ${pr.stage + 1} of ${STAGES.length})` : ""}. Built so far: ${built.length ? built.join(", ") : "nothing"}${PACK.trades ? `, ${PACK.trades} trades with villagers` : ""}.`;
     if (pr.next) {
       const want = pr.next.needs.filter((n) => n.have < n.need[1]).map((n) => needText(n.need, n.have));

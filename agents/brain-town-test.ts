@@ -20,6 +20,18 @@ let gy = 120;
 while (gy > 2 && !BLOCKS[b.get(ax, gy, az)]?.solid) gy--;
 b.send({ t: "chat", text: `/tp ${ax + 0.5} ${gy + 1} ${az + 0.5}` });
 b.send({ t: "chat", text: "/gamemode survival" });
+await b.wait(20);
+// an empty inventory to start from (the server keeps each AI's things between test runs): everything thrown out here,
+// and a walk away from it
+for (let k = 0; k < 36; k++) {
+  const st = b.inv[k];
+  if (!st || !(await b.hold(st.id))) continue;
+  b.send({ t: "drop", all: true });
+  await b.wait(2);
+}
+b.send({ t: "chat", text: `/tp ${ax + 0.5} ${gy + 1} ${az + 12.5}` });
+await b.wait(20);
+b.send({ t: "chat", text: `/tp ${ax + 0.5} ${gy + 1} ${az + 0.5}` });
 b.send({ t: "chat", text: "/time 2000" });
 await b.wait(40);
 

@@ -833,9 +833,13 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         b.action = `climbing up out of the tunnel`;
         await b.digOut();
       }
+      // out along its own direction until the ground is free: 20 blocks out from the base was the storehouse opus was
+      // building, still "the town", so it never left
       const a = Math.atan2(b.phys.z - away.z, b.phys.x - away.x);
-      const tx = Math.floor(away.x + Math.cos(a) * away.r);
-      const tz = Math.floor(away.z + Math.sin(a) * away.r);
+      let r = Math.max(away.r, Math.hypot(b.phys.x - away.x, b.phys.z - away.z) + 6);
+      while (r < away.r + 48 && offLimits(away.x + Math.cos(a) * r, away.z + Math.sin(a) * r)) r += 6;
+      const tx = Math.floor(away.x + Math.cos(a) * r);
+      const tz = Math.floor(away.z + Math.sin(a) * r);
       const g = b.groundAt(tx, tz, away.y);
       b.action = `walking out of ${away.what} to mine`;
       await b.goto(tx + 0.5, g >= 0 ? g + 1 : away.y, tz + 0.5, 3, { maxMs: 30000 });

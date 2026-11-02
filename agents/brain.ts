@@ -826,6 +826,18 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         }
         case "wait": {
           b.halt();
+          // a night without a bed, sealed in underground: mine round it instead of standing in the hole for nine
+          // minutes (the prompt says so, but on season 9's first night haiku and opus just waited: "hiding"). A
+          // staircase down from the hole, so the roof stays shut; not when hurt, and not under the town's buildings
+          const tool = b.bestToolFor(B.STONE);
+          if (b.isNight() && b.sealed() && b.covered() && b.stats.hp >= 12 && tool && canHarvest(B.STONE, tool) && !(PACK.base && b.phys.y > PACK.base.y - 3)) {
+            const plan = miningPlan("cobblestone")!;
+            const before = plan.gets.reduce((n, id) => n + b.count(id), 0);
+            b.action = "mining round its hole for the night";
+            const r = await b.stairMine(plan.gets, 12);
+            const got = plan.gets.reduce((n, id) => n + b.count(id), 0) - before;
+            return `it's night and you're sealed in underground, so instead of waiting you mined round you: ${got ? `got ${got} cobblestone` : r}`;
+          }
           const s = Math.max(2, Math.min(30, Number(i.seconds) || 5));
           // look around the way a person does: a glance one way or the other and back, or at someone nearby. It used
           // to turn another 40 to 100 degrees every 3 s, always the same way, so a long wait was opus spinning in circles

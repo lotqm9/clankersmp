@@ -1199,7 +1199,11 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // in iron with an iron sword it goes after it even at night, with a monster or two about
       const strong = b.strong();
       const careful = night && !strong;
-      if (r && r.d < (careful ? 7 : 14) && b.bestWeapon() && b.stats.hp >= (careful ? 12 : 8) && others <= (strong ? 2 : night ? 0 : 1)) {
+      // only armoured agents chase one: it backs off and keeps shooting, and all three of season 7 died chasing
+      // rattlers (opus in the shade at midday, in nothing but an iron helmet). Without armour, hit one only if it's
+      // right there; otherwise take cover
+      const chase = strong ? r && r.d < 14 && b.stats.hp >= 8 && others <= 2 : r && r.d < 3.5 && b.stats.hp >= 14 && others === 0 && !careful;
+      if (r && chase && b.bestWeapon()) {
         let res = "";
         await this.reflex("going after a rattler", async () => {
           res = await b.fight({ kind: "mob", id: r.id }, 20000, strong ? 5 : 6, careful ? 8 : 14);

@@ -232,6 +232,8 @@ export class Brain {
   /** Monsters it fought without getting anywhere (behind a wall, across a gap): left alone for a minute. */
   private leftAlone = new Map<number, number>();
   private lastTidy = 0;
+  /** What the running reflex is, so being shot can cut a walk short. */
+  private reflexLabel = "";
   private lastEat = 0;
   private lastPlayerHit = 0;
   private lastFail = "";
@@ -860,6 +862,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const theirs = (x: number, z: number) => inHub(x, z) || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 27) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
     const offLimits = (x: number, z: number) => (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 16) || theirs(x, z);
     let pit: [number, number, number] | null = null;
+    let wentFar = false;
     // stone comes out of the ground away from the town: never the town's own walls (the nearest "cobblestone" was
     // the town hall's, so they took its lower walls apart for a house), and never a village's houses
     const stone = plan.blocks.includes(B.STONE);
@@ -874,9 +877,13 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         b.action = `climbing up out of the tunnel`;
         await b.digOut();
       }
+      // out along its own direction until the ground is free: 20 blocks out from the base was the storehouse opus was
+      // building, still "the town", so it never left
       const a = Math.atan2(b.phys.z - away.z, b.phys.x - away.x);
-      const tx = Math.floor(away.x + Math.cos(a) * away.r);
-      const tz = Math.floor(away.z + Math.sin(a) * away.r);
+      let r = Math.max(away.r, Math.hypot(b.phys.x - away.x, b.phys.z - away.z) + 6);
+      while (r < away.r + 48 && offLimits(away.x + Math.cos(a) * r, away.z + Math.sin(a) * r)) r += 6;
+      const tx = Math.floor(away.x + Math.cos(a) * r);
+      const tz = Math.floor(away.z + Math.sin(a) * r);
       const g = b.groundAt(tx, tz, away.y);
       b.action = `walking out of ${away.what} to mine`;
       await b.goto(tx + 0.5, g >= 0 ? g + 1 : away.y, tz + 0.5, 3, { maxMs: 30000 });
@@ -918,6 +925,17 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         skip.add(-1);
         if (skip.size > 3) return r;
         continue;
+      }
+      // nothing in 32 blocks (every tree round the town cut down): look out to 64 and walk there itself, rather than
+      // hand back "explore" for it to ask the same again (sonnet, three times running)
+      if (!found.length && !soft && !stone && !wentFar) {
+        wentFar = true;
+        const far = b.findBlocks(plan.blocks, 64, 8).filter(([fx, , fz]) => !theirs(fx, fz));
+        if (far.length) {
+          b.action = `walking out to find ${item}`;
+          await b.goto(far[0][0] + 0.5, far[0][1], far[0][2] + 0.5, 3, { maxMs: 40000 });
+          continue;
+        }
       }
       if (!found.length) break;
       const [x, y, z] = found[0];
@@ -1169,27 +1187,30 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     const [w, d] = KINDS[kind].size;
     const big = w * d >= 80;
-    // the plaza goes right by the middle; the rest anywhere round it, the big ones further out on a little slope
+    // the plaza goes right by the middle; the rest anywhere round it, the big ones further out on a little slope, and
+    // further out still, step by step, when the town is crowded (sonnet walked round and round a full base looking
+    // for flat ground for a watchtower)
     const near = kind === "plaza" ? 0 : 4;
-    const far = kind === "plaza" ? 16 : big ? 40 : 30;
-    for (const [sw, sd] of w === d ? [[w, d]] : [[w, d], [d, w]]) {
-      const spot = b.siteNear(base.x, base.z, base.y, sw, sd, [...footprints(), ...villages], far, near, big ? 3 : 2);
-      if (!spot) continue;
-      const rect = { x0: spot.x0, z0: spot.z0, x1: spot.x0 + sw - 1, z1: spot.z0 + sd - 1 };
-      let face = kind === "plaza" || kind === "well" ? 0 : faceToward(rect, hub.x, hub.z);
-      const fits = (f: number) => sizeFacing(kind, f)[0] === sw;
-      if (!fits(face)) {
-        // turned the other way it would need the other rectangle: the side facing the middle best of the two that fit
-        const opts = [0, 1, 2, 3].filter(fits);
-        const toward = (f: number) => {
-          const [dx, dz] = [[0, -1], [1, 0], [0, 1], [-1, 0]][f];
-          return dx * (hub.x - (rect.x0 + rect.x1) / 2) + dz * (hub.z - (rect.z0 + rect.z1) / 2);
-        };
-        face = opts.sort((p, q) => toward(q) - toward(p))[0];
-        if (w !== d && sw === w && opts.length && toward(face) < 0) continue; // try it turned the other way first
+    const steps: [number, number][] = kind === "plaza" ? [[16, 2], [24, 3]] : big ? [[40, 3], [52, 3]] : [[30, 2], [40, 3], [52, 3]];
+    for (const [far, slope] of steps)
+      for (const [sw, sd] of w === d ? [[w, d]] : [[w, d], [d, w]]) {
+        const spot = b.siteNear(base.x, base.z, base.y, sw, sd, [...footprints(), ...villages], far, near, slope);
+        if (!spot) continue;
+        const rect = { x0: spot.x0, z0: spot.z0, x1: spot.x0 + sw - 1, z1: spot.z0 + sd - 1 };
+        let face = kind === "plaza" || kind === "well" ? 0 : faceToward(rect, hub.x, hub.z);
+        const fits = (f: number) => sizeFacing(kind, f)[0] === sw;
+        if (!fits(face)) {
+          // turned the other way it would need the other rectangle: the side facing the middle best of the two that fit
+          const opts = [0, 1, 2, 3].filter(fits);
+          const toward = (f: number) => {
+            const [dx, dz] = [[0, -1], [1, 0], [0, 1], [-1, 0]][f];
+            return dx * (hub.x - (rect.x0 + rect.x1) / 2) + dz * (hub.z - (rect.z0 + rect.z1) / 2);
+          };
+          face = opts.sort((p, q) => toward(q) - toward(p))[0];
+          if (w !== d && sw === w && opts.length && toward(face) < 0) continue; // try it turned the other way first
+        }
+        return { ...rect, y: spot.y, face };
       }
-      return { ...rect, y: spot.y, face };
-    }
     return `no flat open spot near the base for ${nameOf(kind)} (${w} by ${d}): clear some trees or level some ground near the base`;
   }
 
@@ -1556,6 +1577,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   private async guard(): Promise<void> {
     const b = this.body;
+    // shot at in the middle of a walk (home, or out to build before dark): drop the walk so the archer gets dealt
+    // with. A reflex used to run to its end first, and sonnet and haiku were both shot dead walking home at dusk
+    if (this.reflexing && !/rattler|fight|running|dig|wall|hurt|water/.test(this.reflexLabel) && Date.now() - b.lastHurt.at < 1500 && b.hostiles(16).some((m) => m.key === "rattler")) b.abort = true;
     if (this.reflexing || this.stopped || b.dead || b.closed) return;
     const h = b.hostiles(6)[0];
     const hurtRecently = Date.now() - b.lastHurt.at < 2000;
@@ -1591,7 +1615,11 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // in iron with an iron sword it goes after it even at night, with a monster or two about
       const strong = b.strong();
       const careful = night && !strong;
-      if (r && r.d < (careful ? 7 : 14) && b.bestWeapon() && b.stats.hp >= (careful ? 12 : 8) && others <= (strong ? 2 : night ? 0 : 1)) {
+      // only armoured agents chase one: it backs off and keeps shooting, and all three of season 7 died chasing
+      // rattlers (opus in the shade at midday, in nothing but an iron helmet). Without armour, hit one only if it's
+      // right there; otherwise take cover
+      const chase = strong ? r && r.d < 14 && b.stats.hp >= 8 && others <= 2 : r && r.d < 3.5 && b.stats.hp >= 14 && others === 0 && !careful;
+      if (r && chase && b.bestWeapon()) {
         let res = "";
         await this.reflex("going after a rattler", async () => {
           res = await b.fight({ kind: "mob", id: r.id }, 20000, strong ? 5 : 6, careful ? 8 : 14);
@@ -1602,14 +1630,20 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return;
     }
     // a monster in its face: fight it (with a weapon or health to spare), else run; badly hurt in a tunnel there is
-    // nowhere to run (sonnet died fighting and fleeing in turns down a one-wide staircase): wall itself in instead
+    // nowhere to run (sonnet died fighting and fleeing in turns down a one-wide staircase). Wall it off if a block or
+    // two closes the tunnel; otherwise fight it out. Digging in with it at arm's length is death: it drops into the
+    // hole too, and three blocks down takes seconds of its hits (opus died two seconds into it, 11/2; on the test
+    // server at 7 health, a stone sword and no armour, digging in and walling off in the open died every time, and
+    // standing to fight lived)
     // (not one it just fought without getting anywhere: a shambler right outside sonnet's wall was in reach but behind
     // the blocks, and it swung at the wall for 3 minutes, a 15 s fight at a time; at home it's safe, so leave it)
     if (h && (h.d < 3.2 || (hurtRecently && h.d < 6)) && !b.sealed() && !((this.leftAlone.get(h.id) ?? 0) > Date.now() && !hurtRecently)) {
       const armed = !!b.bestWeapon();
       const strong = b.strong();
-      if (b.stats.hp < (strong ? 5 : 8) && b.covered()) {
-        await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled yourself in to heal: ${await b.digIn()}.`);
+      const below = b.covered();
+      if (b.stats.hp < (strong ? 5 : 8) && below && b.canWallOff()) {
+        await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled it off to heal: ${await b.wallOff()}.`);
+        if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
         return;
       }
       if ((h.key === "rattler" && !armed && h.d > 3) || (!armed && b.stats.hp < 8)) {
@@ -1620,14 +1654,16 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       } else {
         // fight it, but not to the death: badly hurt, it breaks off and runs (shamblers are slow; opus fought one from
         // 20 health to 0 without stopping)
+        // underground with no quick wall to put up, no backing off: there's nowhere to go
         let res = "";
         await this.reflex(`fighting a ${h.key}`, async () => {
-          res = await b.fight({ kind: "mob", id: h.id }, 15000, strong ? 5 : 7);
+          res = await b.fight({ kind: "mob", id: h.id }, 15000, below && !b.canWallOff() ? 0 : strong ? 5 : 7);
           return `A ${h.key} attacked you and you fought it (${res}).`;
         });
         if (/ran out of time|couldn't get to it|out of reach/.test(res)) this.leftAlone.set(h.id, Date.now() + 60000);
         if (/backed off/.test(res) && !b.dead && b.covered()) {
-          await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${h.key} underground, so you walled yourself in to heal: ${await b.digIn()}.`);
+          await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${h.key} underground, so you walled it off to heal: ${await b.wallOff()}.`);
+          if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
         } else if (/backed off/.test(res) && !b.dead) {
           await this.reflex(`running from a ${h.key}, badly hurt`, async () => {
             await b.flee(h.x, h.z, 140);
@@ -1659,14 +1695,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const homeFar = b.home ? Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) : 0;
     // a long way out in the late afternoon: start back now, while there's daylight for the walk (opus went 190 blocks
     // after sheep and was still out there at dusk, in a marsh where it couldn't dig in)
-    if (b.home && homeFar > 60 && tod >= 9000 && tod < 11600 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
+    if (b.home && homeFar > 45 && tod >= 9000 && tod < 11600 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
       && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill)) {
       this.lastHomeTrip = Date.now();
       await this.reflex("heading home before dark, it's a long walk", async () => `You were ${Math.round(homeFar)} blocks from home late in the afternoon, so you started back before dark: ${await b.goHome()}.`);
       return;
     }
     if (b.home && !b.atHome() && tod >= 11600 && tod < 23000 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
-      && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill) && (!b.isNight() || homeFar < 40)) {
+      && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill) && (!b.isNight() || homeFar < 40)
+      && Date.now() - b.homeFailAt > 5 * 60000) {
       this.lastHomeTrip = Date.now();
       await this.reflex("heading home for the night", async () => `It was getting dark, so you went home: ${await b.goHome()}.`);
       return;
@@ -1687,7 +1724,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // dusk or night in the open with no house: take cover before the archers come out (they spawn at dark and
     // shoot from range, so waiting until it's night already is too late)
     const dusk = tod >= 11900 && tod < 23000;
-    if ((dusk || b.isNight()) && !b.covered() && !b.phys.inWater && !(b.home && !b.atHome() && /home/.test(b.action))) {
+    if ((dusk || b.isNight()) && !b.covered() && !b.phys.inWater && !(b.home && !b.atHome() && /home/.test(b.action) && Date.now() - b.homeFailAt > 5 * 60000)) {
       if (!this.nightOutSince) this.nightOutSince = Date.now();
       else if (Date.now() - this.nightOutSince > (b.isNight() ? 4000 : 12000) && !/shelter|bed|sleep|home/.test(b.action)) {
         this.nightOutSince = Date.now();
@@ -1721,6 +1758,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   /** A reflex cuts the running skill short; the site hears what it is doing now, the brain how it went. */
   private async reflex(label: string, fn: () => Promise<string>): Promise<void> {
     this.reflexing = true;
+    this.reflexLabel = label;
     this.reflexCount++;
     this.body.abort = true;
     this.emit("reflex", { text: label });

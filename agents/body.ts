@@ -21,7 +21,7 @@ import { I, fromWire, isHoe as isHoeId, itemDef, type Stack } from "../shared/it
 import { canHarvest } from "../shared/mining.ts";
 import { cooldownTicks } from "../shared/combat.ts";
 import { EAT_TICKS } from "../shared/survival.ts";
-import { RECIPES, recipeSize } from "../shared/recipes.ts";
+import { RECIPES, recipeNeeds, recipeSize } from "../shared/recipes.ts";
 import { JOBS } from "../shared/villagers.ts";
 import { door, isBed, isDoor } from "../shared/shapes.ts";
 import { accepts, cellTarget, itemOf } from "./civ.ts";
@@ -712,6 +712,8 @@ export class Body {
         if (unstuck) break;
         unstuck = true;
         fails = 0;
+        // shut in by a closed door (haiku slept in a village house's bed and couldn't get out in the morning): open it
+        if (await this.openNearbyDoors()) continue;
         await this.nudge(x, z);
         await this.unstick();
         continue;
@@ -972,6 +974,19 @@ export class Body {
   }
 
   /** A plain block it can spare for building (dirt first, then cobblestone, then planks). */
+  /** How many blocks round it are open (the roof and both levels of the four sides): what sealing in needs. */
+  openGaps(): number {
+    const x = Math.floor(this.phys.x), y = Math.floor(this.phys.y + 0.1), z = Math.floor(this.phys.z);
+    let n = SOLID[this.get(x, y + 2, z)] ? 0 : 1;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1]) if (!SOLID[this.get(x + dx, y + dy, z + dz)]) n++;
+    return n;
+  }
+
+  /** Blocks it carries that fillerBlock() would use. */
+  fillerCount(): number {
+    return [B.DIRT, B.COBBLESTONE, B.SAND, B.GRAVEL, B.OAK_PLANKS, B.BIRCH_PLANKS, B.STONE].reduce((t, id) => t + (id !== undefined ? this.count(id) : 0), 0);
+  }
+
   fillerBlock(): number {
     for (const id of [B.DIRT, B.COBBLESTONE, B.SAND, B.GRAVEL, B.OAK_PLANKS, B.BIRCH_PLANKS, B.STONE]) if (id !== undefined && this.has(id)) return id;
     return 0;
@@ -1342,7 +1357,15 @@ export class Body {
     this.send({ t: "craft", r: rid, n });
     const made = await got;
     if (made < 0) return { made: 0, why: "no answer from the server" };
-    if (made === 0) return { made: 0, why: "missing ingredients" };
+    if (made === 0) {
+      // say exactly what's short, so it goes and gets that instead of asking again (sonnet asked for planks three
+      // times in a row with no logs, told only "missing ingredients")
+      const short = recipeNeeds(r)
+        .map(([ing, need]) => ({ ing, need: need * n, have: ing.reduce((t, id) => t + this.count(id), 0) }))
+        .filter((x) => x.have < x.need)
+        .map((x) => `${x.need - x.have} more ${itemName(x.ing[0])}${x.ing.length > 1 ? " (or the like)" : ""}`);
+      return { made: 0, why: short.length ? `missing ingredients: ${short.join(", ")}` : "missing ingredients" };
+    }
     await this.wait(3); // the inventory slots arrive with the next server tick
     return { made };
   }
@@ -1563,25 +1586,85 @@ export class Body {
       if (!(await this.dropInto(x, y0 - k, z))) return "dug a hole but couldn't get into it";
     }
     for (let k = 0; k < 30 && !this.fillerBlock(); k++) await this.nextTick(); // the dirt it fell onto gets picked up
+    // in a cave the sides are open too: down further, into rock that closes round it, rather than run out of blocks
+    // halfway (opus dug in at y=36 in a cave and was left with an open side)
+    for (let k = 0; k < 4 && !this.abort && !this.dead && this.openGaps() > this.fillerCount(); k++) {
+      const fx = Math.floor(this.phys.x), fy = Math.floor(this.phys.y + 0.1), fz = Math.floor(this.phys.z);
+      const below = this.get(fx, fy - 1, fz);
+      if (IS_WATER[below] || !SOLID[below] || !(await this.mine(fx, fy - 1, fz, false)) || !(await this.dropInto(fx, fy - 1, fz))) break;
+      for (let t = 0; t < 10; t++) await this.nextTick();
+    }
     if (!this.fillerBlock()) return "dug down but has nothing to close the roof with";
     await this.sealIn();
     const lit = await this.lightUp();
     return (this.sealed() ? "sealed in underground" : "dug in, but the hole isn't fully closed (out of blocks to close it?)") + (lit ? ", with a torch" : "");
   }
 
+  /** Badly hurt with a monster at arm's length: digging three blocks down first takes seconds with it hitting all the
+   *  while (opus died two seconds into it, 11/2). Back off a step if it's right up against it (no block goes into a
+   *  cell it stands in), block its side first, then the rest round it where it stands. Only if that leaves a gap,
+   *  dig in as before. */
+  async wallOff(): Promise<string> {
+    if (this.sealed()) return "already sealed in";
+    this.halt();
+    if (this.phys.inWater || this.openGaps() > this.fillerCount()) return this.digIn();
+    const key = this.hostiles(5)[0]?.key ?? "monster";
+    for (let k = 0; k < 3 && !this.sealed() && !this.dead && !this.abort; k++) {
+      const m = this.hostiles(5)[0];
+      if (m && this.mobInGap()) await this.flee(m.x, m.z, 8);
+      await this.sealIn(true);
+    }
+    if (this.sealed()) return `walled itself off from the ${key}${(await this.lightUp()) ? ", with a torch" : ""}`;
+    // never dig down with it at arm's length: it drops into the hole too, and gets sealed in with it (the test: dead
+    // in a closed hole, a shambler inside)
+    if (this.hostiles(4).length) return `couldn't wall the ${key} off (${this.openGaps()} gaps still open)`;
+    return this.digIn();
+  }
+
+  /** A tunnel it can close in a step or two: few gaps round it, the blocks for them, none with a monster in it. */
+  canWallOff(): boolean {
+    const gaps = this.openGaps();
+    return gaps <= 3 && this.fillerCount() >= gaps && !this.mobInGap() && !this.phys.inWater;
+  }
+
+  /** Is a monster standing in one of the cells round it (a side at its feet or head)? */
+  mobInGap(): boolean {
+    const x = Math.floor(this.phys.x), y = Math.floor(this.phys.y + 0.1), z = Math.floor(this.phys.z);
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1]) if (this.mobIn(x + dx, y + dy, z + dz)) return true;
+    return false;
+  }
+
+  private mobIn(gx: number, gy: number, gz: number): boolean {
+    return this.hostiles(5).some((m) => {
+      const w = (MOB_SPECS[m.kind]?.w ?? 0.6) / 2, h = MOB_SPECS[m.kind]?.h ?? 1.95;
+      return m.x + w > gx && m.x - w < gx + 1 && m.z + w > gz && m.z - w < gz + 1 && m.y + h > gy && m.y < gy + 1;
+    });
+  }
+
   /** Close every gap round it: the roof over its head and the four sides at its feet and head (dug into a
    *  staircase or a cave, a hole three blocks down still opens onto the old tunnels). A torch or a plant in a gap
    *  comes out first. */
-  async sealIn(): Promise<void> {
+  async sealIn(mobFirst = false): Promise<void> {
     const x = Math.floor(this.phys.x);
     const y = Math.floor(this.phys.y + 0.1);
     const z = Math.floor(this.phys.z);
-    const gaps: [number, number, number][] = [[x, y + 2, z]];
+    let gaps: [number, number, number][] = [[x, y + 2, z]];
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) gaps.push([x + dx, y + 1, z + dz], [x + dx, y, z + dz]);
+    // walling a monster off: the side it's on first, the roof last, and a cell it stands in left till the end (a
+    // block put there is refused, and waiting on it loses a second)
+    const m = mobFirst ? this.hostiles(6)[0] : undefined;
+    if (m) {
+      // and the feet before the head on each side, the roof after them (a block needs one beside it to go on: in the
+      // open a head-high one or the roof has nothing to go against till those are in)
+      const far = (g: [number, number, number]) => (g[1] === y + 2 ? 99 : (g[1] - y) * 0.5) + Math.hypot(g[0] + 0.5 - m.x, g[2] + 0.5 - m.z) * 2;
+      gaps = gaps.sort((p, q) => far(p) - far(q));
+      gaps = [...gaps.filter((g) => !this.mobIn(...g)), ...gaps.filter((g) => this.mobIn(...g))];
+    }
     for (const [gx, gy, gz] of gaps) {
       if (this.abort || this.dead) return;
       let id = this.get(gx, gy, gz);
       if (SOLID[id]) continue;
+      if (m && this.mobIn(gx, gy, gz)) continue;
       if (id !== B.AIR && !IS_WATER[id] && !BLOCKS[id]?.replaceable) {
         await this.mine(gx, gy, gz, false);
         id = this.get(gx, gy, gz);
@@ -1889,6 +1972,8 @@ export class Body {
   /** Its house, once it has one: its north-west corner, its floor height and its doorway; `room` for a town cottage it
    *  moved into (the room inside), else the room is the two by two in a shelter it put up itself (build_house). */
   home: { x0: number; z0: number; y: number; door: [number, number, number]; room?: Rect } | null = null;
+  /** When it last failed to get into its house: the evening reflex digs in instead of trying again in the dark. */
+  homeFailAt = 0;
 
   /** The middle of its home's room. */
   homeMiddle(): [number, number] {
@@ -2579,8 +2664,19 @@ export class Body {
     if (!h) return "you have no house yet (build_house)";
     if (!this.atHome()) {
       const [mx, mz] = this.homeMiddle();
-      await this.goto(h.room ? mx : h.x0 + 1.5, h.y, h.room ? mz : h.z0 + 1.5, 0.6, { maxMs: 60000, done: () => this.atHome() });
-      if (!this.atHome()) return "couldn't get back into your house";
+      const inside = () => this.goto(h.room ? mx : h.x0 + 1.5, h.y, h.room ? mz : h.z0 + 1.5, 0.6, { maxMs: 60000, done: () => this.atHome() });
+      await inside();
+      // the doorway it blocked up behind itself last night (no door) shuts it out from the outside too: sonnet
+      // walked round its own house in the dark and was shot. Open it from outside and go in
+      if (!this.atHome()) {
+        const [dx, dy, dz] = h.door;
+        for (const yy of [dy, dy + 1]) if (SOLID[this.get(dx, yy, dz)] && !isDoor(this.get(dx, yy, dz))) await this.mine(dx, yy, dz);
+        await this.goto(h.room ? mx : h.x0 + 1.5, h.y, h.room ? mz : h.z0 + 1.5, 0.6, { maxMs: 20000, done: () => this.atHome() });
+      }
+      if (!this.atHome()) {
+        this.homeFailAt = Date.now();
+        return "couldn't get back into your house";
+      }
     }
     const [dx, dy, dz] = h.door;
     const d = this.get(dx, dy, dz);
@@ -2615,6 +2711,27 @@ export class Body {
   }
 
   /** Its doorway, from inside the house: the blocks it shut it with come out, and a shut door is opened. */
+  /** Open every closed door within a few blocks (the bottom half takes the click). True if it opened one. */
+  async openNearbyDoors(r = 4): Promise<boolean> {
+    const fx = Math.floor(this.phys.x);
+    const fy = Math.floor(this.phys.y + 0.1);
+    const fz = Math.floor(this.phys.z);
+    let opened = false;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dz = -r; dz <= r; dz++)
+        for (let dx = -r; dx <= r; dx++) {
+          const x = fx + dx, y = fy + dy, z = fz + dz;
+          const id = this.get(x, y, z);
+          if (!isDoor(id) || door(id).open || isDoor(this.get(x, y - 1, z))) continue;
+          if (this.reachTo(x, y, z) > REACH) await this.goto(x + 0.5, y, z + 0.5, 2, { maxMs: 4000, done: () => this.reachTo(x, y, z) <= REACH });
+          await this.lookAt(x + 0.5, y + 0.5, z + 0.5, 10);
+          this.send({ t: "use", x, y, z });
+          for (let k = 0; k < 10 && this.get(x, y, z) === id; k++) await this.nextTick();
+          if (this.get(x, y, z) !== id) opened = true;
+        }
+    return opened;
+  }
+
   async openDoorway(): Promise<void> {
     const h = this.home;
     if (!h) return;

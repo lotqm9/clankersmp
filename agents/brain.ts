@@ -946,7 +946,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           await b.goto(grove[0] + 0.5, grove[1], grove[2] + 0.5, 4, { maxMs: trips === 1 ? 40000 : 120000 });
           // never got there (a cliff, water, no path): that grove is off for 10 minutes, so the next trip, now or on
           // the next collect, picks another (sonnet walked back and forth for minutes 118 blocks out)
-          if (Math.hypot(b.phys.x - grove[0], b.phys.z - grove[2]) > 12) BAD_GROVES.push({ x: grove[0], z: grove[2], until: Date.now() + 600000 });
+          if (Math.hypot(b.phys.x - grove[0], b.phys.z - grove[2]) > 6) BAD_GROVES.push({ x: grove[0], z: grove[2], until: Date.now() + 600000 });
           t0 = Date.now();
           continue;
         }

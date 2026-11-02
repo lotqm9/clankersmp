@@ -134,13 +134,9 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
     const ground = (x: number, z: number) => b.naturalGround(x, z, cy);
     let site: { kind: Plain | "wall"; x0: number; z0: number; x1: number; z1: number; y: number; face: number };
     if (kind === "wall") {
-      const s = b.siteNear(cx, cz, cy, 27, 27, used, 60, 0, 8);
-      if (!s) {
-        results.push(`${name} ${kind}: no site`);
-        console.log(`${name} ${kind}: no site`);
-        continue;
-      }
-      site = { kind, x0: s.x0, z0: s.z0, x1: s.x0 + 26, z1: s.z0 + 26, y: s.y, face: 0 };
+      // the wall goes round the base whatever the ground does (it follows it, round trees and water): round the middle
+      // of this body's patch
+      site = { kind, x0: cx - 13, z0: cz - 13, x1: cx + 13, z1: cz + 13, y: Math.max(0, b.landAt(cx, cz, cy)) + 1, face: 0 };
     } else {
       const face = (mine.indexOf(kind) + names.indexOf(name)) % 4; // turned every way, to test the frames
       const [w, d] = sizeFacing(kind, face);

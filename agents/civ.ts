@@ -384,7 +384,7 @@ export const BLUEPRINTS: Record<Plain, Blueprint> = {
     what: "a stone well: a cobblestone rim and parapet, fence posts and a little gable roof, the middle of the town",
     shape: "well", core: [5, 5], eaves: 0, walls: 3,
     rooms: "a basin 3 by 3, one deep",
-    parts: { rim: [COB, SBR, SBR], parapet: [B.COBBLE_WALL, B.STONE_BRICK_WALL, B.STONE_BRICK_WALL], post: all3(FEN), roof: all3(B.OAK_STAIRS), ridge: all3(PL), basin: all3(COB) },
+    parts: { rim: [COB, SBR, SBR], parapet: [B.COBBLE_WALL, B.STONE_BRICK_WALL, B.STONE_BRICK_WALL], post: all3(FEN), roof: all3(B.OAK_STAIRS), ridge: all3(PL), gable: all3(PL), basin: all3(COB) },
     furniture: [
       { block: B.WATER, at: ["mid", -1, "mid"], tier: 2 },
       { block: B.LANTERN + 1, at: ["mid", 0, "mid"], hang: true, tier: 3 },
@@ -702,6 +702,9 @@ function well(d: Draft): void {
   const roofDy = (v: number) => 3 + Math.min(v, D - 1 - v);
   d.ceiling = (_u, v) => roofDy(v);
   for (let v = 0; v < D; v++) for (let u = 0; u < W; u++) d.put(u, roofDy(v), v, v === mv ? d.mat("ridge") : d.mat("roof") + (v < mv ? d.IN : d.OUT));
+  // the gable ends under it: without them the upper rows had nothing to be placed against (a block only goes in
+  // against another, and the row below is a step out)
+  for (const u of [0, W - 1]) for (let v = 1; v < D - 1; v++) for (let dy = 3; dy < roofDy(v); dy++) d.put(u, dy, v, d.mat("gable"));
   furnish(d);
 }
 

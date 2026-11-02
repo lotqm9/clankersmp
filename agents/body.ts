@@ -1091,7 +1091,7 @@ export class Body {
   /** A spot to stand on with a cell in reach: solid underfoot, room for its body, not the cell itself; the nearest to
    *  it first. A wall's top or a roof's edge is in the air: walking at the cell itself, the path search aimed at a
    *  point it could never stand on and gave up ("out of reach" for the top of the town hall's front wall). */
-  standFor(x: number, y: number, z: number): [number, number, number] | null {
+  standFor(x: number, y: number, z: number, avoid?: Set<string>): [number, number, number] | null {
     let best: [number, number, number] | null = null;
     let bd = Infinity;
     for (let dz = -3; dz <= 3; dz++)
@@ -1100,6 +1100,9 @@ export class Body {
           const sx = x + dx;
           const sz = z + dz;
           if (dx === 0 && dz === 0 && sy >= y - 1 && sy <= y) continue;
+          // never in a cell of the building itself (a window still open, the top of a wall): a block goes in there
+          // later and it's shut in (opus stood in the town hall's window when the glass went in, and stayed there)
+          if (avoid && (avoid.has(`${sx},${sy},${sz}`) || avoid.has(`${sx},${sy + 1},${sz}`))) continue;
           if (!SOLID[this.get(sx, sy - 1, sz)] || SOLID[this.get(sx, sy, sz)] || SOLID[this.get(sx, sy + 1, sz)] || IS_WATER[this.get(sx, sy, sz)]) continue;
           if (Math.hypot(sx + 0.5 - (x + 0.5), sy + EYE_HEIGHT - (y + 0.5), sz + 0.5 - (z + 0.5)) > REACH - 0.3) continue;
           const d = Math.hypot(sx + 0.5 - this.phys.x, sy - this.phys.y, sz + 0.5 - this.phys.z);
@@ -1112,13 +1115,13 @@ export class Body {
   }
 
   /** Put a block from the inventory into a cell (in reach, next to something solid, not where it stands). */
-  async place(item: number, x: number, y: number, z: number, walkMs = 20000, state?: number): Promise<boolean> {
+  async place(item: number, x: number, y: number, z: number, walkMs = 20000, state?: number, avoid?: Set<string>): Promise<boolean> {
     if (!this.has(item)) return false;
     const cur = this.get(x, y, z);
     if (cur !== B.AIR && !IS_WATER[cur] && !BLOCKS[cur]?.replaceable) return false;
     if (this.reachTo(x, y, z) > REACH) {
       const inReach = () => this.reachTo(x, y, z) <= REACH;
-      const spot = this.standFor(x, y, z);
+      const spot = this.standFor(x, y, z, avoid);
       let ok = !!spot && (await this.goto(spot[0] + 0.5, spot[1], spot[2] + 0.5, 0.5, { maxMs: walkMs, done: inReach }));
       if (!ok && !this.abort) ok = await this.goto(x + 0.5, y, z + 0.5, 2.5, { maxMs: walkMs, done: inReach });
       if (!ok) return false;
@@ -2266,6 +2269,8 @@ export class Body {
   async buildCells(cells: PlanCell[], max: number, label: string, floorY = -1): Promise<{ placed: number; left: number; outOf: boolean; why: string; short: Map<number, number> }> {
     const missing = (c: PlanCell) => this.needsWork(c);
     const footprint = new Set(cells.map(([x, , z]) => `${x},${z}`));
+    // the cells a block goes in: never somewhere to stand while it builds
+    const blocks = new Set(cells.filter(([, , , k]) => { const t = cellTarget(k); return !!t && SOLID[t.id] === 1; }).map(([x, y, z]) => `${x},${y},${z}`));
     // the room inside (the kept-clear cells at floor height): a pillar can go up in there, on the floor, to the roof
     const inside = new Map<string, number>();
     for (const [x, y, z, k] of cells) if (y === floorY && k.split("|")[0] === "a") inside.set(`${x},${z}`, y - 1);
@@ -2333,14 +2338,23 @@ export class Body {
         }
       }
       // never wall itself in: step off a cell before a block goes there
-      const fx = Math.floor(this.phys.x);
-      const fz = Math.floor(this.phys.z);
       const fy = Math.floor(this.phys.y + 0.1);
-      if (SOLID[want.state] && fx === x && fz === z && (y === fy || y === fy + 1)) await this.goto(x + 0.5 + (x % 2 ? 1.6 : -1.6), fy, z + 0.5, 0.8, { maxMs: 3000 });
+      const onIt = () => Math.floor(this.phys.x) === x && Math.floor(this.phys.z) === z && (y === Math.floor(this.phys.y + 0.1) || y === Math.floor(this.phys.y + 0.1) + 1);
+      if (SOLID[want.state] && onIt()) {
+        const spot = this.standFor(x, y, z, blocks);
+        if (spot) await this.goto(spot[0] + 0.5, spot[1], spot[2] + 0.5, 0.5, { maxMs: 4000 });
+        else await this.goto(x + 0.5 + (x % 2 ? 1.6 : -1.6), fy, z + 0.5, 0.8, { maxMs: 3000 });
+        // still there: not this one now (a thin pane went in round it and shut it in a window)
+        if (onIt()) {
+          later(todo[i]);
+          misses++;
+          continue;
+        }
+      }
       // a cell well above the ground round it is out of reach from anywhere down there: no long walk about first
       const round = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) => !footprint.has(`${x + dx},${z + dz}`)).map(([dx, dz]) => this.groundAt(x + dx, z + dz, y));
       const high = (round.length > 0 && y - Math.max(...round) > 4) || y - fy > 4;
-      if (await this.place(want.item, x, y, z, high ? 3000 : 12000, want.state)) {
+      if (await this.place(want.item, x, y, z, high ? 3000 : 12000, want.state, blocks)) {
         placed++;
         misses = 0;
         if (isDoor(want.state)) await this.openDoor(x, y, z);

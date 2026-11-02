@@ -29,7 +29,7 @@ export const KINDS: Record<Exclude<Kind, "farm">, { size: [number, number]; bloc
   storehouse: { size: [5, 5], blocks: 72, what: "a storehouse with chests inside for the pack's shared supplies" },
   market: { size: [5, 5], blocks: 40, what: "an open market stall with a roof, for trading and meeting" },
   hall: { size: [7, 7], blocks: 140, what: "the town hall: a big building with windows, the heart of a town" },
-  tower: { size: [3, 3], blocks: 70, what: "a watchtower with torches on top, seen from far away" },
+  tower: { size: [3, 3], blocks: 50, what: "a watchtower with torches on top, seen from far away" },
   wall: { size: [27, 27], blocks: 190, what: "a wall all the way round the base, with four gates (built a stretch at a time)" },
 };
 
@@ -121,9 +121,11 @@ export function planFor(kind: Exclude<Kind, "farm" | "wall">, x0: number, z0: nu
     for (const [dx, dz] of [[1, 1], [5, 1], [1, 5], [5, 5]]) cells.push([x0 + dx, y, z0 + dz, "t"]);
     cells.push([x0 + 3, y + 5, z0 + 3, "t"]);
   } else if (kind === "tower") {
-    wallRing(7, [x0 + 1, z0]);
-    cells.push(...rings(x0, z0, 3, 3, y + 7));
-    for (const [dx, dz] of [[0, 0], [2, 0], [0, 2], [2, 2]]) cells.push([x0 + dx, y + 8, z0 + dz, "t"]);
+    // five high, not seven: the top row of a seven-high tower was out of reach from every scaffold spot they found,
+    // so three of season 8's builders circled it, gave up and started another just as tall
+    wallRing(5, [x0 + 1, z0]);
+    cells.push(...rings(x0, z0, 3, 3, y + 5));
+    for (const [dx, dz] of [[0, 0], [2, 0], [0, 2], [2, 2]]) cells.push([x0 + dx, y + 6, z0 + dz, "t"]);
   }
   // the order a person builds in: a layer at a time from the bottom, each layer walked round once (outside edge
   // before the middle, for roofs), not left wall, right wall, left wall across the building for every block

@@ -41,6 +41,12 @@ export interface Rect {
 }
 /** One cell of a building plan: where, and what goes there (b building block, t torch, f fence, g glass, c chest). */
 export type PlanCell = [number, number, number, string];
+
+/** Town building materials: stone walls, wooden corners, trim and roofs. Dirt, sand and whatever was growing there
+ *  never stay in a town building above the ground: they get dug out and the right block goes in. */
+const STONES = [B.STONE_BRICKS, B.COBBLESTONE, B.STONE, B.BRICKS];
+const WOODS = [B.OAK_PLANKS, B.BIRCH_PLANKS];
+const ROUGH = new Set<number>([B.DIRT, B.GRASS, B.SAND, B.GRAVEL, B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES, B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG]);
 const GROUND = new Set<number>([B.GRASS, B.DIRT, B.SAND, B.GRAVEL, B.CLAY, B.STONE] as number[]);
 const TREE = new Set<number>([B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES, B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG]);
 const itemName = (id: number) => itemDef(id)?.key ?? BLOCKS[id]?.key ?? `item ${id}`;
@@ -2019,20 +2025,38 @@ export class Body {
     return best;
   }
 
-  /** The block it carries for one cell of a plan: b = any building block, t = torch, f = fence (or a building block),
-   *  g = glass (or a building block), c = chest. 0 if it has none. */
+  /** The block it carries for one cell of a town plan: d = foundation (dirt first: it's underground), s = stone,
+   *  w = wood (planks, else stone), b = stone or wood, f = fence (else planks or stone), g = glass, t = torch,
+   *  c = chest, a = keep clear (nothing goes in). Never dirt or sand above the ground. 0 if it has none. */
   blockFor(kind: string): number {
     if (kind === "t") return this.has(B.TORCH) ? B.TORCH : 0;
     if (kind === "c") return this.has(B.CHEST) ? B.CHEST : 0;
     if (kind === "f" && this.has(B.OAK_FENCE)) return B.OAK_FENCE;
-    if (kind === "g" && this.has(B.GLASS)) return B.GLASS;
-    for (const id of [B.COBBLESTONE, B.STONE_BRICKS, B.BRICKS, B.OAK_PLANKS, B.BIRCH_PLANKS, B.STONE, B.DIRT, B.SAND]) if (this.has(id)) return id;
+    if (kind === "g") return this.has(B.GLASS) ? B.GLASS : 0;
+    const order = kind === "a" ? [] : kind === "d" ? [B.DIRT, B.SAND, ...STONES, ...WOODS] : kind === "s" ? STONES : kind === "w" || kind === "f" ? [...WOODS, ...STONES] : [...STONES, ...WOODS];
+    for (const id of order) if (this.has(id)) return id;
     return 0;
+  }
+
+  /** Blocks it carries that a town building can use above the ground: stone and planks. */
+  townBlocks(): number {
+    return [...STONES, ...WOODS].reduce((a, id) => a + this.count(id), 0);
+  }
+
+  /** A cell of a town plan that still needs work: empty, or dirt, leaves or the like where a proper block goes, or
+   *  (a = keep clear) something growing inside the building or stuck in a window or the doorway. */
+  needsWork([x, y, z, k]: PlanCell): boolean {
+    const id = this.get(x, y, z);
+    if (k === "t") return id !== B.TORCH;
+    if (k === "c") return !isStorageId(id);
+    if (k === "a") return ROUGH.has(id);
+    if (!SOLID[id]) return true;
+    return k !== "d" && ROUGH.has(id);
   }
 
   /** Place what is still missing of a plan (cells in build order), up to `max` blocks. */
   async buildCells(cells: PlanCell[], max: number, label: string): Promise<{ placed: number; left: number; outOf: boolean; why: string }> {
-    const missing = ([x, y, z, k]: PlanCell) => (k === "t" ? this.get(x, y, z) !== B.TORCH : k === "c" ? !isStorageId(this.get(x, y, z)) : !SOLID[this.get(x, y, z)]);
+    const missing = (c: PlanCell) => this.needsWork(c);
     const footprint = new Set(cells.map(([x, , z]) => `${x},${z}`));
     let placed = 0;
     let outOf = false;
@@ -2047,17 +2071,22 @@ export class Body {
       if (this.abort || this.dead || placed >= max || misses >= 4) break;
       const [x, y, z, k] = todo[i];
       if (!missing(todo[i])) continue;
+      if (k === "a") {
+        // leaves, a trunk or dirt inside the building, in a window or the doorway: dig it out
+        if (!(await this.mine(x, y, z))) misses++;
+        continue;
+      }
       const id = this.blockFor(k);
       if (!id) {
-        if (k === "b" || k === "f" || k === "g") {
-          outOf = true;
-          break;
-        }
+        // nothing of the right kind for this cell (stone for a wall): carry on with the cells it can do
+        if (k !== "t" && k !== "c" && k !== "g") outOf = true;
         continue;
       }
       // a flower or a sapling growing where a block goes: pick it first (a block can't go in on top of it)
       const cur = this.get(x, y, z);
       if (cur !== B.AIR && !IS_WATER[cur] && !SOLID[cur] && !BLOCKS[cur]?.replaceable && (isSmallPlant(cur) || cur === B.OAK_SAPLING || cur === B.BIRCH_SAPLING)) await this.mine(x, y, z);
+      // dirt or leaves where a wall or a roof goes: out with it first, then the proper block
+      if (SOLID[cur] && ROUGH.has(cur) && k !== "d") await this.mine(x, y, z);
       // never wall itself in: step off a cell before a block goes there
       const fx = Math.floor(this.phys.x);
       const fz = Math.floor(this.phys.z);
@@ -2081,7 +2110,9 @@ export class Body {
           for (const c of todo.slice(i)) {
             if (this.abort || this.dead || placed >= max) break;
             const cid = this.blockFor(c[3]);
-            if (cid && missing(c) && this.reachTo(c[0], c[1], c[2]) <= REACH && (await this.place(cid, c[0], c[1], c[2]))) placed++;
+            if (!cid || !missing(c) || this.reachTo(c[0], c[1], c[2]) > REACH) continue;
+            if (ROUGH.has(this.get(c[0], c[1], c[2])) && c[3] !== "d") await this.mine(c[0], c[1], c[2], false);
+            if (await this.place(cid, c[0], c[1], c[2])) placed++;
           }
           if (up > 0) await this.climbDown(up);
           if (!missing(todo[i])) {

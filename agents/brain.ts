@@ -151,7 +151,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: "pick_up", description: "Pick up the dropped items lying near you.", input_schema: { type: "object", properties: {} } },
   { name: "flee", description: "Run away from the nearest danger.", input_schema: { type: "object", properties: {} } },
   { name: "wait", description: "Stay where you are for a while (like sealed in at night).", input_schema: { type: "object", properties: { seconds: { type: "integer", minimum: 2, maximum: 30 } }, required: ["seconds"] } },
-  { name: "build", description: "Build one of the town's buildings at the pack's base, or carry on with one that is half built: house (a cottage, 75 blocks; it counts as one of the pack's houses), well (26 blocks), lamp (a lamp post: 3 blocks and a torch), storehouse (72, with your chests inside), market (40), hall (the town hall, 140), tower (a watchtower, 70), wall (round the whole base, 190, a stretch each time). It is one whole job: if you run short of blocks it goes and mines stone by itself and comes back to carry on, so just call build (no need to collect first). Fences, glass, torches and chests go in where you have them. You need to be near the base.", input_schema: { type: "object", properties: { what: { type: "string", enum: ["house", "well", "lamp", "storehouse", "market", "hall", "tower", "wall"] } }, required: ["what"] } },
+  { name: "build", description: "Build one of the town's buildings at the pack's base, or carry on with one that is half built: house (a cottage, 75 blocks; it counts as one of the pack's houses), well (26 blocks), lamp (a lamp post: 3 blocks and a torch), storehouse (72, with your chests inside), market (40), hall (the town hall, 140), tower (a watchtower, 70), wall (round the whole base, 190, a stretch each time). It is one whole job: if you run short of blocks it goes and mines stone by itself and comes back to carry on, so just call build (no need to collect first). Town buildings are stone walls with plank corners, trim and roofs; dirt only goes into foundations, and any dirt or leaves in the way get dug out and replaced. Fences, glass, torches and chests go in where you have them. You need to be near the base.", input_schema: { type: "object", properties: { what: { type: "string", enum: ["house", "well", "lamp", "storehouse", "market", "hall", "tower", "wall"] } }, required: ["what"] } },
   { name: "farm", description: "Till a field beside water near the base with your hoe and plant your wheat_seeds in it: by a pond within 30 blocks of the base, or, with an empty bucket, it fills the bucket at any water and makes the field at the base. Wheat ripens in about a day.", input_schema: { type: "object", properties: {} } },
   { name: "harvest", description: "Cut the ripe wheat near you and plant the seeds straight back. 3 wheat make bread.", input_schema: { type: "object", properties: {} } },
   { name: "loot_chest", description: "Walk to the nearest chest you haven't emptied (within 48 blocks: the villages' houses, treasure on the islands) and take everything in it.", input_schema: { type: "object", properties: {} } },
@@ -902,8 +902,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       const sz = Math.floor((site.z0 + site.z1) / 2);
       if (Math.hypot(sx + 0.5 - b.phys.x, sz + 0.5 - b.phys.z) > 1.2) await b.goto(sx + 0.5, site.y, sz + 0.5, 0.8, { maxMs: 30000 });
     };
-    const solid = cells.filter(([, , , k]) => k === "b" || k === "f" || k === "g");
-    const left = () => solid.filter(([x, y, z]) => !SOLID[b.get(x, y, z)]).length;
+    const solid = cells.filter(([, , , k]) => k !== "t" && k !== "c" && k !== "g");
+    const left = () => solid.filter((c) => b.needsWork(c)).length;
     // one job, start to finish: short of blocks, it goes and mines stone (a staircase), comes back to the middle and
     // carries on, without stopping to think in between; it only hands back when the building is up, the time is up,
     // or something it can't fix by itself gets in the way
@@ -913,19 +913,23 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     let fetched = 0;
     for (let round = 0; round < 6 && !b.abort && !b.dead && Date.now() < deadline && left() > 0; round++) {
       site.busy = { by: this.name, at: Date.now() };
-      if (b.buildingBlocks().n < Math.min(left(), 10)) {
-        const before = b.buildingBlocks().n;
-        // the pickaxe broke mid-job (sonnet, 47 blocks short of the town hall): make another from what it carries,
-        // and when it can't, dig dirt instead, which needs no tool, so the building still goes up
+      if (b.townBlocks() < Math.min(left(), 10)) {
+        const before = b.townBlocks();
+        // the pickaxe broke mid-job (sonnet, 47 blocks short of the town hall): make another from what it carries;
+        // with no wood for one either, it fetches logs (planks for the roof, and a pickaxe next round)
         const pick = () => { const t = b.bestToolFor(B.STONE); return !!t && canHarvest(B.STONE, t); };
         for (const rid of ["oak_planks", "birch_planks", "oak_planks_from_palm", "sticks", "stone_pickaxe", "wooden_pickaxe"]) {
           if (pick() || b.abort) break;
           await b.craft(rid, 1);
         }
-        this.body.action = `getting ${pick() ? "stone" : "dirt"} for ${civLabel(kind)}`;
-        await this.collect(pick() ? "cobblestone" : "dirt", Math.min(48, left() - before + 4));
-        fetched += b.buildingBlocks().n - before;
-        if (b.buildingBlocks().n <= before) break; // no stone to be had here: the brain has to decide what next
+        this.body.action = `getting ${pick() ? "stone" : "wood"} for ${civLabel(kind)}`;
+        if (pick()) await this.collect("cobblestone", Math.min(48, left() - before + 4));
+        else {
+          await this.collect("oak_log", 6);
+          for (const rid of ["oak_planks", "birch_planks", "oak_planks_from_palm"]) await b.craft(rid, 6);
+        }
+        fetched += b.townBlocks() - before;
+        if (b.townBlocks() <= before) break; // nothing to be had here: the brain has to decide what next
       }
       await toMiddle();
       r = await b.buildCells(cells, kind === "wall" ? 48 : 90, `building ${civLabel(kind)}`);
@@ -950,7 +954,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return `gave up on ${civLabel(kind)} at ${where}: nothing would go in there three times (${r.why || "a bad spot"}). build it again and a better spot gets picked`;
     }
     savePack();
-    if (!r.placed) return r.outOf || b.buildingBlocks().n < 4 ? `out of building blocks and couldn't mine more stone here: ${missing} still to go on ${civLabel(kind)} at ${where} (get logs for planks, or stone from somewhere else)` : `couldn't place blocks on ${civLabel(kind)} at ${where}: ${r.why || "in the way, or out of reach"}; ${missing} to go`;
+    if (!r.placed) return r.outOf || b.townBlocks() < 4 ? `out of building blocks and couldn't mine more stone here: ${missing} still to go on ${civLabel(kind)} at ${where} (get logs for planks, or stone from somewhere else)` : `couldn't place blocks on ${civLabel(kind)} at ${where}: ${r.why || "in the way, or out of reach"}; ${missing} to go`;
     return `placed ${r.placed} blocks on ${civLabel(kind)} at ${where}: ${missing} to go${r.outOf ? " (you ran out of building blocks)" : ""}`;
   }
 

@@ -63,7 +63,7 @@ export function progress(count: (k: Kind | "trade") => number): { stage: number;
 }
 
 /** Cells of a ring round a w by d footprint, outside in (so a roof grows from the walls to the middle). */
-function rings(x0: number, z0: number, w: number, d: number, y: number, kind = "b"): PlanCell[] {
+function rings(x0: number, z0: number, w: number, d: number, y: number, kind = "w"): PlanCell[] {
   const out: PlanCell[] = [];
   for (let dz = 0; dz < d; dz++) for (let dx = 0; dx < w; dx++) out.push([x0 + dx, y, z0 + dz, kind]);
   const edge = ([x, , z]: PlanCell) => Math.min(x - x0, x0 + w - 1 - x, z - z0, z0 + d - 1 - z);
@@ -78,27 +78,33 @@ export function planFor(kind: Exclude<Kind, "farm" | "wall">, x0: number, z0: nu
   for (let dz = 0; dz < d; dz++)
     for (let dx = 0; dx < w; dx++) {
       const g = ground(x0 + dx, z0 + dz);
-      for (let yy = Math.max(g + 1, y - 3); yy < y; yy++) if (g >= 0) cells.push([x0 + dx, yy, z0 + dz, "b"]);
+      for (let yy = Math.max(g + 1, y - 3); yy < y; yy++) if (g >= 0) cells.push([x0 + dx, yy, z0 + dz, "d"]);
     }
-  const wallRing = (h: number, door: [number, number] | null, windows: [number, number][] = [], kindAt?: (x: number, yy: number, z: number) => string) => {
+  // stone walls with wooden corner posts and a wooden band along the top, the way village houses look; windows, the
+  // doorway and the inside are kept clear (a = dig out anything growing there)
+  const wallRing = (h: number, door: [number, number] | null, windows: [number, number][] = []) => {
     for (let yy = y; yy < y + h; yy++)
       for (let dz = 0; dz < d; dz++)
         for (let dx = 0; dx < w; dx++) {
-          if (dx > 0 && dx < w - 1 && dz > 0 && dz < d - 1) continue;
           const x = x0 + dx;
           const z = z0 + dz;
-          if (door && x === door[0] && z === door[1] && yy < y + 2) continue;
+          if (dx > 0 && dx < w - 1 && dz > 0 && dz < d - 1) {
+            cells.push([x, yy, z, "a"]);
+            continue;
+          }
+          const corner = (dx === 0 || dx === w - 1) && (dz === 0 || dz === d - 1);
           const win = windows.some(([wx, wz]) => wx === x && wz === z) && yy > y && yy < y + h - 1;
-          cells.push([x, yy, z, kindAt ? kindAt(x, yy, z) : win ? "g" : "b"]);
+          if ((door && x === door[0] && z === door[1] && yy < y + 2) || win) cells.push([x, yy, z, "a"]);
+          else cells.push([x, yy, z, corner || yy === y + h - 1 ? "w" : "s"]);
         }
   };
   if (kind === "house") {
     wallRing(3, [x0 + 2, z0], [[x0, z0 + 2], [x0 + 4, z0 + 2]]);
     cells.push(...rings(x0, z0, 5, 5, y + 3), [x0 + 1, y, z0 + 3, "t"]);
   } else if (kind === "lamp") {
-    cells.push([x0, y, z0, "b"], [x0, y + 1, z0, "f"], [x0, y + 2, z0, "f"], [x0, y + 3, z0, "t"]);
+    cells.push([x0, y, z0, "s"], [x0, y + 1, z0, "f"], [x0, y + 2, z0, "f"], [x0, y + 3, z0, "t"]);
   } else if (kind === "well") {
-    for (let dz = 0; dz < 3; dz++) for (let dx = 0; dx < 3; dx++) if (dx !== 1 || dz !== 1) cells.push([x0 + dx, y, z0 + dz, "b"]);
+    for (let dz = 0; dz < 3; dz++) for (let dx = 0; dx < 3; dx++) if (dx !== 1 || dz !== 1) cells.push([x0 + dx, y, z0 + dz, "s"]);
     for (const [dx, dz] of [[0, 0], [2, 0], [0, 2], [2, 2]]) cells.push([x0 + dx, y + 1, z0 + dz, "f"], [x0 + dx, y + 2, z0 + dz, "f"]);
     cells.push(...rings(x0, z0, 3, 3, y + 3), [x0 + 1, y + 4, z0 + 1, "t"]);
   } else if (kind === "storehouse") {

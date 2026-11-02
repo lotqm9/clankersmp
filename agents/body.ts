@@ -1446,8 +1446,9 @@ export class Body {
         stuck = 0;
         this.halt();
         // walled in two high all round (opus, in a pocket of farm water with dirt on three sides): cut a step, the
-        // top block out of a wall, so there is a one block edge to climb onto
-        if (!this.findBank(8) && (await this.cutStepOutOfWater())) continue;
+        // top block out of a wall, so there is a one block edge to climb onto. Whether or not a bank shows up
+        // further off: that one was across the walls, and it swam at them for an hour
+        if (await this.cutStepOutOfWater()) continue;
         if (this.fillerBlock()) await this.pillarUp(1);
         else await this.stepUp();
       }

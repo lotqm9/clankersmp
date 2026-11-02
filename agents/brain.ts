@@ -821,6 +821,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const theirs = (x: number, z: number) => inHub(x, z) || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 27) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
     const offLimits = (x: number, z: number) => (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 16) || theirs(x, z);
     let pit: [number, number, number] | null = null;
+    let wentFar = false;
     // stone comes out of the ground away from the town: never the town's own walls (the nearest "cobblestone" was
     // the town hall's, so they took its lower walls apart for a house), and never a village's houses
     const stone = plan.blocks.includes(B.STONE);
@@ -883,6 +884,17 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         skip.add(-1);
         if (skip.size > 3) return r;
         continue;
+      }
+      // nothing in 32 blocks (every tree round the town cut down): look out to 64 and walk there itself, rather than
+      // hand back "explore" for it to ask the same again (sonnet, three times running)
+      if (!found.length && !soft && !stone && !wentFar) {
+        wentFar = true;
+        const far = b.findBlocks(plan.blocks, 64, 8).filter(([fx, , fz]) => !theirs(fx, fz));
+        if (far.length) {
+          b.action = `walking out to find ${item}`;
+          await b.goto(far[0][0] + 0.5, far[0][1], far[0][2] + 0.5, 3, { maxMs: 40000 });
+          continue;
+        }
       }
       if (!found.length) break;
       const [x, y, z] = found[0];

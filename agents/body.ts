@@ -1596,6 +1596,9 @@ export class Body {
       const x = Math.floor(this.phys.x);
       const y = Math.floor(this.phys.y + 0.1);
       const z = Math.floor(this.phys.z);
+      // sealed in for the night: the roof it put over its head comes off first, or every jump out hits it (haiku
+      // jumped at its own roof 137 times one morning). Not when water sits on top: that would flood the hole
+      if (this.inHole() && SOLID[this.get(x, y + 2, z)] && !IS_WATER[this.get(x, y + 3, z)] && (await this.mine(x, y + 2, z, false))) continue;
       if (this.inHole() && this.fillerBlock() && !SOLID[this.get(x, y + 2, z)] && (await this.pillarUp(1)) > 0) continue;
       const used = await this.stepUp(dir);
       if (used >= 0) {

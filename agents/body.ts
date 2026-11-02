@@ -707,6 +707,8 @@ export class Body {
         if (unstuck) break;
         unstuck = true;
         fails = 0;
+        // shut in by a closed door (haiku slept in a village house's bed and couldn't get out in the morning): open it
+        if (await this.openNearbyDoors()) continue;
         await this.nudge(x, z);
         await this.unstick();
         continue;
@@ -2440,6 +2442,27 @@ export class Body {
   }
 
   /** Its doorway, from inside the house: the blocks it shut it with come out, and a shut door is opened. */
+  /** Open every closed door within a few blocks (the bottom half takes the click). True if it opened one. */
+  async openNearbyDoors(r = 4): Promise<boolean> {
+    const fx = Math.floor(this.phys.x);
+    const fy = Math.floor(this.phys.y + 0.1);
+    const fz = Math.floor(this.phys.z);
+    let opened = false;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dz = -r; dz <= r; dz++)
+        for (let dx = -r; dx <= r; dx++) {
+          const x = fx + dx, y = fy + dy, z = fz + dz;
+          const id = this.get(x, y, z);
+          if (!isDoor(id) || door(id).open || isDoor(this.get(x, y - 1, z))) continue;
+          if (this.reachTo(x, y, z) > REACH) await this.goto(x + 0.5, y, z + 0.5, 2, { maxMs: 4000, done: () => this.reachTo(x, y, z) <= REACH });
+          await this.lookAt(x + 0.5, y + 0.5, z + 0.5, 10);
+          this.send({ t: "use", x, y, z });
+          for (let k = 0; k < 10 && this.get(x, y, z) === id; k++) await this.nextTick();
+          if (this.get(x, y, z) !== id) opened = true;
+        }
+    return opened;
+  }
+
   async openDoorway(): Promise<void> {
     const h = this.home;
     if (!h) return;

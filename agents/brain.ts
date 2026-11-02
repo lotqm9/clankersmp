@@ -1271,7 +1271,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const homeFar = b.home ? Math.hypot(b.home.x0 + 2 - b.phys.x, b.home.z0 + 2 - b.phys.z) : 0;
     // a long way out in the late afternoon: start back now, while there's daylight for the walk (opus went 190 blocks
     // after sheep and was still out there at dusk, in a marsh where it couldn't dig in)
-    if (b.home && homeFar > 30 && tod >= 9000 && tod < 11600 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
+    if (b.home && homeFar > 45 && tod >= 9000 && tod < 11600 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
       && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill)) {
       this.lastHomeTrip = Date.now();
       await this.reflex("heading home before dark, it's a long walk", async () => `You were ${Math.round(homeFar)} blocks from home late in the afternoon, so you started back before dark: ${await b.goHome()}.`);

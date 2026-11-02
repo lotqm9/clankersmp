@@ -920,7 +920,20 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           const top = found.filter(([x, y, z]) => !SOLID[b.get(x, y + 1, z)]);
           pit = (top[0] ?? found[0]) as [number, number, number];
         }
-        if (!found.length) return have() - start > 0 ? `got ${have() - start} of ${count} ${item} (no more open ground away from the town nearby: explore a little and collect again)` : `no ${item} away from the town and the villages within 32 blocks: walk out a bit (explore) and collect there`;
+        // none in 32 blocks (sand is by the water, not in town): out to the nearest open patch within 64, then 160, the
+        // way a logging trip goes (sonnet asked for sand three times and crafted glass panes it had no glass for)
+        if (!found.length && trips < 2) {
+          trips++;
+          const far = b.findBlocks(plan.blocks, trips === 1 ? 64 : 160, 400).filter(([fx, fy, fz]) => !offLimits(fx, fz) && !SOLID[b.get(fx, fy + 1, fz)]);
+          if (far.length) {
+            b.action = `walking out for ${item}, ${Math.round(Math.hypot(far[0][0] - b.phys.x, far[0][2] - b.phys.z))} blocks out`;
+            await b.goto(far[0][0] + 0.5, far[0][1] + 1, far[0][2] + 0.5, 3, { maxMs: trips === 1 ? 40000 : 120000 });
+            pit = null;
+            t0 = Date.now();
+            continue;
+          }
+        }
+        if (!found.length) return have() - start > 0 ? `got ${have() - start} of ${count} ${item} (no more open ground away from the town nearby: explore a little and collect again)` : `no ${item} away from the town and the villages within 160 blocks`;
       }
       // stone that isn't lying open at its feet: mine down a staircase like a player, not a shaft
       if (plan.blocks.includes(B.STONE) && (!found.length || found[0][1] < b.phys.y - 2 || skip.size >= 2)) {

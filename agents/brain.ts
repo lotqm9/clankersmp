@@ -1645,7 +1645,11 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (h && (h.d < 3.2 || (hurtRecently && h.d < 6)) && !b.sealed() && !((this.leftAlone.get(h.id) ?? 0) > Date.now() && !hurtRecently)) {
       const armed = !!b.bestWeapon();
       const strong = b.strong();
-      const below = b.covered();
+      // underground: under a roof that isn't one of the town's buildings (inside a cottage the roof counts as "covered",
+      // and haiku fought a shambler to the end in the house it had just moved into, 11/2). And the no-backing-off
+      // fight is only for one monster: against two, keep the bail and run
+      const indoors = footprints().some((r) => b.phys.x >= r.x0 && b.phys.x <= r.x1 + 1 && b.phys.z >= r.z0 && b.phys.z <= r.z1 + 1);
+      const below = b.covered() && !indoors && b.hostiles(10).length <= 1;
       if (b.stats.hp < (strong ? 5 : 8) && below && b.canWallOff()) {
         await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled it off to heal: ${await b.wallOff()}.`);
         if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);

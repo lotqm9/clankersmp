@@ -2406,7 +2406,7 @@ export class Body {
         const cz = z + dz;
         const h = Math.hypot(dx, dz);
         const key = `${cx},${cz}`;
-        if (h > 3.2 || (h < 1 && !inside.has(key)) || (footprint.has(key) && !inside.has(key))) continue;
+        if (h > 3.7 || (h < 1 && !inside.has(key)) || (footprint.has(key) && !inside.has(key))) continue;
         const g = inside.get(key) ?? this.groundAt(cx, cz, y);
         if (g < 0) continue;
         // feet at g + 1 + k, the eyes EYE_HEIGHT above: high enough that the cell is in reach (and not in it)

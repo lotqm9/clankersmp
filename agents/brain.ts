@@ -897,14 +897,20 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       }
       // out along its own direction until the ground is free: 20 blocks out from the base was the storehouse opus was
       // building, still "the town", so it never left
-      const a = Math.atan2(b.phys.z - away.z, b.phys.x - away.x);
-      let r = Math.max(away.r, Math.hypot(b.phys.x - away.x, b.phys.z - away.z) + 6);
-      while (r < away.r + 48 && offLimits(away.x + Math.cos(a) * r, away.z + Math.sin(a) * r)) r += 6;
-      const tx = Math.floor(away.x + Math.cos(a) * r);
-      const tz = Math.floor(away.z + Math.sin(a) * r);
-      const g = b.groundAt(tx, tz, away.y);
-      b.action = `walking out of ${away.what} to mine`;
-      await b.goto(tx + 0.5, g >= 0 ? g + 1 : away.y, tz + 0.5, 3, { maxMs: 30000 });
+      // its own direction first, then the others (sonnet's way out was blocked: water, a village, a cliff)
+      const a0 = Math.atan2(b.phys.z - away.z, b.phys.x - away.x);
+      for (const turn of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
+        if (!offLimits(b.phys.x, b.phys.z) || b.abort || b.dead) break;
+        const a = a0 + turn;
+        let r = Math.max(away.r, Math.hypot(b.phys.x - away.x, b.phys.z - away.z) + 6);
+        while (r < away.r + 48 && offLimits(away.x + Math.cos(a) * r, away.z + Math.sin(a) * r)) r += 6;
+        const tx = Math.floor(away.x + Math.cos(a) * r);
+        const tz = Math.floor(away.z + Math.sin(a) * r);
+        const g = b.groundAt(tx, tz, away.y);
+        if (g < 0) continue; // water or a tree there: the next way
+        b.action = `walking out of ${away.what} to mine`;
+        await b.goto(tx + 0.5, g + 1, tz + 0.5, 3, { maxMs: 30000 });
+      }
       if (offLimits(b.phys.x, b.phys.z)) return `couldn't get out of ${away.what} to mine stone (stone never comes out of ${away.what}'s ground): walk out a little further (explore), then collect`;
     }
     while (!b.abort && !b.dead && have() - start < count && Date.now() - t0 < 90000) {

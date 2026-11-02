@@ -210,6 +210,8 @@ export class Brain {
   private chain: Promise<unknown> = Promise.resolve();
   private stopped = false;
   private nightOutSince = 0;
+  /** Monsters it fought without getting anywhere (behind a wall, across a gap): left alone for a minute. */
+  private leftAlone = new Map<number, number>();
   private lastEat = 0;
   private lastPlayerHit = 0;
   private lastFail = "";
@@ -1172,7 +1174,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     // a monster in its face: fight it (with a weapon or health to spare), else run; badly hurt in a tunnel there is
     // nowhere to run (sonnet died fighting and fleeing in turns down a one-wide staircase): wall itself in instead
-    if (h && (h.d < 3.2 || (hurtRecently && h.d < 6)) && !b.sealed()) {
+    // (not one it just fought without getting anywhere: a shambler right outside sonnet's wall was in reach but behind
+    // the blocks, and it swung at the wall for 3 minutes, a 15 s fight at a time; at home it's safe, so leave it)
+    if (h && (h.d < 3.2 || (hurtRecently && h.d < 6)) && !b.sealed() && !((this.leftAlone.get(h.id) ?? 0) > Date.now() && !hurtRecently)) {
       const armed = !!b.bestWeapon();
       if (b.stats.hp < 8 && b.covered()) {
         await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled yourself in to heal: ${await b.digIn()}.`);
@@ -1191,6 +1195,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           res = await b.fight({ kind: "mob", id: h.id }, 15000, 7);
           return `A ${h.key} attacked you and you fought it (${res}).`;
         });
+        if (/ran out of time|couldn't get to it|out of reach/.test(res)) this.leftAlone.set(h.id, Date.now() + 60000);
         if (/backed off/.test(res) && !b.dead && b.covered()) {
           await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${h.key} underground, so you walled yourself in to heal: ${await b.digIn()}.`);
         } else if (/backed off/.test(res) && !b.dead) {

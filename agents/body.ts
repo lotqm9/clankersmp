@@ -1445,12 +1445,31 @@ export class Body {
         // treading water against a wall: climb out the hard way
         stuck = 0;
         this.halt();
+        // walled in two high all round (opus, in a pocket of farm water with dirt on three sides): cut a step, the
+        // top block out of a wall, so there is a one block edge to climb onto
+        if (!this.findBank(8) && (await this.cutStepOutOfWater())) continue;
         if (this.fillerBlock()) await this.pillarUp(1);
         else await this.stepUp();
       }
     }
     this.halt();
     return !this.phys.inWater;
+  }
+
+  /** In water with a two-high wall on every side: break the top block of a wall beside it (never the town's own
+   *  blocks if there's another choice), leaving a one block step. True if it cut one. */
+  private async cutStepOutOfWater(): Promise<boolean> {
+    const x = Math.floor(this.phys.x);
+    const y = Math.floor(this.phys.y + 0.1);
+    const z = Math.floor(this.phys.z);
+    const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+      .map(([dx, dz]) => [x + dx, z + dz] as const)
+      .filter(([sx, sz]) => SOLID[this.get(sx, y, sz)] && SOLID[this.get(sx, y + 1, sz)] && !SOLID[this.get(sx, y + 2, sz)] && !IS_WATER[this.get(sx, y + 1, sz)]);
+    // natural ground first: dirt and grass, then anything else
+    const natural = (sx: number, sz: number) => { const id = this.get(sx, y + 1, sz); return id === B.DIRT || id === B.GRASS ? 0 : 1; };
+    sides.sort(([ax, az], [bx, bz]) => natural(ax, az) - natural(bx, bz));
+    for (const [sx, sz] of sides) if (await this.mine(sx, y + 1, sz, false)) return true;
+    return false;
   }
 
   /** The nearest dry spot to stand on within r blocks that a swimmer can climb onto (its floor at most about a block

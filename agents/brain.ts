@@ -1233,7 +1233,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // further out still, step by step, when the town is crowded (sonnet walked round and round a full base looking
     // for flat ground for a watchtower)
     const near = kind === "plaza" ? 0 : 4;
-    const steps: [number, number][] = kind === "plaza" ? [[16, 2], [24, 3]] : big ? [[40, 3], [52, 3]] : [[30, 2], [40, 3], [52, 3]];
+    // (the plaza too, when the middle is built up: season 8's hamlet had no 9 by 9 left within 24 blocks of the base)
+    const steps: [number, number][] = kind === "plaza" ? [[16, 2], [24, 3], [34, 3], [44, 3]] : big ? [[40, 3], [52, 3]] : [[30, 2], [40, 3], [52, 3]];
     for (const [far, slope] of steps)
       for (const [sw, sd] of w === d ? [[w, d]] : [[w, d], [d, w]]) {
         const spot = b.siteNear(base.x, base.z, base.y, sw, sd, [...footprints(), ...villages], far, near, slope);

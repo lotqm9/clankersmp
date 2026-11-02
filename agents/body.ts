@@ -2411,7 +2411,7 @@ export class Body {
         if (g < 0) continue;
         // feet at g + 1 + k, the eyes EYE_HEIGHT above: high enough that the cell is in reach (and not in it)
         const k = Math.max(0, Math.ceil(y + 0.5 - (g + 1 + EYE_HEIGHT) - Math.sqrt(Math.max(0, R * R - h * h))));
-        if (k > 6 || (h < 1 && g + 1 + k + 1 >= y)) continue;
+        if (k > 10 || (h < 1 && g + 1 + k + 1 >= y)) continue;
         let room = true;
         for (let yy = g + 1; yy <= g + k + 2 && room; yy++) if (SOLID[this.get(cx, yy, cz)] || IS_WATER[this.get(cx, yy, cz)]) room = false;
         if (!room) continue;

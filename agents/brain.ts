@@ -218,6 +218,8 @@ export class Brain {
   /** Monsters it fought without getting anywhere (behind a wall, across a gap): left alone for a minute. */
   private leftAlone = new Map<number, number>();
   private lastTidy = 0;
+  /** What the running reflex is, so being shot can cut a walk short. */
+  private reflexLabel = "";
   private lastEat = 0;
   private lastPlayerHit = 0;
   private lastFail = "";
@@ -1159,6 +1161,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   private async guard(): Promise<void> {
     const b = this.body;
+    // shot at in the middle of a walk (home, or out to build before dark): drop the walk so the archer gets dealt
+    // with. A reflex used to run to its end first, and sonnet and haiku were both shot dead walking home at dusk
+    if (this.reflexing && !/rattler|fight|running|dig|wall|hurt|water/.test(this.reflexLabel) && Date.now() - b.lastHurt.at < 1500 && b.hostiles(16).some((m) => m.key === "rattler")) b.abort = true;
     if (this.reflexing || this.stopped || b.dead || b.closed) return;
     const h = b.hostiles(6)[0];
     const hurtRecently = Date.now() - b.lastHurt.at < 2000;
@@ -1262,7 +1267,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const homeFar = b.home ? Math.hypot(b.home.x0 + 2 - b.phys.x, b.home.z0 + 2 - b.phys.z) : 0;
     // a long way out in the late afternoon: start back now, while there's daylight for the walk (opus went 190 blocks
     // after sheep and was still out there at dusk, in a marsh where it couldn't dig in)
-    if (b.home && homeFar > 60 && tod >= 9000 && tod < 11600 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
+    if (b.home && homeFar > 30 && tod >= 9000 && tod < 11600 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
       && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill)) {
       this.lastHomeTrip = Date.now();
       await this.reflex("heading home before dark, it's a long walk", async () => `You were ${Math.round(homeFar)} blocks from home late in the afternoon, so you started back before dark: ${await b.goHome()}.`);
@@ -1325,6 +1330,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   /** A reflex cuts the running skill short; the site hears what it is doing now, the brain how it went. */
   private async reflex(label: string, fn: () => Promise<string>): Promise<void> {
     this.reflexing = true;
+    this.reflexLabel = label;
     this.reflexCount++;
     this.body.abort = true;
     this.emit("reflex", { text: label });

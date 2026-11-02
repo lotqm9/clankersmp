@@ -1221,6 +1221,17 @@ export class Body {
     return out.slice(0, max).map(([x, y, z]) => [x, y, z]);
   }
 
+  /** The nearest grove: a log of these ids with at least `min` more round it (within 5 across, 8 up or down), out to
+   *  `radius`, leaving out the spots `skip` says (the town, the villages). A lone stump isn't worth the walk. */
+  findGrove(ids: number[], radius: number, skip?: (x: number, z: number) => boolean, min = 6): [number, number, number] | null {
+    const logs = this.findBlocks(ids, radius, 1500).filter(([x, , z]) => !skip?.(x, z));
+    for (const [x, y, z] of logs) {
+      let n = 0;
+      for (const [ox, oy, oz] of logs) if (Math.abs(ox - x) <= 5 && Math.abs(oz - z) <= 5 && Math.abs(oy - y) <= 8 && ++n > min) return [x, y, z];
+    }
+    return null;
+  }
+
   // ---------------------------------------------------------------- crafting, eating, fighting
 
   recipeFor(rid: string) {

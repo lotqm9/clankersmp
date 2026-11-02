@@ -852,7 +852,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (!plan) return `don't know how to collect ${item}`;
     const have = () => plan.gets.reduce((n, id) => n + b.count(id), 0);
     const start = have();
-    const t0 = Date.now();
+    let t0 = Date.now();
     const skip = new Set<number>();
     let tried = 0;
     // soft ground (dirt, sand, gravel) comes out of one shallow pit, a layer at a time, well away from the town and
@@ -862,7 +862,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const theirs = (x: number, z: number) => inHub(x, z) || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 27) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
     const offLimits = (x: number, z: number) => (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 16) || theirs(x, z);
     let pit: [number, number, number] | null = null;
-    let wentFar = false;
+    let trips = 0;
+    const trees = plan.blocks.some((id) => BLOCKS[id]?.key?.endsWith("_log"));
     // stone comes out of the ground away from the town: never the town's own walls (the nearest "cobblestone" was
     // the town hall's, so they took its lower walls apart for a house), and never a village's houses
     const stone = plan.blocks.includes(B.STONE);
@@ -926,14 +927,18 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         if (skip.size > 3) return r;
         continue;
       }
-      // nothing in 32 blocks (every tree round the town cut down): look out to 64 and walk there itself, rather than
-      // hand back "explore" for it to ask the same again (sonnet, three times running)
-      if (!found.length && !soft && !stone && !wentFar) {
-        wentFar = true;
-        const far = b.findBlocks(plan.blocks, 64, 8).filter(([fx, , fz]) => !theirs(fx, fz));
-        if (far.length) {
-          b.action = `walking out to find ${item}`;
-          await b.goto(far[0][0] + 0.5, far[0][1], far[0][2] + 0.5, 3, { maxMs: 40000 });
+      // nothing in 32 blocks, and it's wood: every oak round the town was cut down (the town is built of oak, so a
+      // house wants 20+ logs), so go on a logging trip to the nearest grove, out to 64 blocks and then to 160, and cut
+      // there with the time starting again. Trees only: an ore 50 blocks off is inside the rock, and walking at one
+      // left sonnet standing still for 3 minutes "walking out to find coal_ore"
+      if (!found.length && trees && trips < 2) {
+        trips++;
+        const grove = b.findGrove(plan.blocks, trips === 1 ? 64 : 160, (gx, gz) => theirs(gx, gz));
+        if (grove) {
+          const far = Math.round(Math.hypot(grove[0] - b.phys.x, grove[2] - b.phys.z));
+          b.action = `going on a logging trip for ${item}, ${far} blocks out`;
+          await b.goto(grove[0] + 0.5, grove[1], grove[2] + 0.5, 4, { maxMs: trips === 1 ? 40000 : 120000 });
+          t0 = Date.now();
           continue;
         }
       }

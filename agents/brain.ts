@@ -957,7 +957,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // is in reach: the staircase heads the way with the most ore and takes what's in its walls (opus asked for coal
       // over and over and got "0 of 8": the coal was deeper in the rock than it could walk to)
       const ore = !plan.blocks.includes(B.STONE) && plan.blocks.every((id) => BLOCKS[id]?.key?.endsWith("_ore"));
-      if (ore && (!found.length || skip.size >= 2) && b.bestToolFor(B.STONE) && canHarvest(B.STONE, b.bestToolFor(B.STONE)) && !offLimits(b.phys.x, b.phys.z)) {
+      if (ore && (!found.length || found[0][1] < b.phys.y - 2 || skip.size >= 1) && b.bestToolFor(B.STONE) && canHarvest(B.STONE, b.bestToolFor(B.STONE)) && !offLimits(b.phys.x, b.phys.z)) {
         const r = await b.stairMine(plan.gets, count - (have() - start));
         tried++;
         if (have() - start >= count) return r;

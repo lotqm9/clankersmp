@@ -15,14 +15,15 @@ import { generateWorld, hashBlocks, type GenInfo } from "../shared/worldgen.ts";
 import { newPhysState, tickPlayer, type MoveInput, type PhysState } from "../shared/physics.ts";
 import { PathFinder, type PathPoint } from "../server/src/pathfind.ts";
 import { breakTicks } from "../shared/mining.ts";
-import { B, BLOCKS, IS_WATER, SOLID, isFarmland, isFurnace, isSmallPlant, isStorage as isStorageId } from "../shared/blocks.ts";
+import { B, BLOCKS, IS_WATER, SOLID, isFarmland, isFurnace, isStorage as isStorageId } from "../shared/blocks.ts";
 import { I, fromWire, isHoe as isHoeId, itemDef, type Stack } from "../shared/items.ts";
 import { canHarvest } from "../shared/mining.ts";
 import { cooldownTicks } from "../shared/combat.ts";
 import { EAT_TICKS } from "../shared/survival.ts";
 import { RECIPES, recipeSize } from "../shared/recipes.ts";
 import { JOBS } from "../shared/villagers.ts";
-import { door, isDoor } from "../shared/shapes.ts";
+import { door, isBed, isDoor } from "../shared/shapes.ts";
+import { accepts, cellTarget, itemOf } from "./civ.ts";
 
 interface VillagerOffers {
   vid: number;
@@ -48,6 +49,10 @@ const STONES = [B.STONE_BRICKS, B.COBBLESTONE, B.STONE, B.BRICKS];
 const WOODS = [B.OAK_PLANKS, B.BIRCH_PLANKS];
 const ROUGH = new Set<number>([B.DIRT, B.GRASS, B.SAND, B.GRAVEL, B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES, B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG]);
 const GROUND = new Set<number>([B.GRASS, B.DIRT, B.SAND, B.GRAVEL, B.CLAY, B.STONE] as number[]);
+/** Stray building blocks: inside a town building's room they are in the way (a pillar left from building the roof). */
+const CLUTTER = new Set<number>([B.COBBLESTONE, B.STONE, B.OAK_PLANKS, B.BIRCH_PLANKS, B.STONE_BRICKS, B.MOSSY_COBBLE, B.MOSSY_STONE_BRICKS, B.BRICKS, B.GLASS] as number[]);
+/** Never dug out of the way of a plan: somebody's chest, bed or furnace (and what's in it). */
+const KEEP = (id: number) => isStorageId(id) || isBed(id) || isFurnace(id);
 const TREE = new Set<number>([B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES, B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG]);
 const itemName = (id: number) => itemDef(id)?.key ?? BLOCKS[id]?.key ?? `item ${id}`;
 
@@ -1075,18 +1080,44 @@ export class Body {
     return this.reachTo(x, y, z) <= REACH;
   }
 
+  /** A spot to stand on with a cell in reach: solid underfoot, room for its body, not the cell itself; the nearest to
+   *  it first. A wall's top or a roof's edge is in the air: walking at the cell itself, the path search aimed at a
+   *  point it could never stand on and gave up ("out of reach" for the top of the town hall's front wall). */
+  standFor(x: number, y: number, z: number): [number, number, number] | null {
+    let best: [number, number, number] | null = null;
+    let bd = Infinity;
+    for (let dz = -3; dz <= 3; dz++)
+      for (let dx = -3; dx <= 3; dx++)
+        for (let sy = y - 5; sy <= y + 1; sy++) {
+          const sx = x + dx;
+          const sz = z + dz;
+          if (dx === 0 && dz === 0 && sy >= y - 1 && sy <= y) continue;
+          if (!SOLID[this.get(sx, sy - 1, sz)] || SOLID[this.get(sx, sy, sz)] || SOLID[this.get(sx, sy + 1, sz)] || IS_WATER[this.get(sx, sy, sz)]) continue;
+          if (Math.hypot(sx + 0.5 - (x + 0.5), sy + EYE_HEIGHT - (y + 0.5), sz + 0.5 - (z + 0.5)) > REACH - 0.3) continue;
+          const d = Math.hypot(sx + 0.5 - this.phys.x, sy - this.phys.y, sz + 0.5 - this.phys.z);
+          if (d < bd) {
+            bd = d;
+            best = [sx, sy, sz];
+          }
+        }
+    return best;
+  }
+
   /** Put a block from the inventory into a cell (in reach, next to something solid, not where it stands). */
-  async place(item: number, x: number, y: number, z: number, walkMs = 20000): Promise<boolean> {
+  async place(item: number, x: number, y: number, z: number, walkMs = 20000, state?: number): Promise<boolean> {
     if (!this.has(item)) return false;
     const cur = this.get(x, y, z);
     if (cur !== B.AIR && !IS_WATER[cur] && !BLOCKS[cur]?.replaceable) return false;
     if (this.reachTo(x, y, z) > REACH) {
-      const ok = await this.goto(x + 0.5, y, z + 0.5, 2.5, { maxMs: walkMs, done: () => this.reachTo(x, y, z) <= REACH });
+      const inReach = () => this.reachTo(x, y, z) <= REACH;
+      const spot = this.standFor(x, y, z);
+      let ok = !!spot && (await this.goto(spot[0] + 0.5, spot[1], spot[2] + 0.5, 0.5, { maxMs: walkMs, done: inReach }));
+      if (!ok && !this.abort) ok = await this.goto(x + 0.5, y, z + 0.5, 2.5, { maxMs: walkMs, done: inReach });
       if (!ok) return false;
     }
     if (!(await this.hold(item))) return false;
     await this.lookAt(x + 0.5, y + 0.5, z + 0.5, 15);
-    const id = itemDef(item)?.block || item;
+    const id = state ?? (itemDef(item)?.block || item);
     this.send({ t: "place", x, y, z, id });
     this.swing();
     for (let k = 0; k < 20; k++) {
@@ -2072,9 +2103,10 @@ export class Body {
     return best;
   }
 
-  /** The block it carries for one cell of a town plan: d = foundation (dirt first: it's underground), s = stone,
+  /** The block it carries for one cell of an old-style plan: d = foundation (dirt first: it's underground), s = stone,
    *  w = wood (planks, else stone), b = stone or wood, f = fence (else planks or stone), g = glass, t = torch,
-   *  c = chest, a = keep clear (nothing goes in). Never dirt or sand above the ground. 0 if it has none. */
+   *  c = chest, a = keep clear (nothing goes in). Never dirt or sand above the ground. 0 if it has none. Town plans
+   *  name the exact block for each cell instead (wantFor). */
   blockFor(kind: string): number {
     if (kind === "t") return this.has(B.TORCH) ? B.TORCH : 0;
     if (kind === "c") return this.has(B.CHEST) ? B.CHEST : 0;
@@ -2085,26 +2117,115 @@ export class Body {
     return 0;
   }
 
+  /** What it would put in a plan cell: the item it holds and the block state that goes in, or null if it has none
+   *  (or nothing goes in). A town plan's cell names its block exactly: the roof's oak stairs facing the ridge, the
+   *  door facing in. */
+  wantFor(kind: string): { item: number; state: number } | null {
+    const t = cellTarget(kind.split("|")[0]);
+    if (!t) {
+      const id = this.blockFor(kind);
+      return id ? { item: id, state: itemDef(id)?.block || id } : null;
+    }
+    const item = itemOf(t.id);
+    return this.has(item) ? { item, state: t.id } : null;
+  }
+
   /** Blocks it carries that a town building can use above the ground: stone and planks. */
   townBlocks(): number {
     return [...STONES, ...WOODS].reduce((a, id) => a + this.count(id), 0);
   }
 
-  /** A cell of a town plan that still needs work: empty, or dirt, leaves or the like where a proper block goes, or
-   *  (a = keep clear) something growing inside the building or stuck in a window or the doorway. */
+  /** A cell of a town plan that still needs work: empty, or the wrong block (dirt or leaves where a wall goes,
+   *  cobblestone where an upgrade puts stone bricks, a fence where glass goes), or (a = keep clear) dirt, leaves or a
+   *  stray block inside a building, or (o) anything solid in a doorway, or (p) grass still to be dug into a path.
+   *  "|" adds blocks a later tier puts there, which do as well. */
   needsWork([x, y, z, k]: PlanCell): boolean {
     const id = this.get(x, y, z);
-    if (k === "t") return id !== B.TORCH;
-    if (k === "c") return !isStorageId(id);
-    if (k === "a") return ROUGH.has(id);
+    const parts = k.split("|");
+    const alts = parts.slice(1).map(Number);
+    const k0 = parts[0];
+    if (alts.some((a) => accepts(a, id))) return false;
+    if (k0 === "a") return ROUGH.has(id) || CLUTTER.has(id);
+    if (k0 === "o") return SOLID[id] === 1 && !isDoor(id);
+    if (k0 === "p" || k0 === "?p") return id === B.GRASS || id === B.DIRT || !SOLID[id];
+    const t = cellTarget(k0);
+    if (t) return !accepts(t.id, id);
+    if (k0 === "t") return id !== B.TORCH;
+    if (k0 === "c") return !isStorageId(id);
     if (!SOLID[id]) return true;
-    return k !== "d" && ROUGH.has(id);
+    return k0 !== "d" && ROUGH.has(id);
   }
 
-  /** Place what is still missing of a plan (cells in build order), up to `max` blocks. */
-  async buildCells(cells: PlanCell[], max: number, label: string): Promise<{ placed: number; left: number; outOf: boolean; why: string }> {
+  /** The highest natural ground under a column (grass, dirt, sand, gravel, clay, stone), looking through anything built
+   *  on it: the wall round the base stays planned on the ground it stands on, not on its own top. -1 water, -2 a tree. */
+  landAt(x: number, z: number, near: number): number {
+    for (let y = Math.min(126, near + 8); y >= Math.max(2, near - 10); y--) {
+      const id = this.get(x, y, z);
+      if (IS_WATER[id]) return -1;
+      if (TREE.has(id)) return -2;
+      if (GROUND.has(id)) return y;
+    }
+    return -1;
+  }
+
+  /** The top of the ground under a column as anyone walks on it (a path, paving, grass): plants and trees aside. */
+  surfaceAt(x: number, z: number, near: number): number {
+    for (let y = Math.min(126, near + 8); y >= Math.max(2, near - 10); y--) {
+      const id = this.get(x, y, z);
+      if (IS_WATER[id]) return -1;
+      if (TREE.has(id)) return -2;
+      if (SOLID[id] || id === B.DIRT_PATH) return y;
+    }
+    return -1;
+  }
+
+  /** Open a shut door (its lower half at x, y, z) within reach. */
+  async openDoor(x: number, y: number, z: number): Promise<void> {
+    const id = this.get(x, y, z);
+    if (!isDoor(id) || door(id).open) return;
+    await this.lookAt(x + 0.5, y + 0.5, z + 0.5, 10);
+    this.send({ t: "use", x, y, z });
+    for (let k = 0; k < 10 && this.get(x, y, z) === id; k++) await this.nextTick();
+  }
+
+  /** Dig a path into the grass or dirt at (x, y, z) with a shovel (a block of dirt first where the ground dips). */
+  async makePath(x: number, y: number, z: number): Promise<boolean> {
+    const shovel = this.inv.find((st) => st && itemDef(st.id)?.tool?.kind === "shovel")?.id;
+    if (!shovel) return false;
+    if (!SOLID[this.get(x, y, z)]) {
+      const f = this.has(B.DIRT) ? B.DIRT : 0;
+      if (!f || !(await this.place(f, x, y, z, 8000))) return false;
+    }
+    const above = this.get(x, y + 1, z);
+    if (above !== B.AIR && !SOLID[above]) await this.mine(x, y + 1, z);
+    if (this.get(x, y + 1, z) !== B.AIR) return false;
+    const id = this.get(x, y, z);
+    if (id !== B.GRASS && id !== B.DIRT) return true;
+    if (this.reachTo(x, y, z) > REACH - 0.3) await this.goto(x + 0.5, y + 1, z + 0.5, 2.2, { maxMs: 8000, done: () => this.reachTo(x, y, z) <= REACH - 0.3 });
+    await this.hold(shovel);
+    await this.lookAt(x + 0.5, y + 1, z + 0.5, 8);
+    this.send({ t: "use", x, y, z });
+    this.swing();
+    for (let k = 0; k < 10; k++) {
+      await this.nextTick();
+      if (this.get(x, y, z) === B.DIRT_PATH) return true;
+    }
+    return false;
+  }
+
+  /** Place what is still missing of a plan (cells in build order), up to `max` blocks: wrong blocks come out first
+   *  (dirt in a wall, cobblestone an upgrade turns into stone bricks), furniture and anyone's chest never do. `short`
+   *  comes back with the items it ran out of, cell by cell, so the job can go and get them. */
+  async buildCells(cells: PlanCell[], max: number, label: string, floorY = -1): Promise<{ placed: number; left: number; outOf: boolean; why: string; short: Map<number, number> }> {
     const missing = (c: PlanCell) => this.needsWork(c);
     const footprint = new Set(cells.map(([x, , z]) => `${x},${z}`));
+    // the room inside (the kept-clear cells at floor height): a pillar can go up in there, on the floor, to the roof
+    const inside = new Map<string, number>();
+    for (const [x, y, z, k] of cells) if (y === floorY && k.split("|")[0] === "a") inside.set(`${x},${z}`, y - 1);
+    const short = new Map<number, number>();
+    // a town door stands open: a shut one is a wall to the path search (it built the storehouse's doors from inside
+    // and couldn't get out to the lamp post)
+    for (const [x, y, z] of cells) if (isDoor(this.get(x, y, z)) && !door(this.get(x, y, z)).open && !door(this.get(x, y, z)).upper && this.reachTo(x, y, z) <= REACH) await this.openDoor(x, y, z);
     let placed = 0;
     let outOf = false;
     let lifts = 0;
@@ -2112,54 +2233,86 @@ export class Body {
     let misses = 0;
     this.action = label;
     const todo = cells.filter(missing);
+    // a cell that won't go in goes to the back of the list, once (the blocks round it may make it reachable)
+    const again = new Set<PlanCell>();
+    const later = (c: PlanCell) => {
+      if (again.has(c)) return;
+      again.add(c);
+      todo.push(c);
+    };
     for (let i = 0; i < todo.length; i++) {
-      // four blocks in a row that wouldn't go in: something's wrong here (walled off, someone in the way), so stop
+      // eight blocks in a row that wouldn't go in: something's wrong here (walled off, someone in the way), so stop
       // and say so rather than walk about trying every cell
-      if (this.abort || this.dead || placed >= max || misses >= 4) break;
+      if (this.abort || this.dead || placed >= max || misses >= 8) break;
       const [x, y, z, k] = todo[i];
       if (!missing(todo[i])) continue;
-      if (k === "a") {
-        // leaves, a trunk or dirt inside the building, in a window or the doorway: dig it out
+      const k0 = k.split("|")[0];
+      if (k0 === "a" || k0 === "o") {
+        // leaves, a trunk, dirt or a leftover block inside the building, in a window or the doorway: dig it out
         if (!(await this.mine(x, y, z))) misses++;
         continue;
       }
-      const id = this.blockFor(k);
-      if (!id) {
-        // nothing of the right kind for this cell (stone for a wall): carry on with the cells it can do
-        if (k !== "t" && k !== "c" && k !== "g") outOf = true;
+      if (k0 === "p" || k0 === "?p") {
+        if (await this.makePath(x, y, z)) placed++;
         continue;
       }
-      // a flower or a sapling growing where a block goes: pick it first (a block can't go in on top of it)
+      const want = this.wantFor(k);
+      if (!want) {
+        // nothing of the right kind for this cell: carry on with the cells it can do, and say what ran out
+        const t = cellTarget(k0);
+        if (t && !t.optional) {
+          outOf = true;
+          const item = itemOf(t.id);
+          short.set(item, (short.get(item) ?? 0) + 1);
+        } else if (!t && k0 !== "t" && k0 !== "c" && k0 !== "g") outOf = true;
+        continue;
+      }
       const cur = this.get(x, y, z);
-      if (cur !== B.AIR && !IS_WATER[cur] && !SOLID[cur] && !BLOCKS[cur]?.replaceable && (isSmallPlant(cur) || cur === B.OAK_SAPLING || cur === B.BIRCH_SAPLING)) await this.mine(x, y, z);
-      // dirt or leaves where a wall or a roof goes: out with it first, then the proper block
-      if (SOLID[cur] && ROUGH.has(cur) && k !== "d") await this.mine(x, y, z);
+      // something else where this block goes: out with it first (a flower, dirt in a wall, the lower-grade block an
+      // upgrade replaces), but never a chest, a bed or a furnace (someone's things), never another building's door
+      if (cur !== B.AIR && !IS_WATER[cur] && !BLOCKS[cur]?.replaceable) {
+        if (KEEP(cur)) {
+          misses++;
+          if (!why) why = `${BLOCKS[cur]?.name ?? "something"} at x=${x} y=${y} z=${z} is in the way`;
+          continue;
+        }
+        if (!(await this.mine(x, y, z))) {
+          misses++;
+          continue;
+        }
+        if (this.get(x, y, z) !== B.AIR && !IS_WATER[this.get(x, y, z)] && !BLOCKS[this.get(x, y, z)]?.replaceable) {
+          misses++;
+          continue;
+        }
+      }
       // never wall itself in: step off a cell before a block goes there
       const fx = Math.floor(this.phys.x);
       const fz = Math.floor(this.phys.z);
       const fy = Math.floor(this.phys.y + 0.1);
-      if (fx === x && fz === z && (y === fy || y === fy + 1)) await this.goto(x + 0.5 + (x % 2 ? 1.6 : -1.6), fy, z + 0.5, 0.8, { maxMs: 3000 });
+      if (SOLID[want.state] && fx === x && fz === z && (y === fy || y === fy + 1)) await this.goto(x + 0.5 + (x % 2 ? 1.6 : -1.6), fy, z + 0.5, 0.8, { maxMs: 3000 });
       // a cell well above the ground round it is out of reach from anywhere down there: no long walk about first
       const round = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) => !footprint.has(`${x + dx},${z + dz}`)).map(([dx, dz]) => this.groundAt(x + dx, z + dz, y));
-      const high = round.length > 0 && y - Math.max(...round) > 4;
-      if (await this.place(id, x, y, z, high ? 3000 : 12000)) {
+      const high = (round.length > 0 && y - Math.max(...round) > 4) || y - fy > 4;
+      if (await this.place(want.item, x, y, z, high ? 3000 : 12000, want.state)) {
         placed++;
         misses = 0;
+        if (isDoor(want.state)) await this.openDoor(x, y, z);
         continue;
       }
       if (this.abort || this.dead) break;
-      // too high to reach from the ground (a roof's far corner, the top of a tower): up a pillar beside it, every
-      // block in reach from up there, then back down the pillar
-      if (this.reachTo(x, y, z) > REACH && lifts < 3) {
+      // too high to reach from the ground (a roof's ridge, the top of a tower): up a pillar beside it (or inside the
+      // room, on the floor), every block in reach from up there, then back down the pillar
+      if (this.reachTo(x, y, z) > REACH && lifts < 4) {
         lifts++;
-        const up = await this.scaffoldTo(x, y, z, footprint);
+        const up = await this.scaffoldTo(x, y, z, footprint, inside);
         if (up >= 0) {
           for (const c of todo.slice(i)) {
             if (this.abort || this.dead || placed >= max) break;
-            const cid = this.blockFor(c[3]);
-            if (!cid || !missing(c) || this.reachTo(c[0], c[1], c[2]) > REACH) continue;
-            if (ROUGH.has(this.get(c[0], c[1], c[2])) && c[3] !== "d") await this.mine(c[0], c[1], c[2], false);
-            if (await this.place(cid, c[0], c[1], c[2])) placed++;
+            const w = this.wantFor(c[3]);
+            if (!w || !missing(c) || this.reachTo(c[0], c[1], c[2]) > REACH) continue;
+            const here = this.get(c[0], c[1], c[2]);
+            if (here !== B.AIR && !IS_WATER[here] && !BLOCKS[here]?.replaceable && (KEEP(here) || !(await this.mine(c[0], c[1], c[2], false)))) continue;
+            if (await this.place(w.item, c[0], c[1], c[2], 20000, w.state)) placed++;
           }
           if (up > 0) await this.climbDown(up);
           if (!missing(todo[i])) {
@@ -2169,6 +2322,7 @@ export class Body {
         }
       }
       misses++;
+      later(todo[i]);
       if (!why && missing(todo[i])) {
         const g = this.groundAt(x, z, y);
         why = this.reachTo(x, y, z) > REACH
@@ -2176,13 +2330,13 @@ export class Body {
           : `something is in the way at x=${x} y=${y} z=${z} (someone standing there, or a block that isn't yours to replace)`;
       }
     }
-    return { placed, left: cells.filter(missing).length, outOf, why };
+    return { placed, left: cells.filter(missing).length, outOf, why, short };
   }
 
   /** Up beside a cell it can't reach from the ground: a pillar of its spare blocks under its feet (the way a player
-   *  builds up to a roof), next to the building and never on it. How many blocks it went up, or -1 if there is no
-   *  spot for one. */
-  private async scaffoldTo(x: number, y: number, z: number, footprint: Set<string>): Promise<number> {
+   *  builds up to a roof), next to the building and never on its walls, or on the floor of the room inside (it takes
+   *  the pillar back down with it). How many blocks it went up, or -1 if there is no spot for one. */
+  private async scaffoldTo(x: number, y: number, z: number, footprint: Set<string>, inside: Map<string, number> = new Map()): Promise<number> {
     const R = REACH - 0.3;
     let best: { cx: number; cz: number; g: number; k: number; score: number } | null = null;
     for (let dz = -3; dz <= 3; dz++)
@@ -2190,12 +2344,13 @@ export class Body {
         const cx = x + dx;
         const cz = z + dz;
         const h = Math.hypot(dx, dz);
-        if (h < 1 || h > 3.2 || footprint.has(`${cx},${cz}`)) continue;
-        const g = this.groundAt(cx, cz, y);
+        const key = `${cx},${cz}`;
+        if (h > 3.2 || (h < 1 && !inside.has(key)) || (footprint.has(key) && !inside.has(key))) continue;
+        const g = inside.get(key) ?? this.groundAt(cx, cz, y);
         if (g < 0) continue;
-        // feet at g + 1 + k, the eyes EYE_HEIGHT above: high enough that the cell is in reach
+        // feet at g + 1 + k, the eyes EYE_HEIGHT above: high enough that the cell is in reach (and not in it)
         const k = Math.max(0, Math.ceil(y + 0.5 - (g + 1 + EYE_HEIGHT) - Math.sqrt(Math.max(0, R * R - h * h))));
-        if (k > 4) continue;
+        if (k > 6 || (h < 1 && g + 1 + k + 1 >= y)) continue;
         let room = true;
         for (let yy = g + 1; yy <= g + k + 2 && room; yy++) if (SOLID[this.get(cx, yy, cz)] || IS_WATER[this.get(cx, yy, cz)]) room = false;
         if (!room) continue;

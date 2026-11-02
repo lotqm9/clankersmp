@@ -20,14 +20,14 @@ let t0 = Date.now();
 console.log("stairs:", await b.stairMine([B.COBBLESTONE], 12), `(${Math.round((Date.now() - t0) / 1000)}s) now at`, at());
 const ground = (x: number, z: number) => b.groundAt(x, z, cy);
 for (const kind of ["well", "lamp"] as const) {
-  const [w, d] = kind === "well" ? [3, 3] : [1, 1];
+  const [w, d] = kind === "well" ? [5, 5] : [1, 1];
   const s = b.siteNear(cx, cz, cy, w, d, [], 12, 3);
   if (!s) {
     console.log(kind, "no site");
     continue;
   }
   t0 = Date.now();
-  const cells = planFor(kind, s.x0, s.z0, s.y, ground);
+  const cells = planFor({ kind, x0: s.x0, z0: s.z0, x1: s.x0 + w - 1, z1: s.z0 + d - 1, y: s.y }, 1, ground);
   const r = await b.buildCells(cells, 90, `building ${kind}`);
   console.log(kind, "at", s.x0, s.y, s.z0, JSON.stringify(r), `(${Math.round((Date.now() - t0) / 1000)}s)`);
 }

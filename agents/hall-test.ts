@@ -14,9 +14,9 @@ await b.wait(30);
 const cx = Math.floor(b.phys.x);
 const cz = Math.floor(b.phys.z);
 const cy = Math.floor(b.phys.y + 0.01);
-const s = b.siteNear(cx, cz, cy, 7, 7, [], 34, 3, 3);
+const s = b.siteNear(cx, cz, cy, 11, 13, [], 34, 3, 3);
 if (!s) throw new Error("no site for a hall");
-const cells = planFor("hall", s.x0, s.z0, s.y, (x, z) => b.groundAt(x, z, cy));
+const cells = planFor({ kind: "hall", x0: s.x0, z0: s.z0, x1: s.x0 + 10, z1: s.z0 + 12, y: s.y }, 1, (x, z) => b.groundAt(x, z, cy));
 console.log("hall at", s.x0, s.y, s.z0, "cells", cells.length);
 
 // the mess: dirt in the bottom of the walls, leaves inside and in a window

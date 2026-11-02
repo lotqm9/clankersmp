@@ -1156,7 +1156,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     s.busy = undefined;
     const missing = left();
     const short = [...this.billOf(cells)].map(([id, n]) => `${n} ${key(id)}`);
-    if (missing <= Math.floor(req.length * (kind === "wall" ? 0.06 : 0.03))) {
+    // done when all but a few trim blocks are in: a cottage's last eave blocks over a slope can be out of reach from
+    // every pillar spot, and sonnet's third cottage sat at "6 blocks to go" (of about 190) for an hour
+    if (missing <= Math.floor(req.length * (kind === "wall" ? 0.06 : 0.035)) || (missing <= 6 && r.why.includes("out of reach") && !r.outOf && req.length >= 120)) {
       const fixed = s.fix;
       const wasDone = s.done;
       s.done = true;

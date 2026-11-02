@@ -47,6 +47,8 @@ function isHome(b: Rect & { kind?: Kind }): boolean {
 }
 /** A building's tier: what it was last measured at (an old record nobody has measured yet: 1). */
 const tierOf = (b: Building) => (isHome(b) ? 0 : b.tier ?? 1);
+/** A kind as the thing being built (the roads are one network: "the roads", not "a building joined by a path"). */
+const nameOf = (k: Kind) => (k === "road" ? "the roads" : civLabel(k));
 /** What a tier adds, in words. */
 const upText = (k: Kind, t: number) => (k === "farm" || k === "road" ? UP_EXTRA[k][t] : KINDS[k].up[t]) ?? "";
 /** How many of a kind the pack has finished, at a tier or better. Houses at tier 0 are any shelter (the homes too);
@@ -1012,8 +1014,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       site = can[0];
       if (!site) {
         const some = PACK.builds.filter((x) => x.kind === kind && !isHome(x));
-        if (!some.length) return `there is no ${civLabel(kind)} to upgrade yet: build one first`;
-        if (some.every((x) => tierOf(x) >= maxTier(kind))) return `every ${civLabel(kind).replace(/^an? |^the /, "")} is at tier ${maxTier(kind)}, the top: ${this.nextWork()}`;
+        if (!some.length) return `there is no ${nameOf(kind)} to upgrade yet: build one first`;
+        if (some.every((x) => tierOf(x) >= maxTier(kind))) return `every ${nameOf(kind).replace(/^an? |^the /, "")} is at tier ${maxTier(kind)}, the top: ${this.nextWork()}`;
         if (some.some((x) => !x.done || tierOf(x) < 1)) return `the ${civLabel(kind, 2)} there are aren't finished (or are old ones that don't meet the tier 1 design): build ${kind} first, then upgrade`;
         return `someone else is working on the ${civLabel(kind, 2)} right now: ${this.nextWork()}`;
       }
@@ -1026,7 +1028,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         const most = Math.max(0, ...STAGES.flatMap((st) => st.needs.filter(([k]) => k === kind).map(([, n]) => n)));
         const final = progress(civCount).next === null;
         const once = kind === "wall" || kind === "road" || kind === "plaza" || kind === "keep";
-        if (once && PACK.builds.some((x) => x.kind === kind)) return `${civLabel(kind)} is already built: upgrade ${kind} to make it better, or ${this.nextWork()}`;
+        if (once && PACK.builds.some((x) => x.kind === kind)) return `${nameOf(kind)} is already built: upgrade ${kind} to make it better, or ${this.nextWork()}`;
         if (!final && most && civCount(kind, 1) >= most) return `the town already has all the ${civLabel(kind, 2)} it needs (${civCount(kind, 1)}): ${this.nextWork()}`;
         const hub = this.hub();
         if (kind === "wall") site = { kind, x0: base.x - 13, z0: base.z - 13, x1: base.x + 13, z1: base.z + 13, y: base.y, by: [], done: false, at: Date.now(), face: 0 };
@@ -1043,13 +1045,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       tier = site.fix ? Math.max(1, site.best ?? 1) : site.done && tierOf(site) >= 1 ? tierOf(site) : 1;
     }
     const s = site;
-    if (others(s)) return `${s.busy!.by} is working on ${civLabel(kind)} right now: help another way (bring them blocks with give, build something else, or gather what the next stage needs)`;
+    if (others(s)) return `${s.busy!.by} is working on ${nameOf(kind)} right now: help another way (bring them blocks with give, build something else, or gather what the next stage needs)`;
     s.busy = { by: this.name, at: Date.now() };
     if (!s.by.includes(this.name)) s.by.push(this.name);
-    const what = `${civLabel(kind)}${tier > 1 ? ` (tier ${tier})` : ""}`;
+    const what = `${nameOf(kind)}${tier > 1 ? ` (tier ${tier})` : ""}`;
     const cells = this.planOf(s, tier).cells;
     if (kind === "road" && !cells.length) {
       s.busy = undefined;
+      if (!s.done) PACK.builds = PACK.builds.filter((x) => x !== s);
+      savePack();
       return "no paths to make yet: the roads join buildings with doors to the plaza (build houses, the plaza, a storehouse first)";
     }
     // stand in the middle and build round itself, the way a player does: everything in a small building is in reach
@@ -1089,7 +1093,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // back up to the town first: from a tunnel under the site the path planner stops right below the cells, so it
       // shuffled about 15 blocks under the watchtower "building" it (opus, after mining stone down there)
       if (b.phys.y < s.y - 3) {
-        b.action = `climbing back up to ${civLabel(kind)}`;
+        b.action = `climbing back up to ${nameOf(kind)}`;
         await b.digOut();
       }
       await toMiddle();
@@ -1110,9 +1114,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       s.best = Math.max(s.best ?? 0, tier);
       s.up = undefined;
       s.stuck = 0;
-      const news = upgrade ? `${this.name} upgraded ${civLabel(kind)} at ${where(s)} to tier ${tier}` : fixed ? `${this.name} fixed up ${civLabel(kind)}` : wasDone ? `${this.name} rebuilt ${civLabel(kind)} to the town's design` : `${s.by.join(" and ")} finished ${civLabel(kind)}`;
+      if (kind === "road") s.joined = this.roadCount(s).slice(0, 2) as [number, number];
+      const news = upgrade ? `${this.name} upgraded ${nameOf(kind)} at ${where(s)} to tier ${tier}` : fixed ? `${this.name} fixed up ${nameOf(kind)}` : wasDone ? `${this.name} rebuilt ${nameOf(kind)} to the town's design` : `${s.by.join(" and ")} finished ${nameOf(kind)}`;
       this.civUpdate(news);
-      return `${upgrade ? `upgraded ${civLabel(kind)} at ${where(s)} to tier ${tier}` : `finished ${what} at ${where(s)}`} (${placed} blocks placed). ${tier < maxTier(kind) ? `It can go to tier ${tier + 1}: ${upText(kind, tier + 1)} (upgrade ${kind}).` : ""}`;
+      return `${upgrade ? `upgraded ${nameOf(kind)} at ${where(s)} to tier ${tier}` : `finished ${what} at ${where(s)}`} (${placed} blocks placed). ${tier < maxTier(kind) ? `It can go to tier ${tier + 1}: ${upText(kind, tier + 1)} (upgrade ${kind}).` : ""}`;
     }
     // a spot where nothing will go in, turn after turn (on a roof, walled off, out of reach): give up on it, so the
     // next build picks a better one instead of everyone trying the same blocks forever
@@ -1120,7 +1125,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (!upgrade && s.stuck >= 3 && !r.outOf && !s.done && kind !== "wall" && kind !== "road") {
       PACK.builds = PACK.builds.filter((x) => x !== s);
       savePack();
-      return `gave up on ${civLabel(kind)} at ${where(s)}: nothing would go in there three times (${r.why || "a bad spot"}). build it again and a better spot gets picked`;
+      return `gave up on ${nameOf(kind)} at ${where(s)}: nothing would go in there three times (${r.why || "a bad spot"}). build it again and a better spot gets picked`;
     }
     savePack();
     const still = short.length ? ` Still needed: ${short.join(", ")}${lacking.size ? ` (${[...lacking].join("; ")})` : ""}.` : "";
@@ -1157,7 +1162,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         spots.sort((p, q) => Math.hypot(p[0] - hub.x, p[2] - hub.z) - Math.hypot(q[0] - hub.x, q[2] - hub.z));
         if (spots.length) return { x0: spots[0][0], z0: spots[0][2], x1: spots[0][0], z1: spots[0][2], y: spots[0][1], face: 0 };
       }
-      const spot = b.siteNear(base.x, base.z, base.y, 1, 1, footprints(), 24, 2, 2);
+      // (off the roads too: never two side by side, a lamp every seven blocks or so)
+      const apart = lamps.map((l) => ({ x0: l.x0 - 5, z0: l.z0 - 5, x1: l.x1 + 5, z1: l.z1 + 5 }));
+      const spot = b.siteNear(base.x, base.z, base.y, 1, 1, [...footprints(), ...apart], 24, 2, 2);
       return spot ? { x0: spot.x0, z0: spot.z0, x1: spot.x0, z1: spot.z0, y: spot.y, face: 0 } : "no open spot near the base for a lamp post: clear some trees near the base";
     }
     const [w, d] = KINDS[kind].size;
@@ -1183,7 +1190,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       }
       return { ...rect, y: spot.y, face };
     }
-    return `no flat open spot near the base for ${civLabel(kind)} (${w} by ${d}): clear some trees or level some ground near the base`;
+    return `no flat open spot near the base for ${nameOf(kind)} (${w} by ${d}): clear some trees or level some ground near the base`;
   }
 
   /** The items a plan still needs, for the cells that still need work (what it carries already taken off). */
@@ -1286,11 +1293,11 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           if (rid === "crafting_table" && (b.has(B.CRAFTING_TABLE) || b.findBlocks([B.CRAFTING_TABLE], 20, 1).length)) continue;
           await b.craft(rid, 1);
         }
-        b.action = `getting stone for ${civLabel(kind)}`;
+        b.action = `getting stone for ${nameOf(kind)}`;
         if (pick()) await this.collect("cobblestone", Math.min(64, short + 4));
         else missing.push("a pickaxe for the stone");
       } else if (id === LOGS || id === B.OAK_LOG) {
-        b.action = `getting oak for ${civLabel(kind)}`;
+        b.action = `getting oak for ${nameOf(kind)}`;
         await this.collect("town_log", Math.min(24, short + 2));
         if (count(id) <= before) missing.push("oak logs (no oak trees near: the town is built of oak)");
       } else if (id === B.SAND && first) {
@@ -1310,7 +1317,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       const from = (MAKE.get(id) as { from: number }).from;
       if (!b.has(from)) continue;
       if (crafts.some(([c]) => c === B.FURNACE) && !b.has(B.FURNACE)) await b.craft("furnace", 1);
-      b.action = `smelting for ${civLabel(kind)}`;
+      b.action = `smelting for ${nameOf(kind)}`;
       const before = b.count(id);
       await b.smelt(from, Math.min(16, n, b.count(from)));
       if (b.count(id) > before) any = true;
@@ -1351,6 +1358,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (n) {
         const [k, , t] = n.need;
         if (k === "trade") return `the next stage needs trades with villagers (trade)`;
+        if (k === "house" && t === 0) return "the camp needs a shelter: build_house (a cottage, build house, takes longer)";
         if (k === "farm" && (t ?? 1) <= 1) return `the next stage needs ${needText(n.need, n.have)}: farm`;
         if ((t ?? 1) > 1) return `the next stage needs ${needText(n.need, n.have)}: upgrade ${k}`;
         return `the next stage needs ${needText(n.need, n.have)}: build ${k}`;
@@ -1369,7 +1377,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (seen.has(x.kind)) continue;
       seen.add(x.kind);
       const t = tierOf(x);
-      out.push({ kind: x.kind, t, text: `${civLabel(x.kind)} at x=${Math.round((x.x0 + x.x1) / 2)} z=${Math.round((x.z0 + x.z1) / 2)}, tier ${t} to ${t + 1}: ${upText(x.kind, t + 1)}` });
+      out.push({ kind: x.kind, t, text: `${nameOf(x.kind)} at x=${Math.round((x.x0 + x.x1) / 2)} z=${Math.round((x.z0 + x.z1) / 2)}, tier ${t} to ${t + 1}: ${upText(x.kind, t + 1)}` });
     }
     return out.sort((p, q) => p.t - q.t);
   }
@@ -1393,13 +1401,13 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       t += ` Next, ${pr.next.name}, still needs: ${want.join(", ")}.`;
     } else t += " You have built a capital: keep it growing (every building to its top tier, more houses, roads and lamps).";
     const at = (x: Rect) => `x=${Math.round((x.x0 + x.x1) / 2)} z=${Math.round((x.z0 + x.z1) / 2)}`;
-    const open = PACK.builds.filter((x) => !x.done).map((x) => `${civLabel(x.kind)} at ${at(x)} (started by ${x.by.join(" and ") || "someone"})`);
+    const open = PACK.builds.filter((x) => !x.done).map((x) => `${nameOf(x.kind)} at ${at(x)} (started by ${x.by.join(" and ") || "someone"})`);
     if (open.length) t += ` Half built, anyone can carry on with build: ${open.join("; ")}.`;
-    const ups = PACK.builds.filter((x) => x.done && x.up).map((x) => `${civLabel(x.kind)} at ${at(x)} to tier ${x.up}`);
+    const ups = PACK.builds.filter((x) => x.done && x.up).map((x) => `${nameOf(x.kind)} at ${at(x)} to tier ${x.up}`);
     if (ups.length) t += ` Upgrades under way (upgrade that kind to carry on): ${ups.join("; ")}.`;
-    const fix = PACK.builds.filter((x) => x.done && x.fix && tierOf(x) >= 0 && !isHome(x)).map((x) => `${civLabel(x.kind)} at ${at(x)}`);
+    const fix = PACK.builds.filter((x) => x.done && x.fix && tierOf(x) >= 0 && !isHome(x)).map((x) => `${nameOf(x.kind)} at ${at(x)}`);
     if (fix.length) t += ` Needs fixing (blocks missing): ${fix.join("; ")}: build that kind to fix it.`;
-    const old = PACK.builds.filter((x) => x.done && !isHome(x) && tierOf(x) < 1 && x.tier !== undefined).map((x) => `${civLabel(x.kind)} at ${at(x)}`);
+    const old = PACK.builds.filter((x) => x.done && !isHome(x) && tierOf(x) < 1 && x.tier !== undefined).map((x) => `${nameOf(x.kind)} at ${at(x)}`);
     if (old.length) t += ` Old buildings that don't meet the town's designs (they don't count until rebuilt: build that kind and it is rebuilt in place): ${old.join("; ")}.`;
     const up = this.upgrades();
     if (up.length) t += ` Upgrades you can do (upgrade <kind>): ${up.slice(0, 4).map((u) => u.text).join("; ")}.`;
@@ -1441,9 +1449,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (was === undefined) site.best = t; // an old record: what stands is its best, nothing to fix back to
       site.best = Math.max(site.best ?? 0, t);
       const fix = t < (site.best ?? 0);
-      if (fix && !site.fix) changed.push(`${civLabel(site.kind)} at x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)} needs fixing: it's down to tier ${t}`);
-      else if (was !== undefined && t !== was) changed.push(`${civLabel(site.kind)} at x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)} is tier ${t}`);
-      else if (was === undefined && t === 0) changed.push(`${civLabel(site.kind)} at x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)} is an old design: rebuild it`);
+      if (fix && !site.fix) changed.push(`${nameOf(site.kind)} at x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)} needs fixing: it's down to tier ${t}`);
+      else if (was !== undefined && t !== was) changed.push(`${nameOf(site.kind)} at x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)} is tier ${t}`);
+      else if (was === undefined && t === 0) changed.push(`${nameOf(site.kind)} at x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)} is an old design: rebuild it`);
       site.fix = fix;
     }
     if (changed.length) this.civUpdate(changed.slice(0, 3).join("; "));

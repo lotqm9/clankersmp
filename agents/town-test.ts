@@ -25,7 +25,9 @@ const tools = ["diamond_pickaxe", "diamond_axe", "diamond_shovel"];
 const keepItems = new Set<number>([I.WATER_BUCKET, I.BUCKET, B.DIRT]);
 
 async function tidy(b: Body, need: Map<number, number>): Promise<void> {
-  // drop whatever the plan doesn't need (the blocks an upgrade mined out), so /give always has room
+  // drop whatever the plan doesn't need (the blocks an upgrade mined out) when it's nearly full, so /give always has
+  // room (not every time: thrown items landed on the roofs and spotted the pictures)
+  if (b.inv.filter((st) => !st).length >= 6) return;
   for (let k = 0; k < 36; k++) {
     const st = b.inv[k];
     if (!st || need.has(st.id) || keepItems.has(st.id) || itemDef(st.id)?.tool) continue;
@@ -86,7 +88,9 @@ async function shot(b: Body, name: string, file: string, s: { kind: string; x0: 
   if (["house", "hall", "storehouse", "keep", "market"].includes(s.kind)) {
     const half = Math.min(s.x1 - s.x0, s.z1 - s.z0) / 2;
     const step = s.kind === "market" ? half + 1 : half - 0.5;
-    poses.push({ out: `${OUT}/${file}-inside.png`, eye: [cx + fx * step, s.y + 1.7, cz + fz * step], look: [cx - fx * half, s.y + 0.8, cz - fz * half], fov: 80 });
+    // (the market's middle is a post: look into the first stall)
+    const side = s.kind === "market" ? 2 : 0;
+    poses.push({ out: `${OUT}/${file}-inside.png`, eye: [cx + fx * step - fz * side, s.y + 1.7, cz + fz * step + fx * side], look: [cx - fx * half - fz * side, s.y + 0.8, cz - fz * half + fx * side], fov: 80 });
   }
   const spec = `${OUT}/${file}.json`;
   writeFileSync(spec, JSON.stringify(poses));

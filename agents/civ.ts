@@ -274,8 +274,10 @@ export const BLUEPRINTS: Record<Plain, Blueprint> = {
     shape: "cottage", core: [7, 8], eaves: 1, walls: 3, baseCourses: 1,
     rooms: "one room, 5 by 6 inside, 3 high and open up to the roof",
     parts: {
-      footing: all3(COB), floor: all3(PL), base: [COB, SBR, SBR], wall: all3(PL), post: all3(LOG), plate: all3(LOG),
-      gable: all3(PL), roof: all3(B.OAK_STAIRS), ridge: all3(PL), window: [FEN, PANE, PANE], chimney: all3(COB), light: all3(B.TORCH),
+      // a cobblestone stair roof at tier 1, oak from tier 2: the 80 oak stairs of the roof were half the wood of a
+      // cottage (about 30 of its 60 logs), and with the oak near the town cut down, season 10's second cottage took
+      // the two of them over an hour; cobblestone comes out of every staircase they dig
+      gable: all3(PL), roof: [B.COBBLE_STAIRS, B.OAK_STAIRS, B.OAK_STAIRS], ridge: all3(PL), window: [FEN, PANE, PANE], chimney: all3(COB), light: all3(B.TORCH),
     },
     windows: [[1, 1, 0], [-2, 1, 0], [0, 1, 2], [0, 1, -3], [-1, 1, 2], [-1, 1, -3], ["mid", 1, -1], ["mid", 4, 0]],
     doors: ["mid"],
@@ -296,7 +298,7 @@ export const BLUEPRINTS: Record<Plain, Blueprint> = {
       { block: B.LANTERN, at: ["mid+1", 1, "out"], tier: 3 },
       { block: B.BOOKSHELF, at: [1, 0, 3], tier: 3, optional: true },
     ],
-    tiers: ["", "the cottage: fence bars in the windows, a crafting table, a chest and a furnace inside", "stone brick base course, glass windows, a chimney, a bed, a second chest and a barrel", "a lantern hanging from the roof, lanterns on posts by the door"],
+    tiers: ["", "the cottage: fence bars in the windows, a crafting table, a chest and a furnace inside", "stone brick base course, an oak roof, glass windows, a chimney, a bed, a second chest and a barrel", "a lantern hanging from the roof, lanterns on posts by the door"],
   },
   storehouse: {
     what: "a stone storehouse with double doors: one long room 6 by 7 inside with chests along the walls for the pack's shared supplies",

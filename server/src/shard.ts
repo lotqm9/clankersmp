@@ -152,6 +152,9 @@ export interface Player {
   follow?: string;
   folSent?: string;
   corrLogAt?: number;
+  /** "inside block" snapbacks in a row, and since when: a loop when the spot it is sent back to is itself bad. */
+  insideN?: number;
+  insideAt?: number;
 }
 
 export interface ShardHooks {
@@ -986,6 +989,25 @@ export class Shard {
 
   private correct(p: Player, why: string): void {
     this.violation(p, why);
+    // sent back over and over to a spot that is itself no good (a block went in beside it: opus was snapped back
+    // to the same water channel in a farm hundreds of times): put it on the nearest free ground instead
+    if (why === "inside block") {
+      const now = Date.now();
+      if (!p.insideAt || now - p.insideAt > 15000) {
+        p.insideAt = now;
+        p.insideN = 0;
+      }
+      p.insideN = (p.insideN ?? 0) + 1;
+      if (p.insideN >= 10) {
+        const spot = this.freeSpotNear(p.vx, p.vy, p.vz);
+        if (spot) {
+          log(`shard ${this.n}: ${p.name} stuck in a snapback loop at ${p.vx.toFixed(2)} ${p.vy.toFixed(2)} ${p.vz.toFixed(2)}: moved to ${spot.join(" ")}`);
+          [p.vx, p.vy, p.vz] = spot;
+        }
+        p.insideN = 0;
+        p.insideAt = now;
+      }
+    }
     if (p.agent && Date.now() - (p.corrLogAt ?? 0) > 3000) {
       // an AI's moves being refused is a bug in its body: say why, where
       p.corrLogAt = Date.now();

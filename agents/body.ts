@@ -633,9 +633,11 @@ export class Body {
     // around water, not through it (a swim is slow and ends in flooded holes), unless it's already swimming
     // room to find the way round a ridge or a ravine on a long walk home (5000 nodes in 40 blocks gave up at 38 out)
     const far = Math.hypot(x - this.phys.x, z - this.phys.z) > 24;
-    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z) });
+    // the height counts too: aimed only at the column, haiku "got home" to a cave ten blocks under its house and opus
+    // "built" the watchtower from a tunnel under it
+    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z), y });
     if (!s) return null;
-    const i = s.reached >= 0 ? s.reached : s.closestTo(x, z);
+    const i = s.reached >= 0 ? s.reached : s.closestTo(x, z, y);
     return s.pathTo(i);
   }
 

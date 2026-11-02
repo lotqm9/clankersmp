@@ -176,7 +176,7 @@ export class PathFinder {
    * Dijkstra from the start over walkable nodes, up to `maxNodes` and `radius`. Returns the explored nodes with
    * their path cost and parent, or null if the body is not standing anywhere (mid-air).
    */
-  search(x: number, y: number, z: number, o: SearchOpts, goal?: { x: number; z: number }): Search | null {
+  search(x: number, y: number, z: number, o: SearchOpts, goal?: { x: number; z: number; y?: number }): Search | null {
     const start = this.startNode(x, y, z, o.hw, o.h);
     if (!start) return null;
     const s = new Search(start);
@@ -193,7 +193,8 @@ export class PathFinder {
       if (done[i]) continue;
       done[i] = 1;
       const p = s.pts[i];
-      if (goal && p.x === goal.x && p.z === goal.z) {
+      // with a height, the column alone isn't the goal: a cave under a house is not the house
+      if (goal && p.x === goal.x && p.z === goal.z && (goal.y === undefined || Math.abs(p.f - goal.y) <= 2.5)) {
         s.reached = i;
         break;
       }
@@ -272,13 +273,13 @@ export class Search {
     return out.reverse();
   }
 
-  /** The explored node closest to (x, z) (a partial path when the goal can't be reached). */
-  closestTo(x: number, z: number): number {
+  /** The explored node closest to (x, z), and to height y when given (a partial path when the goal can't be reached). */
+  closestTo(x: number, z: number, y?: number): number {
     let best = 0;
     let bd = Infinity;
     for (let i = 0; i < this.pts.length; i++) {
       const p = this.pts[i];
-      const d = (p.x + 0.5 - x) ** 2 + (p.z + 0.5 - z) ** 2 + this.cost[i] * 0.01;
+      const d = (p.x + 0.5 - x) ** 2 + (p.z + 0.5 - z) ** 2 + (y === undefined ? 0 : (p.f - y) ** 2) + this.cost[i] * 0.01;
       if (d < bd) {
         bd = d;
         best = i;

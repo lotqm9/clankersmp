@@ -804,9 +804,19 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // the town hall's, so they took its lower walls apart for a house), and never a village's houses
     const stone = plan.blocks.includes(B.STONE);
     if (stone && offLimits(b.phys.x, b.phys.z) && PACK.base) {
+      // out on the ground, not through the rock: in a tunnel under the town it stood still for 3 minutes aiming at a
+      // spot 20 blocks out at its own depth (opus)
+      if (b.phys.y < PACK.base.y - 3) {
+        b.action = `climbing up out of the tunnel`;
+        await b.digOut();
+      }
       const a = Math.atan2(b.phys.z - PACK.base.z, b.phys.x - PACK.base.x);
+      const tx = Math.floor(PACK.base.x + Math.cos(a) * 20);
+      const tz = Math.floor(PACK.base.z + Math.sin(a) * 20);
+      const g = b.groundAt(tx, tz, PACK.base.y);
       b.action = `walking out of the town to mine`;
-      await b.goto(PACK.base.x + Math.cos(a) * 20 + 0.5, b.phys.y, PACK.base.z + Math.sin(a) * 20 + 0.5, 3, { maxMs: 20000 });
+      await b.goto(tx + 0.5, g >= 0 ? g + 1 : PACK.base.y, tz + 0.5, 3, { maxMs: 25000 });
+      if (offLimits(b.phys.x, b.phys.z)) return `couldn't get out of the town to mine stone (it never comes out of the town's own ground): walk out of the base a little (explore), then collect`;
     }
     while (!b.abort && !b.dead && have() - start < count && Date.now() - t0 < 90000) {
       // nothing deep: the deep caves are where Rattlers wait in the dark
@@ -931,8 +941,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         // the pickaxe broke mid-job (sonnet, 47 blocks short of the town hall): make another from what it carries;
         // with no wood for one either, it fetches logs (planks for the roof, and a pickaxe next round)
         const pick = () => { const t = b.bestToolFor(B.STONE); return !!t && canHarvest(B.STONE, t); };
-        for (const rid of ["oak_planks", "birch_planks", "oak_planks_from_palm", "sticks", "stone_pickaxe", "wooden_pickaxe"]) {
+        for (const rid of ["oak_planks", "birch_planks", "oak_planks_from_palm", "sticks", "crafting_table", "stone_pickaxe", "wooden_pickaxe"]) {
           if (pick() || b.abort) break;
+          // (a table only when there's none to carry or use nearby: haiku's pickaxe broke underground with neither)
+          if (rid === "crafting_table" && (b.has(B.CRAFTING_TABLE) || b.findBlocks([B.CRAFTING_TABLE], 20, 1).length)) continue;
           await b.craft(rid, 1);
         }
         this.body.action = `getting ${pick() ? "stone" : "wood"} for ${civLabel(kind)}`;

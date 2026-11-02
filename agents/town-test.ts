@@ -115,18 +115,20 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
     const ground = (x: number, z: number) => b.naturalGround(x, z, cy);
     let site: { kind: Plain | "wall"; x0: number; z0: number; x1: number; z1: number; y: number; face: number };
     if (kind === "wall") {
-      const s = b.siteNear(cx, cz, cy, 27, 27, used, 40, 0, 6);
+      const s = b.siteNear(cx, cz, cy, 27, 27, used, 60, 0, 8);
       if (!s) {
         results.push(`${name} ${kind}: no site`);
+        console.log(`${name} ${kind}: no site`);
         continue;
       }
       site = { kind, x0: s.x0, z0: s.z0, x1: s.x0 + 26, z1: s.z0 + 26, y: s.y, face: 0 };
     } else {
       const face = (mine.indexOf(kind) + names.indexOf(name)) % 4; // turned every way, to test the frames
       const [w, d] = sizeFacing(kind, face);
-      const s = b.siteNear(cx, cz, cy, w, d, used, 40, 0, w * d >= 80 ? 3 : 2);
+      const s = b.siteNear(cx, cz, cy, w, d, used, 60, 0, w * d >= 80 ? 3 : 2);
       if (!s) {
         results.push(`${name} ${kind}: no site`);
+        console.log(`${name} ${kind}: no site`);
         continue;
       }
       site = { kind, x0: s.x0, z0: s.z0, x1: s.x0 + w - 1, z1: s.z0 + d - 1, y: s.y, face };
@@ -171,6 +173,8 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
 
 const per = names.map(() => [] as (Plain | "wall")[]);
 kinds.forEach((k, i) => per[i % names.length].push(k));
-await Promise.all(names.map((n, i) => run(n, per[i], ax + (i - (names.length - 1) / 2) * 44, az)));
+// each body its own patch of ground (CENTRES=x,z;x,z;...), or a row along x from AT
+const centres = process.env.CENTRES ? process.env.CENTRES.split(";").map((c) => c.split(",").map(Number)) : names.map((_, i) => [ax + (i - (names.length - 1) / 2) * 44, az]);
+await Promise.all(names.map((n, i) => run(n, per[i], centres[i][0], centres[i][1])));
 console.log("\n" + results.join("\n"));
 process.exit(results.some((r) => r.includes("FAIL") || r.includes("no site")) ? 1 : 0);

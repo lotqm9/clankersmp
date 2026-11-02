@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { Body, NIGHT_END, NIGHT_START, inHub, type PlanCell, type Rect, type Target } from "./body.ts";
 import { SPAWN_X, SPAWN_Z } from "../shared/constants.ts";
 import { HUB_R } from "../shared/hub12.ts";
-import { KINDS, STAGES, UP_EXTRA, cellTarget, doorStep, faceToward, farmPlan, itemOf, label as civLabel, maxTier, needText, planFor, progress, roadPlan, sizeFacing, wallPlan, type Building, type Kind } from "./civ.ts";
+import { KINDS, STAGES, UP_EXTRA, cellTarget, doorStep, faceToward, farmPlan, homeOf, itemOf, label as civLabel, maxTier, needText, planFor, progress, roadPlan, sizeFacing, wallPlan, type Building, type Kind } from "./civ.ts";
 import { VILLAGE_SITES } from "../shared/villages.ts";
 import { B, BLOCKS, IS_WATER, SOLID } from "../shared/blocks.ts";
 import { I, ITEMS, itemDef, type Stack } from "../shared/items.ts";
@@ -133,7 +133,7 @@ How to play well:
 - Play like a good, fast player: keep busy in daylight and always be working toward the next thing you need. There is always work for the town: the next stage, an upgrade, roads, lamp posts. Never wait for dusk with nothing to do.
 - First day, in this order: oak_log, then oak_planks, sticks, a crafting_table and a wooden_pickaxe. Then cobblestone for a stone_pickaxe and a stone_sword (collect cobblestone digs a staircase down into the rock and walks back up it).
 - For building, get stone the way a player does: one collect cobblestone digs a staircase into the rock and brings back a stack, and wood (oak_log, crafted into planks) comes from trees. A town of cobblestone and planks looks like a town. Dirt only tops you up when you're a few blocks short: don't go digging holes for it. Then kill 3 sheep for wool and craft a bed (3 wool and 3 planks). Then coal_ore for torches. Get food from animals as you go.
-- A house keeps you safe at night: build_house once you have about 38 cobblestone, planks or dirt (walls, a roof, your bed and a torch go in). Beds only go in houses. From then on go_home every evening before dark.
+- A house keeps you safe at night. Your real home is one of the town's cottages: once one is finished and nobody lives in it, build_house moves you in (your bed goes in its place). Before there is one, build_house puts up a small shelter (about 38 cobblestone, planks or dirt: walls, a roof, your bed and a torch). Beds only go in houses. From then on go_home every evening before dark.
 - Food for a growing town comes from farms: a hoe (wooden_hoe or stone_hoe) and wheat_seeds (from breaking tall grass, or a village farm), then farm beside water. Harvest the wheat when it is ripe (harvest) and craft bread.
 - Set yourself a goal (set_goal) and keep notes (note): you only see your last few actions, so write down what matters (where your house is, where the iron was, what the others said or did).
 - You can stay with another player for a while (follow_player), hand them things (give), or talk to them (say).
@@ -172,7 +172,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: "harvest", description: "Cut the ripe wheat near you and plant the seeds straight back. 3 wheat make bread.", input_schema: { type: "object", properties: {} } },
   { name: "loot_chest", description: "Walk to the nearest chest you haven't emptied (within 48 blocks: the villages' houses, treasure on the islands) and take everything in it.", input_schema: { type: "object", properties: {} } },
   { name: "trade", description: "Trade with the nearest villager (within 24 blocks; they live in the villages). Without an offer number it walks over and tells you what they trade; with one, it makes that trade (times: how many).", input_schema: { type: "object", properties: { offer: { type: "integer", minimum: 0, maximum: 8 }, times: { type: "integer", minimum: 1, maximum: 16 } } } },
-  { name: "build_house", description: "Build a small house right here (about 38 cobblestone, planks or dirt): walls, a roof, a door if you have one, and your bed and a torch inside. It becomes your home.", input_schema: { type: "object", properties: {} } },
+  { name: "build_house", description: "Make yourself a home: move into a finished town cottage nobody lives in (your bed goes in), or, with none free, put up a small shelter right here (about 38 cobblestone, planks or dirt: walls, a roof, a door if you have one, your bed and a torch). It becomes your home.", input_schema: { type: "object", properties: {} } },
   { name: "go_home", description: "Go back into your house and shut the door behind you (and sleep, if it's night and your bed is there).", input_schema: { type: "object", properties: {} } },
   { name: "pack_plan", description: "Write down the pack's shared plan: what the three of you are building and who does what. All three see it every turn; anyone can rewrite it as things change.", input_schema: { type: "object", properties: { plan: { type: "string" } }, required: ["plan"] } },
   { name: "go_to_base", description: "Walk back to the pack's base (the first house built becomes it).", input_schema: { type: "object", properties: {} } },
@@ -359,7 +359,7 @@ export class Brain {
     if (this.goal) this.emit("goal", { text: this.goal });
     this.emit("spawn", { dead: false });
     // a house it built before the town was kept in the pack counts too
-    if (this.body.home && !PACK.houses[this.name]) {
+    if (this.body.home && !this.body.home.room && !PACK.houses[this.name]) {
       const h = this.body.home;
       PACK.houses[this.name] = { x0: h.x0, z0: h.z0, x1: h.x0 + 3, z1: h.z0 + 3, y: h.y };
       savePack();
@@ -514,7 +514,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (PACK.base) lines.push(`The pack's base: x=${PACK.base.x} z=${PACK.base.z}, ${Math.round(Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z))} blocks ${dirWord(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z)}.`);
     lines.push(this.civText());
     lines.push(this.goal ? `Your goal: ${this.goal}` : "You have no goal written down (set_goal).");
-    if (b.home) lines.push(`Your home: a house at x=${b.home.x0 + 1} z=${b.home.z0 + 1}, ${Math.round(Math.hypot(b.home.x0 + 2 - b.phys.x, b.home.z0 + 2 - b.phys.z))} blocks ${dirWord(b.home.x0 + 2 - b.phys.x, b.home.z0 + 2 - b.phys.z)}${b.atHome() ? " (you're in it)" : ""}.`);
+    if (b.home) {
+      const [hx, hz] = b.homeMiddle();
+      lines.push(`Your home: ${b.home.room ? "a cottage" : "a shelter"} at x=${Math.floor(hx)} z=${Math.floor(hz)}, ${Math.round(Math.hypot(hx - b.phys.x, hz - b.phys.z))} blocks ${dirWord(hx - b.phys.x, hz - b.phys.z)}${b.atHome() ? " (you're in it)" : ""}.`);
+    }
     if (this.notes.length) lines.push(`Your notes:\n${this.notes.map((n) => `- ${n}`).join("\n")}`);
     // what's around: useful blocks, creatures, players
     const seen: string[] = [];
@@ -736,6 +739,28 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           return r;
         }
         case "build_house": {
+          // a finished cottage nobody lives in: move in (a real room, its own door, the bed in its place) rather than
+          // put up another two by two shelter
+          const cot = PACK.base && PACK.builds.find((x) => x.kind === "house" && !isHome(x) && x.done && tierOf(x) >= 1 && !x.owner && Math.hypot((x.x0 + x.x1) / 2 - b.phys.x, (x.z0 + x.z1) / 2 - b.phys.z) < 60);
+          const mine = PACK.builds.find((x) => x.owner === this.name);
+          if (cot && !mine) {
+            const h = homeOf(cot);
+            if (h) {
+              cot.owner = this.name;
+              b.home = { x0: cot.x0, z0: cot.z0, y: cot.y, door: h.door, room: h.room };
+              this.save();
+              savePack();
+              let bed = "";
+              const bedItem = BLOCKS[B.RED_BED].item || B.RED_BED;
+              if (h.bed && b.has(bedItem)) {
+                const [x, y, z, state] = h.bed;
+                if (await b.place(bedItem, x, y, z, 30000, state)) bed = ", your bed is in";
+              }
+              this.civUpdate(`${this.name} moved into the cottage at x=${Math.round((cot.x0 + cot.x1) / 2)} z=${Math.round((cot.z0 + cot.z1) / 2)}`);
+              return `moved into the cottage at x=${Math.round((cot.x0 + cot.x1) / 2)} z=${Math.round((cot.z0 + cot.z1) / 2)}: it's your home now${bed} (go_home every evening)`;
+            }
+          }
+          if (b.home?.room) return "you already live in a cottage: go_home";
           if (PACK.base && !b.home) {
             const d = Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z);
             if (d > 14) return `the pack's base is at x=${PACK.base.x} z=${PACK.base.z}, ${Math.round(d)} blocks ${dirWord(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z)}: go_to_base first and build next to the others`;
@@ -1623,7 +1648,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // in the middle of digging in or out (it cut dig_out short every minute and left haiku in the rock all night),
     // and not a long walk through the dark once night has fallen
     const tod = b.timeOfDay();
-    const homeFar = b.home ? Math.hypot(b.home.x0 + 2 - b.phys.x, b.home.z0 + 2 - b.phys.z) : 0;
+    const homeFar = b.home ? Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) : 0;
     // a long way out in the late afternoon: start back now, while there's daylight for the walk (opus went 190 blocks
     // after sheep and was still out there at dusk, in a marsh where it couldn't dig in)
     if (b.home && homeFar > 60 && tod >= 9000 && tod < 11600 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)

@@ -45,62 +45,10 @@ export interface Building extends Rect {
   face?: number;
   /** The roads: how many buildings their paths join to the plaza, [any path, paved]. */
   joined?: [number, number];
+  /** A cottage someone has moved into: whose home it is. */
+  owner?: string;
 }
 
-/** What each kind is, for the AIs and the site. size: the rectangle a new one takes (its front along the first number),
- *  eaves and all; tiers: how far it can be upgraded; up[t]: what tier t adds. */
-export const KINDS: Record<Exclude<Kind, "farm" | "road">, { size: [number, number]; tiers: number; what: string; up: string[]; blocks: number[] }> = {
-  house: {
-    size: [9, 9], tiers: 3, blocks: [],
-    what: "a cottage like the villages' houses: a stone footing and base course, oak log corners, plank walls, a gable roof of oak stairs with eaves, a door, windows, a plank floor and torches inside (room for a bed and chests)",
-    up: ["", "the cottage itself (fence bars in the windows)", "stone brick base course, glass windows, a chimney, a chest and a crafting table inside", "a fireplace furnace, a lantern under the roof and lanterns on posts by the door"],
-  },
-  well: {
-    size: [5, 5], tiers: 3, blocks: [],
-    what: "a stone well: a cobblestone rim, fence posts and a little gable roof, the middle of the town",
-    up: ["", "the well, its basin dug but dry", "stone brick rim and water in the basin (a water_bucket)", "a lantern hanging under the roof"],
-  },
-  lamp: {
-    size: [1, 1], tiers: 2, blocks: [],
-    what: "a lamp post (monsters don't spawn in the light)",
-    up: ["", "a log post with a torch on top", "a village lamp: stone brick foot, fence post and a lantern"],
-  },
-  storehouse: {
-    size: [10, 11], tiers: 3, blocks: [],
-    what: "a stone storehouse with double doors and chests along the walls for the pack's shared supplies",
-    up: ["", "cobblestone walls, a plank roof, two chests", "stone brick base course, glass windows, two more chests and barrels", "lanterns and hay bales"],
-  },
-  market: {
-    size: [11, 7], tiers: 3, blocks: [],
-    what: "a market: two stalls under one roof, counters at the front, for trading and meeting",
-    up: ["", "the stalls, counters and roof", "a stone paved floor, chests and barrels behind the counters", "lanterns, hay bales and a crafting table"],
-  },
-  hall: {
-    size: [11, 13], tiers: 3, blocks: [],
-    what: "the town hall: the biggest building, a two-course stone base, log posts, tall windows, a high roof, a long table inside",
-    up: ["", "the hall (fence bars in the windows)", "stone brick base, glass windows, a long table and benches", "lanterns hanging from the roof and lanterns by the door"],
-  },
-  tower: {
-    size: [5, 5], tiers: 3, blocks: [],
-    what: "a stone watchtower: a door, a ladder up inside, a lookout floor with battlements and torches, seen from far away",
-    up: ["", "the tower", "stone brick corners and battlements, glass in the slits", "lanterns on the battlements"],
-  },
-  wall: {
-    size: [27, 27], tiers: 3, blocks: [],
-    what: "a wall all the way round the base with four gates (built a stretch at a time)",
-    up: ["", "a cobblestone wall two high, log gateposts", "a third course of battlements and fence gates in the gateways", "stone brick gate pillars with lanterns"],
-  },
-  plaza: {
-    size: [9, 9], tiers: 3, blocks: [],
-    what: "the town plaza: a paved square with torch posts at its corners, where the town meets",
-    up: ["", "cobblestone paving and corner torch posts", "a stone brick border, benches, lantern posts", "a stone brick monument with a lantern in the middle"],
-  },
-  keep: {
-    size: [9, 9], tiers: 3, blocks: [],
-    what: "the keep: a stone castle tower, walls six high, a ladder to a roof with battlements and corner turrets",
-    up: ["", "the keep in cobblestone", "stone brick base course and corners, glass in the slits, a plank floor", "lanterns on the turrets and inside"],
-  },
-};
 /** How many tiers each kind has (roads and farms too). */
 export const maxTier = (k: Kind): number => (k === "road" ? 2 : k === "farm" ? 3 : KINDS[k].tiers);
 /** What an upgrade of a farm or the roads adds. */
@@ -244,6 +192,277 @@ export function sizeFacing(kind: Exclude<Kind, "farm" | "road">, face: number): 
   return face % 2 ? [d, w] : [w, d];
 }
 
+// ---------------------------------------------------------------- the blueprints
+
+/** A material per tier: [tier 1, tier 2, tier 3]. Every cell of a part is that one block (0: the part is left open). */
+type Mat = [number, number, number];
+const all3 = (id: number): Mat => [id, id, id];
+/** A position along a building's front (u, from its left wall) or into it (v, from its front wall): a number counts
+ *  from that wall (a negative one from the far wall: -1 is the far wall itself, -2 the cell inside it), "mid" is the
+ *  middle ("mid-1", "mid+1" beside it), and "out" (v only) is the step outside the front wall. */
+type Pos = number | string;
+
+/** A piece of furniture (or a light, or a detail) in a blueprint. */
+export interface Furniture {
+  /** The block: a chest, the foot of a bed, a crafting table, a furnace, a lantern, a slab for a table... */
+  block: number;
+  /** [u, dy, v]: dy up from the floor; with `hang` it hangs from the roof over that spot instead. */
+  at: [Pos, number, Pos];
+  /** The way it faces in the building: "in" (to the back), "out" (to the door), "left", "right". A bed's head lies
+   *  that way from its foot; stairs (a bench) have their back that way. */
+  facing?: "in" | "out" | "left" | "right";
+  /** Hangs from the roof (a lantern). */
+  hang?: boolean;
+  /** The first tier it's in. */
+  tier: number;
+  /** A detail it leaves out when the material can't be had (it doesn't hold the building back). */
+  optional?: boolean;
+}
+
+/** The parts a building is made of; a blueprint says which block each one is at each tier. */
+type Part =
+  | "footing" | "floor" | "base" | "wall" | "post" | "plate" | "gable" | "roof" | "ridge" | "window" | "chimney" | "light"
+  | "rim" | "parapet" | "basin" | "corner" | "battlement" | "paving" | "border" | "counter" | "board" | "divider";
+
+/** A building's design as data: its footprint, its rooms, the material of every part at every tier, its windows,
+ *  doors and furniture. The shape (how the parts go together: a gabled cottage, market stalls, a tower...) is drawn
+ *  by one function per shape below; everything that's a choice is here, to read and to tweak. */
+export interface Blueprint {
+  /** What it is, for the AIs and the site. */
+  what: string;
+  shape: "cottage" | "stalls" | "well" | "lamp" | "tower" | "keep" | "plaza";
+  /** The walls' footprint: [along the front, front to back]. */
+  core: [number, number];
+  /** The overhang round it for the eaves: the rectangle it takes is the core and this much all round. */
+  eaves: number;
+  /** How high the walls are (the room inside is that high, then open up into the roof). */
+  walls: number;
+  /** The rooms, in words. */
+  rooms: string;
+  /** How many courses at the foot of the walls are the `base` material (the rest are `wall`). */
+  baseCourses?: number;
+  parts: Partial<Record<Part, Mat>>;
+  /** Windows in the walls: [u, dy, v]. */
+  windows?: [Pos, number, Pos][];
+  /** Posts in the walls besides the corners: [u, v]. */
+  posts?: [Pos, Pos][];
+  /** Doors in the front wall: u. */
+  doors?: Pos[];
+  furniture: Furniture[];
+  /** A chimney up the back wall from this tier, at this u. */
+  chimney?: { tier: number; u: Pos };
+  /** What each tier adds, in words (index 1 to 3). */
+  tiers: string[];
+}
+
+const COB = B.COBBLESTONE;
+const SBR = B.STONE_BRICKS;
+const PL = B.OAK_PLANKS;
+const LOG = B.OAK_LOG;
+const FEN = B.OAK_FENCE;
+const PANE = B.GLASS_PANE;
+/** A row of the same furniture along v (a long table, benches). */
+const along = (u: Pos, dy: number, v0: number, v1: number, f: Omit<Furniture, "at">): Furniture[] => {
+  const out: Furniture[] = [];
+  for (let v = v0; v <= v1; v++) out.push({ ...f, at: [u, dy, v] });
+  return out;
+};
+
+export const BLUEPRINTS: Record<Plain, Blueprint> = {
+  house: {
+    what: "a cottage like the villages' houses: one room 5 by 6 and 3 high inside, open up to the roof, with a door, windows on every side, a plank floor, a crafting table, a chest and a furnace (a bed from tier 2)",
+    shape: "cottage", core: [7, 8], eaves: 1, walls: 3, baseCourses: 1,
+    rooms: "one room, 5 by 6 inside, 3 high and open up to the roof",
+    parts: {
+      footing: all3(COB), floor: all3(PL), base: [COB, SBR, SBR], wall: all3(PL), post: all3(LOG), plate: all3(LOG),
+      gable: all3(PL), roof: all3(B.OAK_STAIRS), ridge: all3(PL), window: [FEN, PANE, PANE], chimney: all3(COB), light: all3(B.TORCH),
+    },
+    windows: [[1, 1, 0], [-2, 1, 0], [0, 1, 2], [0, 1, -3], [-1, 1, 2], [-1, 1, -3], ["mid", 1, -1], ["mid", 4, 0]],
+    doors: ["mid"],
+    chimney: { tier: 2, u: -2 },
+    furniture: [
+      { block: B.TORCH, at: [1, 0, 1], tier: 1 },
+      { block: B.TORCH, at: [-2, 0, 1], tier: 1 },
+      { block: B.CRAFTING_TABLE, at: [1, 0, -2], tier: 1 },
+      { block: B.CHEST, at: [2, 0, -2], facing: "out", tier: 1 },
+      { block: B.FURNACE, at: [-2, 0, -2], facing: "out", tier: 1 },
+      { block: B.RED_BED, at: [-2, 0, 2], facing: "in", tier: 2 },
+      { block: B.CHEST, at: [3, 0, -2], facing: "out", tier: 2 },
+      { block: B.BARREL, at: [1, 0, -3], tier: 2 },
+      { block: B.LANTERN + 1, at: ["mid", 0, 3], hang: true, tier: 3 },
+      { block: FEN, at: ["mid-1", 0, "out"], tier: 3 },
+      { block: B.LANTERN, at: ["mid-1", 1, "out"], tier: 3 },
+      { block: FEN, at: ["mid+1", 0, "out"], tier: 3 },
+      { block: B.LANTERN, at: ["mid+1", 1, "out"], tier: 3 },
+      { block: B.BOOKSHELF, at: [1, 0, 3], tier: 3, optional: true },
+    ],
+    tiers: ["", "the cottage: fence bars in the windows, a crafting table, a chest and a furnace inside", "stone brick base course, glass windows, a chimney, a bed, a second chest and a barrel", "a lantern hanging from the roof, lanterns on posts by the door"],
+  },
+  storehouse: {
+    what: "a stone storehouse with double doors: one long room 6 by 7 inside with chests along the walls for the pack's shared supplies",
+    shape: "cottage", core: [8, 9], eaves: 1, walls: 3, baseCourses: 1,
+    rooms: "one long room, 6 by 7 inside, 3 high",
+    parts: {
+      footing: all3(COB), floor: all3(PL), base: [COB, SBR, SBR], wall: all3(COB), post: all3(LOG), plate: all3(LOG),
+      gable: all3(PL), roof: all3(B.OAK_STAIRS), ridge: all3(PL), window: [FEN, PANE, PANE], light: all3(B.TORCH),
+    },
+    windows: [[0, 1, 2], [0, 1, 4], [0, 1, -3], [-1, 1, 2], [-1, 1, 4], [-1, 1, -3]],
+    doors: ["mid", "mid+1"],
+    furniture: [
+      { block: B.TORCH, at: [1, 0, 1], tier: 1 },
+      { block: B.TORCH, at: [-2, 0, 1], tier: 1 },
+      { block: B.CHEST, at: [1, 0, -2], facing: "right", tier: 1 },
+      { block: B.CHEST, at: [-2, 0, -2], facing: "left", tier: 1 },
+      { block: B.CHEST, at: [1, 0, -3], facing: "right", tier: 2 },
+      { block: B.CHEST, at: [-2, 0, -3], facing: "left", tier: 2 },
+      { block: B.BARREL, at: [2, 0, -2], tier: 2 },
+      { block: B.BARREL, at: [3, 0, -2], tier: 2 },
+      { block: B.BARREL, at: [-4, 0, -2], tier: 2 },
+      { block: B.BARREL, at: [-3, 0, -2], tier: 2 },
+      { block: B.LANTERN + 1, at: ["mid", 0, 2], hang: true, tier: 3 },
+      { block: B.LANTERN + 1, at: ["mid", 0, -3], hang: true, tier: 3 },
+      { block: B.HAY_BALE, at: [1, 0, -4], tier: 3, optional: true },
+      { block: B.HAY_BALE, at: [-2, 0, -4], tier: 3, optional: true },
+    ],
+    tiers: ["", "cobblestone walls, a plank roof, two chests", "stone brick base course, glass windows, two more chests and barrels", "lanterns hanging from the roof, hay bales"],
+  },
+  hall: {
+    what: "the town hall: the biggest building, one open hall 7 by 9 and 4 high inside, a two-course stone base, log posts, tall windows, a high roof, a long table with benches",
+    shape: "cottage", core: [9, 11], eaves: 1, walls: 4, baseCourses: 2,
+    rooms: "one open hall, 7 by 9 inside, 4 high and open up to the roof",
+    parts: {
+      footing: all3(COB), floor: all3(PL), base: [COB, SBR, SBR], wall: all3(PL), post: all3(LOG), plate: all3(LOG),
+      gable: all3(PL), roof: all3(B.OAK_STAIRS), ridge: all3(PL), window: [FEN, PANE, PANE], light: all3(B.TORCH),
+    },
+    posts: [[0, "mid"], [-1, "mid"]],
+    windows: [
+      [0, 1, 2], [0, 2, 2], [0, 1, 3], [0, 2, 3], [0, 1, -4], [0, 2, -4], [0, 1, -3], [0, 2, -3],
+      [-1, 1, 2], [-1, 2, 2], [-1, 1, 3], [-1, 2, 3], [-1, 1, -4], [-1, 2, -4], [-1, 1, -3], [-1, 2, -3],
+      [2, 1, 0], [2, 2, 0], [-3, 1, 0], [-3, 2, 0], [2, 1, -1], [2, 2, -1], [-3, 1, -1], [-3, 2, -1], ["mid", 1, -1], ["mid", 2, -1], ["mid", 5, 0],
+    ],
+    doors: ["mid"],
+    furniture: [
+      { block: B.TORCH, at: [1, 0, 1], tier: 1 },
+      { block: B.TORCH, at: [-2, 0, 1], tier: 1 },
+      { block: B.TORCH, at: [1, 0, -2], tier: 1 },
+      { block: B.TORCH, at: [-2, 0, -2], tier: 1 },
+      ...along("mid", 0, 3, 7, { block: B.OAK_SLAB + 1, tier: 2 }),
+      ...along("mid-1", 0, 3, 7, { block: B.OAK_STAIRS, facing: "left", tier: 2 }),
+      ...along("mid+1", 0, 3, 7, { block: B.OAK_STAIRS, facing: "right", tier: 2 }),
+      { block: B.LANTERN + 1, at: ["mid", 0, 3], hang: true, tier: 3 },
+      { block: B.LANTERN + 1, at: ["mid", 0, -4], hang: true, tier: 3 },
+      { block: FEN, at: ["mid-1", 0, "out"], tier: 3 },
+      { block: B.LANTERN, at: ["mid-1", 1, "out"], tier: 3 },
+      { block: FEN, at: ["mid+1", 0, "out"], tier: 3 },
+      { block: B.LANTERN, at: ["mid+1", 1, "out"], tier: 3 },
+      { block: B.BOOKSHELF, at: [1, 0, -3], tier: 3, optional: true },
+      { block: B.BOOKSHELF, at: [-2, 0, -3], tier: 3, optional: true },
+    ],
+    tiers: ["", "the hall (fence bars in the tall windows)", "stone brick base, glass windows, a long table and benches", "lanterns hanging from the roof and by the door, bookshelves"],
+  },
+  market: {
+    what: "a market: two stalls under one gable roof, oak counters at the front, room behind them for the traders' chests",
+    shape: "stalls", core: [9, 5], eaves: 1, walls: 3,
+    rooms: "two stalls, 3 by 3 behind their counters",
+    parts: {
+      floor: [COB, COB, COB], border: [COB, SBR, SBR], post: all3(LOG), plate: all3(LOG), counter: all3(B.OAK_SLAB + 1), board: all3(PL),
+      divider: all3(FEN), roof: all3(B.OAK_STAIRS), ridge: all3(PL), gable: all3(PL), light: all3(B.TORCH),
+    },
+    furniture: [
+      { block: B.CHEST, at: [1, 0, -2], facing: "out", tier: 2 },
+      { block: B.BARREL, at: [2, 0, -2], tier: 2 },
+      { block: B.CHEST, at: [5, 0, -2], facing: "out", tier: 2 },
+      { block: B.BARREL, at: [6, 0, -2], tier: 2 },
+      { block: B.LANTERN + 1, at: [2, 0, "mid"], hang: true, tier: 3 },
+      { block: B.LANTERN + 1, at: [6, 0, "mid"], hang: true, tier: 3 },
+      { block: B.HAY_BALE, at: [3, 0, -2], tier: 3, optional: true },
+      { block: B.CRAFTING_TABLE, at: [7, 0, -2], tier: 3 },
+    ],
+    tiers: ["", "the stalls, counters and roof on a cobblestone floor", "a stone brick border, chests and barrels behind the counters", "lanterns hanging over the stalls, a crafting table, hay"],
+  },
+  well: {
+    what: "a stone well: a cobblestone rim and parapet, fence posts and a little gable roof, the middle of the town",
+    shape: "well", core: [5, 5], eaves: 0, walls: 3,
+    rooms: "a basin 3 by 3, one deep",
+    parts: { rim: [COB, SBR, SBR], parapet: [B.COBBLE_WALL, B.STONE_BRICK_WALL, B.STONE_BRICK_WALL], post: all3(FEN), roof: all3(B.OAK_STAIRS), ridge: all3(PL), basin: all3(COB) },
+    furniture: [
+      { block: B.WATER, at: ["mid", -1, "mid"], tier: 2 },
+      { block: B.LANTERN + 1, at: ["mid", 0, "mid"], hang: true, tier: 3 },
+    ],
+    tiers: ["", "the well, its basin dug but dry", "stone brick rim and parapet, water in the basin (a water_bucket)", "a lantern hanging under the roof"],
+  },
+  lamp: {
+    what: "a lamp post (monsters don't spawn in the light)",
+    shape: "lamp", core: [1, 1], eaves: 0, walls: 3,
+    rooms: "",
+    parts: { footing: [COB, SBR, SBR], post: [LOG, FEN, FEN], light: [B.TORCH, B.LANTERN, B.LANTERN] },
+    furniture: [],
+    tiers: ["", "a log post with a torch on top", "a village lamp: stone brick foot, fence post and a lantern"],
+  },
+  tower: {
+    what: "a stone watchtower: a door, a ladder up inside, a lookout floor with battlements and torches, seen from far away",
+    shape: "tower", core: [5, 5], eaves: 0, walls: 7,
+    rooms: "a stair well 3 by 3 with a ladder, a lookout on top",
+    parts: { footing: all3(COB), wall: all3(COB), corner: [COB, SBR, SBR], floor: all3(COB), battlement: [COB, SBR, SBR], window: [0, PANE, PANE], light: [B.TORCH, B.TORCH, B.LANTERN] },
+    furniture: [{ block: B.TORCH, at: [1, 0, 1], tier: 1 }],
+    tiers: ["", "the tower", "stone brick corners and battlements, glass in the slits", "lanterns on the battlements"],
+  },
+  keep: {
+    what: "the keep: a stone castle tower, walls six high round a hall 7 by 7, a ladder to a roof with battlements and corner turrets",
+    shape: "keep", core: [9, 9], eaves: 0, walls: 6, baseCourses: 2,
+    rooms: "one hall, 7 by 7 inside, 6 high, a ladder to the roof",
+    parts: { footing: all3(COB), floor: [COB, PL, PL], base: [COB, SBR, SBR], wall: all3(COB), corner: [COB, SBR, SBR], roof: all3(COB), battlement: [COB, SBR, SBR], window: [0, PANE, PANE], light: [B.TORCH, B.TORCH, B.LANTERN] },
+    windows: [[2, 2, 0], [2, 3, 0], [-3, 2, 0], [-3, 3, 0], [0, 2, 2], [0, 3, 2], [0, 2, -3], [0, 3, -3], [-1, 2, 2], [-1, 3, 2], [-1, 2, -3], [-1, 3, -3], [2, 2, -1], [2, 3, -1], [-3, 2, -1], [-3, 3, -1]],
+    doors: ["mid"],
+    furniture: [
+      { block: B.TORCH, at: [1, 0, 1], tier: 1 },
+      { block: B.TORCH, at: [-2, 0, 1], tier: 1 },
+      { block: B.TORCH, at: [1, 0, -2], tier: 1 },
+      { block: B.TORCH, at: [-2, 0, -2], tier: 1 },
+      { block: B.CHEST, at: [2, 0, -2], facing: "out", tier: 2 },
+      { block: B.CRAFTING_TABLE, at: [-3, 0, -2], tier: 2 },
+      { block: B.LANTERN + 1, at: ["mid", 0, "mid"], hang: true, tier: 3 },
+    ],
+    tiers: ["", "the keep in cobblestone", "stone brick base course and corners, glass in the slits, a plank floor, a chest and a crafting table", "lanterns on the turrets and hanging inside"],
+  },
+  plaza: {
+    what: "the town plaza: a paved square with lamp posts at its corners, where the town meets",
+    shape: "plaza", core: [9, 9], eaves: 0, walls: 0,
+    rooms: "an open square 9 by 9",
+    parts: { paving: all3(COB), border: [COB, SBR, SBR], footing: [LOG, SBR, SBR], post: [LOG, FEN, FEN], light: [B.TORCH, B.LANTERN, B.LANTERN] },
+    furniture: [
+      ...[-1, 0, 1].flatMap((k): Furniture[] => [
+        { block: B.OAK_STAIRS, at: [`mid${k ? (k > 0 ? "+1" : "-1") : ""}`, 0, 0], facing: "out", tier: 2 },
+        { block: B.OAK_STAIRS, at: [`mid${k ? (k > 0 ? "+1" : "-1") : ""}`, 0, -1], facing: "in", tier: 2 },
+        { block: B.OAK_STAIRS, at: [0, 0, `mid${k ? (k > 0 ? "+1" : "-1") : ""}`], facing: "left", tier: 2 },
+        { block: B.OAK_STAIRS, at: [-1, 0, `mid${k ? (k > 0 ? "+1" : "-1") : ""}`], facing: "right", tier: 2 },
+      ]),
+      ...[[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]].map(([du, dv]): Furniture => ({ block: B.STONE_BRICK_SLAB, at: [`mid${du ? (du > 0 ? "+1" : "-1") : ""}`, 0, `mid${dv ? (dv > 0 ? "+1" : "-1") : ""}`], tier: 3 })),
+      { block: SBR, at: ["mid", 0, "mid"], tier: 3 },
+      { block: B.STONE_BRICK_WALL, at: ["mid", 1, "mid"], tier: 3 },
+      { block: B.STONE_BRICK_WALL, at: ["mid", 2, "mid"], tier: 3 },
+      { block: B.LANTERN, at: ["mid", 3, "mid"], tier: 3 },
+    ],
+    tiers: ["", "cobblestone paving and corner torch posts", "a stone brick border, benches facing the middle, lantern posts", "a stone brick monument with a lantern in the middle"],
+  },
+};
+
+/** What each kind is for the AIs and the site, from its blueprint (the wall round the base is a line, not a lot).
+ *  size: the rectangle a new one takes, its front along the first number; blocks: how many each tier takes. */
+export const KINDS: Record<Exclude<Kind, "farm" | "road">, { size: [number, number]; tiers: number; what: string; up: string[]; blocks: number[] }> = {
+  ...(Object.fromEntries(
+    (Object.keys(BLUEPRINTS) as Plain[]).map((k) => {
+      const bp = BLUEPRINTS[k];
+      return [k, { size: [bp.core[0] + 2 * bp.eaves, bp.core[1] + 2 * bp.eaves], tiers: bp.tiers.length - 1, what: bp.what, up: bp.tiers, blocks: [] as number[] }];
+    }),
+  ) as Record<Plain, { size: [number, number]; tiers: number; what: string; up: string[]; blocks: number[] }>),
+  wall: {
+    size: [27, 27], tiers: 3, blocks: [],
+    what: "a wall all the way round the base with four gates (built a stretch at a time)",
+    up: ["", "a cobblestone wall two high, log gateposts with torches", "a third course of battlements and fence gates in the gateways", "stone brick gate pillars with lanterns"],
+  },
+};
+
 type Cell = { k: string; late: boolean };
 /** Building a plan in a building's own frame: u along its front (left to right seen from the street), v from the
  *  front wall in, dy up from the floor (dy -1 is the ground course: the footing and the floor). */
@@ -257,13 +476,17 @@ class Draft {
   OUT: number;
   RIGHT: number;
   LEFT: number;
+  /** The roof over a spot in the room (what a lantern hangs from): dy of its underside's first solid block. */
+  ceiling: (u: number, v: number) => number = () => 99;
   private FW: number;
   private FD: number;
   readonly s: Site;
   readonly t: number;
-  constructor(s: Site, t: number, core: [number, number], margin: number) {
+  readonly bp: Blueprint;
+  constructor(s: Site, t: number, bp: Blueprint) {
     this.s = s;
     this.t = t;
+    this.bp = bp;
     const face = s.face ?? 0;
     const rw = s.x1 - s.x0 + 1;
     const rd = s.z1 - s.z0 + 1;
@@ -271,10 +494,11 @@ class Draft {
     this.FD = face % 2 ? rw : rd;
     // a rectangle of the size this design takes: the design with its eaves; anything else is an old building's
     // rectangle (the old plans were smaller): the same design fitted inside it, walls on its edge, no eaves
-    if (this.FW === core[0] + 2 * margin && this.FD === core[1] + 2 * margin) {
-      this.W = core[0];
-      this.D = core[1];
-      this.m = margin;
+    const [cw, cd] = bp.core;
+    if (this.FW === cw + 2 * bp.eaves && this.FD === cd + 2 * bp.eaves) {
+      this.W = cw;
+      this.D = cd;
+      this.m = bp.eaves;
     } else {
       this.W = this.FW;
       this.D = this.FD;
@@ -287,6 +511,23 @@ class Draft {
   }
   get mid() {
     return Math.floor((this.W - 1) / 2);
+  }
+  /** A blueprint position along the front (u) or into the building (v), as a number in the frame. */
+  u(p: Pos): number {
+    return typeof p === "number" ? (p < 0 ? this.W + p : p) : this.mid + Number(p.slice(3) || 0);
+  }
+  v(p: Pos): number {
+    if (p === "out") return -1;
+    return typeof p === "number" ? (p < 0 ? this.D + p : p) : Math.floor((this.D - 1) / 2) + Number(p.slice(3) || 0);
+  }
+  /** The block of a part at this tier (0: the part is left open). */
+  mat(p: Part): number {
+    const m = this.bp.parts[p];
+    return m ? m[Math.min(3, this.t) - 1] : 0;
+  }
+  /** A facing in the building's terms, in the world's. */
+  dir(f: "in" | "out" | "left" | "right"): number {
+    return f === "in" ? this.IN : f === "out" ? this.OUT : f === "left" ? this.LEFT : this.RIGHT;
   }
   /** World x, z of a cell in the frame. */
   at(u: number, v: number): [number, number] {
@@ -307,10 +548,11 @@ class Draft {
   inside(u: number, v: number) {
     return u >= -this.m && v >= -this.m && u < this.W + this.m && v < this.D + this.m;
   }
+  /** Put a block (or a cell kind: "a" keep clear, "o" open, "?p" a path) in a cell; 0 keeps it clear. */
   put(u: number, dy: number, v: number, k: string | number): void {
     if (!this.inside(u, v)) return;
     const [x, z] = this.at(u, v);
-    const kk = typeof k === "number" ? exact(k) : k;
+    const kk = typeof k === "number" ? (k ? exact(k) : "a") : k;
     const t = cellTarget(kk);
     this.cells.set(`${x},${this.s.y + dy},${z}`, { x, y: this.s.y + dy, z, k: kk, late: !!t && late(t.id) });
   }
@@ -323,14 +565,6 @@ class Draft {
     const [x, z] = this.at(u, v);
     this.found.add(`${x},${z}`);
   }
-  get(u: number, dy: number, v: number): string | undefined {
-    const [x, z] = this.at(u, v);
-    return this.cells.get(`${x},${this.s.y + dy},${z}`)?.k;
-  }
-  /** Stone of this tier: cobblestone, stone bricks from tier 2. */
-  stone(from = 2) {
-    return this.t >= from ? B.STONE_BRICKS : B.COBBLESTONE;
-  }
   edge(u: number, v: number) {
     return u === 0 || v === 0 || u === this.W - 1 || v === this.D - 1;
   }
@@ -339,226 +573,143 @@ class Draft {
   }
 }
 
-/** A gabled building in the village style (shared/villages.ts buildHouse): walls `H` high on a cobblestone footing,
- *  the lowest `base` courses in stone, the rest `wall`, oak log posts at the corners (and at `posts` along the
- *  walls) with a log plate on top of the eaves walls, a gable roof of `roof` stairs with a `ridge`, eaves all round,
- *  plank gables. Windows (fence bars, glass from tier 2) at `wins`, a door in the middle of the front (two with
- *  `double`), a plank floor and the inside kept clear. The ridge runs front to back. */
-function gabled(d: Draft, o: { H: number; base: number; wall: number; roof: number; ridge: number; wins: [number, number, number][]; posts?: [number, number][]; double?: boolean; gableWin?: number }): { roofDy: (u: number) => number } {
-  const { W, D, t } = d;
+/** The windows, doors and furniture of a blueprint, at this tier (after the shape, so they take the cells they need). */
+function furnish(d: Draft): void {
+  const bp = d.bp;
+  for (const [u, dy, v] of bp.windows ?? []) d.put(d.u(u), dy, d.v(v), d.mat("window"));
+  for (const u of bp.doors ?? []) {
+    const du = d.u(u);
+    d.put(du, 0, 0, doorId(d.IN, false, false));
+    d.put(du, 1, 0, "o");
+    // the step in front kept open, a path dug to it
+    d.put(du, 0, -1, "o");
+    d.put(du, 1, -1, "o");
+    d.put(du, -1, -1, "?p");
+    d.foot(du, -1);
+  }
+  for (const f of bp.furniture) {
+    if (f.tier > d.t) continue;
+    const u = d.u(f.at[0]);
+    const v = d.v(f.at[2]);
+    const dy = f.hang ? d.ceiling(u, v) - 1 : f.at[1];
+    let id = f.block;
+    if (f.facing && (isChest(id) || isFurnace(id) || id === B.RED_BED || stairBase(id) >= 0 || isLadder(id))) id += d.dir(f.facing);
+    if (f.optional) d.opt(u, dy, v, id);
+    else d.put(u, dy, v, id);
+    if (f.block === B.RED_BED) {
+      // the bed's head lies the way it faces: that cell is kept clear for it
+      const [hu, hv] = f.facing === "in" ? [u, v + 1] : f.facing === "out" ? [u, v - 1] : f.facing === "left" ? [u - 1, v] : [u + 1, v];
+      d.put(hu, dy, hv, "a");
+    }
+  }
+}
+
+/** A gabled building in the village style (shared/villages.ts buildHouse): walls `walls` high on a cobblestone
+ *  footing, the lowest courses the `base` material and the rest `wall`, log posts at the corners (and the blueprint's
+ *  posts) with a log plate on top of the eaves walls, a gable roof of stairs with a ridge, eaves all round, plank
+ *  gables, a floor, the room kept clear. The ridge runs front to back; a chimney up the back wall from its tier. */
+function cottage(d: Draft): void {
+  const { W, D, t, bp } = d;
+  const H = bp.walls;
   const mid = d.mid;
-  const glaze = t >= 2 ? B.GLASS_PANE : B.OAK_FENCE;
-  const roofDy = (u: number) => (u < 0 || u >= W ? o.H : o.H + 1 + Math.min(u, W - 1 - u));
+  const roofDy = (u: number) => (u < 0 || u >= W ? H : H + 1 + Math.min(u, W - 1 - u));
+  d.ceiling = (u) => roofDy(u);
+  const posts = (bp.posts ?? []).map(([u, v]) => [d.u(u), d.v(v)]);
   for (let v = 0; v < D; v++)
     for (let u = 0; u < W; u++) {
       d.foot(u, v);
       const edge = d.edge(u, v);
-      d.put(u, -1, v, edge ? B.COBBLESTONE : B.OAK_PLANKS);
-      for (let dy = 0; dy < o.H; dy++) {
+      d.put(u, -1, v, edge ? d.mat("footing") : d.mat("floor"));
+      for (let dy = 0; dy < H; dy++) {
         if (!edge) d.put(u, dy, v, "a");
-        else if (d.corner(u, v) || o.posts?.some(([pu, pv]) => pu === u && pv === v)) d.put(u, dy, v, B.OAK_LOG);
-        else d.put(u, dy, v, dy < o.base ? d.stone() : o.wall);
+        else if (d.corner(u, v) || posts.some(([pu, pv]) => pu === u && pv === v)) d.put(u, dy, v, d.mat("post"));
+        else d.put(u, dy, v, dy < (bp.baseCourses ?? 0) ? d.mat("base") : d.mat("wall"));
       }
     }
   // the plate: a log beam along the top of the two eaves walls, which the roof's first row rests on
-  for (let v = 0; v < D; v++) for (const u of [0, W - 1]) d.put(u, o.H, v, B.OAK_LOG);
-  // the gables, plank, up to the roof
-  for (const v of [0, D - 1]) for (let u = 1; u < W - 1; u++) for (let dy = o.H; dy < roofDy(u); dy++) d.put(u, dy, v, B.OAK_PLANKS);
-  // the roof, eaves and all
-  const two = W % 2 === 0; // an even width: a ridge two blocks wide
+  for (let v = 0; v < D; v++) for (const u of [0, W - 1]) d.put(u, H, v, d.mat("plate"));
+  // the gables, up to the roof
+  for (const v of [0, D - 1]) for (let u = 1; u < W - 1; u++) for (let dy = H; dy < roofDy(u); dy++) d.put(u, dy, v, d.mat("gable"));
+  // the roof, eaves and all (an even width: a ridge two blocks wide)
+  const two = W % 2 === 0;
   for (let v = -d.m; v < D + d.m; v++)
     for (let u = -d.m; u < W + d.m; u++) {
       const top = two ? u === W / 2 - 1 || u === W / 2 : u === mid;
-      d.put(u, roofDy(u), v, top ? o.ridge : o.roof + (u < W / 2 ? d.RIGHT : d.LEFT));
+      d.put(u, roofDy(u), v, top ? d.mat("ridge") : d.mat("roof") + (u < W / 2 ? d.RIGHT : d.LEFT));
     }
-  // windows
-  for (const [u, dy, v] of o.wins) d.put(u, dy, v, glaze);
-  if (o.gableWin !== undefined) {
-    d.put(mid, o.gableWin, 0, glaze);
-    if (two) d.put(mid + 1, o.gableWin, 0, glaze);
+  if (bp.chimney && t >= bp.chimney.tier) {
+    const cu = d.u(bp.chimney.u);
+    for (let dy = H; dy <= roofDy(cu) + 2; dy++) d.put(cu, dy, D - 1, d.mat("chimney"));
   }
-  // the door (or two), the doorway over it, the step in front kept open and a path dug to it
-  for (const u of o.double ? [mid, mid + 1] : [mid]) {
-    d.put(u, 0, 0, doorId(d.IN, false, false));
-    d.put(u, 1, 0, "o");
-    d.put(u, 0, -1, "o");
-    d.put(u, 1, -1, "o");
-    d.put(u, -1, -1, "?p");
-    d.foot(u, -1);
-  }
-  return { roofDy };
+  furnish(d);
 }
 
-function house(d: Draft): void {
-  const { W, D, t } = d;
-  const mid = d.mid;
-  const wins: [number, number, number][] = [[1, 1, 0], [W - 2, 1, 0], [mid, 1, D - 1]];
-  for (let v = 2; v < D - 1; v += 2) wins.push([0, 1, v], [W - 1, 1, v]);
-  const { roofDy } = gabled(d, { H: 3, base: 1, wall: B.OAK_PLANKS, roof: B.OAK_STAIRS, ridge: B.OAK_PLANKS, wins, gableWin: 4 });
-  // light: torches in the front corners inside
-  d.put(1, 0, 1, B.TORCH);
-  d.put(W - 2, 0, 1, B.TORCH);
-  const big = W >= 7;
-  if (t >= 2) {
-    // a cobblestone chimney up the back wall and through the roof; a chest and a crafting table at the back
-    const cu = W - 2;
-    for (let dy = 3; dy <= roofDy(cu) + 2; dy++) d.put(cu, dy, D - 1, B.COBBLESTONE);
-    d.put(1, 0, D - 2, B.CHEST + d.OUT);
-    if (big) d.put(2, 0, D - 2, B.CRAFTING_TABLE);
-  }
-  if (t >= 3) {
-    if (big) d.put(W - 2, 0, D - 2, B.FURNACE + d.OUT); // the fireplace, under the chimney
-    d.put(mid, roofDy(mid) - 1, Math.floor(D / 2), B.LANTERN + 1);
-    if (d.m) for (const u of [mid - 1, mid + 1]) {
-      d.put(u, 0, -1, B.OAK_FENCE);
-      d.put(u, 1, -1, B.LANTERN);
-    }
-  }
-}
-
-function storehouse(d: Draft): void {
-  const { W, D, t } = d;
-  const wins: [number, number, number][] = [];
-  for (let v = 2; v < D - 1; v += 2) wins.push([0, 1, v], [W - 1, 1, v]);
-  // stone walls with a stone brick plinth from tier 2, a plank roof: the village smithy's weight with a barn's roof
-  const { roofDy } = gabled(d, { H: 3, base: 1, wall: B.COBBLESTONE, roof: B.OAK_STAIRS, ridge: B.OAK_PLANKS, wins, double: W % 2 === 0 && W >= 6 });
-  d.put(1, 0, 1, B.TORCH);
-  d.put(W - 2, 0, 1, B.TORCH);
-  // chests along the side walls, at the back
-  const rows = t >= 2 ? [D - 2, D - 3] : [D - 2];
-  for (const v of rows) {
-    d.put(1, 0, v, B.CHEST + d.RIGHT);
-    d.put(W - 2, 0, v, B.CHEST + d.LEFT);
-  }
-  if (t >= 2 && W >= 6) for (let u = 2; u < W - 2; u++) d.put(u, 0, D - 2, B.BARREL);
-  if (t >= 3) {
-    for (const v of [2, D - 4]) d.put(Math.floor(W / 2), roofDy(Math.floor(W / 2)) - 1, v, B.LANTERN + 1);
-    if (D >= 7) {
-      d.opt(1, 0, D - 4, B.HAY_BALE);
-      d.opt(W - 2, 0, D - 4, B.HAY_BALE);
-    }
-  }
-}
-
-function hall(d: Draft): void {
-  const { W, D, t } = d;
-  const mid = d.mid;
-  const H = 4;
-  // posts along the long walls every few blocks, framing pairs of tall windows: the timber frame of a great hall
-  const posts: [number, number][] = [];
-  const pv = D >= 9 ? [Math.floor(D / 2)] : [];
-  for (const v of pv) posts.push([0, v], [W - 1, v]);
-  const wins: [number, number, number][] = [];
-  for (let v = 2; v < D - 2; v++) if (!pv.includes(v) && !pv.includes(v - 1) && !pv.includes(v + 1)) for (const dy of [1, 2]) wins.push([0, dy, v], [W - 1, dy, v]);
-  for (const u of [2, W - 3]) if (u !== mid) for (const dy of [1, 2]) wins.push([u, dy, 0], [u, dy, D - 1]);
-  for (const dy of [1, 2]) wins.push([mid, dy, D - 1]);
-  const { roofDy } = gabled(d, { H, base: 2, wall: B.OAK_PLANKS, roof: B.OAK_STAIRS, ridge: B.OAK_PLANKS, wins, posts, gableWin: H + 1 });
-  for (const [u, v] of [[1, 1], [W - 2, 1], [1, D - 2], [W - 2, D - 2]]) d.put(u, 0, v, B.TORCH);
-  if (t >= 2 && W >= 7 && D >= 7) {
-    // a long table down the middle (oak slabs, top half), benches of stairs either side facing it
-    for (let v = 3; v <= D - 4; v++) {
-      d.put(mid, 0, v, B.OAK_SLAB + 1);
-      d.put(mid - 1, 0, v, B.OAK_STAIRS + d.LEFT);
-      d.put(mid + 1, 0, v, B.OAK_STAIRS + d.RIGHT);
-    }
-  }
-  if (t >= 3) {
-    for (const v of [Math.floor(D / 3), D - 1 - Math.floor(D / 3)]) d.put(mid, roofDy(mid) - 1, v, B.LANTERN + 1);
-    if (d.m) for (const u of [mid - 1, mid + 1]) {
-      d.put(u, 0, -1, B.OAK_FENCE);
-      d.put(u, 1, -1, B.LANTERN);
-    }
-  }
-}
-
-function market(d: Draft): void {
-  const { W, D, t } = d;
-  // two (or more) stalls side by side under one gable roof whose ridge runs along the front: log posts, counters of
-  // oak slabs at the front, plank boards at the back, fences between the stalls
-  const stalls: number[] = [0];
-  for (let u = 4; u < W; u += 4) stalls.push(u);
-  if (stalls[stalls.length - 1] !== W - 1) stalls.push(W - 1);
+/** Market stalls side by side under one gable roof whose ridge runs along the front: log posts every four blocks, a
+ *  counter between the front posts, plank boards at the back, fences between the stalls, a paved floor. */
+function stalls(d: Draft): void {
+  const { W, D } = d;
+  const posts: number[] = [0];
+  for (let u = 4; u < W; u += 4) posts.push(u);
+  if (posts[posts.length - 1] !== W - 1) posts.push(W - 1);
   const back = D - 1;
   for (let v = 0; v < D; v++)
     for (let u = 0; u < W; u++) {
       d.foot(u, v);
-      d.put(u, -1, v, t >= 2 ? (v === 0 || v === back || u === 0 || u === W - 1 ? B.STONE_BRICKS : B.COBBLESTONE) : B.COBBLESTONE);
+      d.put(u, -1, v, d.edge(u, v) ? d.mat("border") : d.mat("floor"));
       for (let dy = 0; dy < 3; dy++) d.put(u, dy, v, "a");
     }
-  for (const u of stalls)
-    for (const v of [0, back]) for (let dy = 0; dy < 3; dy++) d.put(u, dy, v, B.OAK_LOG);
+  for (const u of posts) for (const v of [0, back]) for (let dy = 0; dy < 3; dy++) d.put(u, dy, v, d.mat("post"));
   for (let u = 0; u < W; u++) {
-    if (stalls.includes(u)) continue;
-    d.put(u, 0, 0, B.OAK_SLAB + 1); // the counter
-    d.put(u, 0, back, B.OAK_PLANKS);
-    d.put(u, 1, back, B.OAK_PLANKS);
+    if (posts.includes(u)) continue;
+    d.put(u, 0, 0, d.mat("counter"));
+    d.put(u, 0, back, d.mat("board"));
+    d.put(u, 1, back, d.mat("board"));
   }
-  for (const u of stalls.slice(1, -1)) for (let v = 1; v < back; v++) d.put(u, 0, v, B.OAK_FENCE);
-  for (const u of [0, W - 1]) for (let v = 1; v < back; v++) d.put(u, 0, v, B.OAK_FENCE);
-  // the roof: a gable along the front, eaves over the counters and the back
+  for (const u of posts) if (u !== 0 && u !== W - 1) for (let v = 1; v < back; v++) d.put(u, 0, v, d.mat("divider"));
+  for (const u of [0, W - 1]) for (let v = 1; v < back; v++) d.put(u, 0, v, d.mat("divider"));
   const mv = Math.floor(back / 2);
   const roofDy = (v: number) => 3 + Math.min(v + d.m, back + d.m - v);
+  d.ceiling = (_u, v) => roofDy(v);
   for (let v = -d.m; v <= back + d.m; v++)
-    for (let u = -d.m; u < W + d.m; u++) d.put(u, roofDy(v), v, v === mv && back % 2 === 0 ? B.OAK_PLANKS : B.OAK_STAIRS + (v <= mv - (back % 2 === 0 ? 1 : 0) ? d.IN : d.OUT));
-  // plank gables at the two ends
-  for (const u of [0, W - 1]) for (let v = 0; v <= back; v++) for (let dy = 3; dy < roofDy(v); dy++) d.put(u, dy, v, B.OAK_PLANKS);
-  // a beam along the top of the posts, front and back, under the roof's first row
-  for (let u = 1; u < W - 1; u++) for (const v of [0, back]) if (roofDy(v) > 3) d.put(u, 3, v, B.OAK_LOG);
-  for (const u of stalls) d.put(u, 0, 1, B.TORCH);
-  if (t >= 2)
-    for (let k = 0; k + 1 < stalls.length; k++) {
-      const u = stalls[k] + 1;
-      d.put(u, 0, back - 1, B.CHEST + d.OUT);
-      d.put(u + 1, 0, back - 1, B.BARREL);
-    }
-  if (t >= 3) {
-    for (let k = 0; k + 1 < stalls.length; k++) {
-      const c = Math.floor((stalls[k] + stalls[k + 1]) / 2);
-      d.put(c, roofDy(mv) - 1, mv, B.LANTERN + 1);
-      d.opt(stalls[k + 1] - 1, 0, back - 1, B.HAY_BALE);
-    }
-    d.put(W - 2, 0, 1, B.CRAFTING_TABLE);
-  }
+    for (let u = -d.m; u < W + d.m; u++) d.put(u, roofDy(v), v, v === mv && back % 2 === 0 ? d.mat("ridge") : d.mat("roof") + (v <= mv - (back % 2 === 0 ? 1 : 0) ? d.IN : d.OUT));
+  for (const u of [0, W - 1]) for (let v = 0; v <= back; v++) for (let dy = 3; dy < roofDy(v); dy++) d.put(u, dy, v, d.mat("gable"));
+  for (let u = 1; u < W - 1; u++) for (const v of [0, back]) if (roofDy(v) > 3) d.put(u, 3, v, d.mat("plate"));
+  for (const u of posts) d.put(u, 0, 1, d.mat("light"));
+  furnish(d);
 }
 
 function well(d: Draft): void {
-  const { W, D, t } = d;
+  const { W, D } = d;
   for (let v = 0; v < D; v++)
     for (let u = 0; u < W; u++) {
       d.foot(u, v);
-      const edge = d.edge(u, v);
-      if (edge) {
-        d.put(u, -1, v, d.stone());
-        d.put(u, 0, v, d.corner(u, v) ? d.stone() : t >= 2 ? B.STONE_BRICK_WALL : B.COBBLE_WALL);
+      if (d.edge(u, v)) {
+        d.put(u, -1, v, d.mat("rim"));
+        d.put(u, 0, v, d.corner(u, v) ? d.mat("rim") : d.mat("parapet"));
       } else {
-        // the basin: one deep (anyone can step back out), a cobblestone bottom, water from tier 2
-        d.put(u, -2, v, B.COBBLESTONE);
+        // the basin: one deep (anyone can step back out)
+        d.put(u, -2, v, d.mat("basin"));
         d.put(u, -1, v, "a");
         d.put(u, 0, v, "a");
       }
     }
-  if (t >= 2) d.put(Math.floor(W / 2), -1, Math.floor(D / 2), B.WATER);
-  for (const [u, v] of [[0, 0], [W - 1, 0], [0, D - 1], [W - 1, D - 1]]) for (const dy of [1, 2]) d.put(u, dy, v, B.OAK_FENCE);
-  // a little gable roof of oak stairs, its ridge along u
+  for (const [u, v] of [[0, 0], [W - 1, 0], [0, D - 1], [W - 1, D - 1]]) for (const dy of [1, 2]) d.put(u, dy, v, d.mat("post"));
+  // a little gable roof, its ridge along u
   const mv = Math.floor((D - 1) / 2);
   const roofDy = (v: number) => 3 + Math.min(v, D - 1 - v);
-  for (let v = 0; v < D; v++) for (let u = 0; u < W; u++) d.put(u, roofDy(v), v, v === mv ? B.OAK_PLANKS : B.OAK_STAIRS + (v < mv ? d.IN : d.OUT));
-  if (t >= 3) d.put(Math.floor(W / 2), roofDy(mv) - 1, mv, B.LANTERN + 1);
+  d.ceiling = (_u, v) => roofDy(v);
+  for (let v = 0; v < D; v++) for (let u = 0; u < W; u++) d.put(u, roofDy(v), v, v === mv ? d.mat("ridge") : d.mat("roof") + (v < mv ? d.IN : d.OUT));
+  furnish(d);
 }
 
 function lamp(d: Draft): void {
   d.foot(0, 0);
-  if (d.t >= 2) {
-    d.put(0, 0, 0, B.STONE_BRICKS);
-    d.put(0, 1, 0, B.OAK_FENCE);
-    d.put(0, 2, 0, B.OAK_FENCE);
-    d.put(0, 3, 0, B.LANTERN);
-  } else {
-    d.put(0, 0, 0, B.COBBLESTONE);
-    d.put(0, 1, 0, B.OAK_LOG);
-    d.put(0, 2, 0, B.OAK_LOG);
-    d.put(0, 3, 0, B.TORCH); // a torch needs a solid block under it: on a log, never on a fence
-  }
+  d.put(0, 0, 0, d.mat("footing"));
+  d.put(0, 1, 0, d.mat("post"));
+  d.put(0, 2, 0, d.mat("post"));
+  // a torch needs a solid block under it (a log, never a fence); a lantern stands on a fence
+  d.put(0, 3, 0, d.mat("light"));
+  furnish(d);
 }
 
 /** Battlements on a ring at height dy: merlons on the corners and every other block, gaps between. */
@@ -572,23 +723,23 @@ function battlements(d: Draft, dy: number, block: number): void {
     }
 }
 
+/** A stone tower: walls `walls` high round a stair well, a door, a ladder up the back wall to a hatch in the lookout
+ *  floor, battlements round it with lights on the corners, slits up the sides and over the door. */
 function tower(d: Draft): void {
-  const { W, D, t } = d;
+  const { W, D } = d;
   const mid = d.mid;
-  const H = 7;
-  // corners in stone bricks from tier 2 (quoins), the rest cobblestone
+  const H = d.bp.walls;
   for (let v = 0; v < D; v++)
     for (let u = 0; u < W; u++) {
       d.foot(u, v);
       const edge = d.edge(u, v);
-      d.put(u, -1, v, B.COBBLESTONE);
-      for (let dy = 0; dy < H; dy++) d.put(u, dy, v, edge ? (d.corner(u, v) ? d.stone() : B.COBBLESTONE) : "a");
-      d.put(u, H, v, d.corner(u, v) ? d.stone() : B.COBBLESTONE); // the lookout floor
+      d.put(u, -1, v, d.mat("footing"));
+      for (let dy = 0; dy < H; dy++) d.put(u, dy, v, edge ? (d.corner(u, v) ? d.mat("corner") : d.mat("wall")) : "a");
+      d.put(u, H, v, d.corner(u, v) ? d.mat("corner") : d.mat("floor"));
     }
-  // slits up the sides and over the door, glass from tier 2 (none in the back wall: the ladder leans on it)
-  for (const [u, v] of [[0, Math.floor(D / 2)], [W - 1, Math.floor(D / 2)]]) for (const dy of [3, 4]) d.put(u, dy, v, t >= 2 ? B.GLASS_PANE : "a");
-  for (const dy of [3, 4]) d.put(mid, dy, 0, t >= 2 ? B.GLASS_PANE : "a");
-  // the door, and the ladder up the back wall to a hatch in the lookout floor
+  d.ceiling = () => H;
+  // slits (none in the back wall: the ladder leans on it)
+  for (const [u, v] of [[0, Math.floor(D / 2)], [W - 1, Math.floor(D / 2)], [mid, 0]]) for (const dy of [3, 4]) d.put(u, dy, v, d.mat("window"));
   d.put(mid, 0, 0, doorId(d.IN, false, false));
   d.put(mid, 1, 0, "o");
   d.put(mid, 0, -1, "o");
@@ -596,95 +747,56 @@ function tower(d: Draft): void {
   const lv = D > 3 ? D - 2 : 1;
   for (let dy = 0; dy <= H; dy++) d.put(mid, dy, lv, B.LADDER + d.OUT);
   d.put(mid, H + 1, lv, "o");
-  battlements(d, H + 1, t >= 2 ? B.STONE_BRICKS : B.COBBLESTONE);
-  for (const [u, v] of [[0, 0], [W - 1, 0], [0, D - 1], [W - 1, D - 1]]) d.put(u, H + 2, v, t >= 3 ? B.LANTERN : B.TORCH);
-  if (D > 3) d.put(1, 0, 1, B.TORCH);
+  battlements(d, H + 1, d.mat("battlement"));
+  for (const [u, v] of [[0, 0], [W - 1, 0], [0, D - 1], [W - 1, D - 1]]) d.put(u, H + 2, v, d.mat("light"));
+  furnish(d);
 }
 
+/** The keep: stone walls round one tall hall, the lowest courses and the corners in the `base`/`corner` stone, a
+ *  stone roof with a ladder up to it, battlements and corner turrets. */
 function keep(d: Draft): void {
-  const { W, D, t } = d;
+  const { W, D } = d;
   const mid = d.mid;
-  const H = 6;
+  const H = d.bp.walls;
   for (let v = 0; v < D; v++)
     for (let u = 0; u < W; u++) {
       d.foot(u, v);
       const edge = d.edge(u, v);
-      d.put(u, -1, v, edge ? B.COBBLESTONE : t >= 2 ? B.OAK_PLANKS : B.COBBLESTONE);
-      for (let dy = 0; dy < H; dy++) d.put(u, dy, v, edge ? (d.corner(u, v) || dy < 2 ? d.stone() : B.COBBLESTONE) : "a");
-      d.put(u, H, v, B.COBBLESTONE); // the roof
+      d.put(u, -1, v, edge ? d.mat("footing") : d.mat("floor"));
+      for (let dy = 0; dy < H; dy++) d.put(u, dy, v, edge ? (d.corner(u, v) ? d.mat("corner") : dy < (d.bp.baseCourses ?? 0) ? d.mat("base") : d.mat("wall")) : "a");
+      d.put(u, H, v, d.mat("roof"));
     }
-  for (const [u, v] of [[2, 0], [W - 3, 0], [0, 2], [0, D - 3], [W - 1, 2], [W - 1, D - 3], [2, D - 1], [W - 3, D - 1]])
-    for (const dy of [2, 3]) d.put(u, dy, v, t >= 2 ? B.GLASS_PANE : "a");
-  d.put(mid, 0, 0, doorId(d.IN, false, false));
-  d.put(mid, 1, 0, "o");
-  d.put(mid, 0, -1, "o");
-  d.put(mid, 1, -1, "o");
+  d.ceiling = () => H;
   for (let dy = 0; dy <= H; dy++) d.put(mid, dy, D - 2, B.LADDER + d.OUT);
   d.put(mid, H + 1, D - 2, "o");
-  battlements(d, H + 1, d.stone());
-  // corner turrets: two more blocks on each corner
+  battlements(d, H + 1, d.mat("battlement"));
   for (const [u, v] of [[0, 0], [W - 1, 0], [0, D - 1], [W - 1, D - 1]]) {
-    d.put(u, H + 2, v, d.stone());
-    d.put(u, H + 3, v, t >= 3 ? B.LANTERN : B.TORCH);
+    d.put(u, H + 2, v, d.mat("battlement"));
+    d.put(u, H + 3, v, d.mat("light"));
   }
-  for (const [u, v] of [[1, 1], [W - 2, 1], [1, D - 2], [W - 2, D - 3]]) d.put(u, 0, v, B.TORCH);
-  if (t >= 3) d.put(mid, H - 1, Math.floor(D / 2), B.LANTERN + 1);
+  furnish(d);
 }
 
+/** The plaza: paving over the square (a border of its own stone), kept clear above, lamp posts a step in from the
+ *  corners; benches and the monument are its furniture. */
 function plaza(d: Draft): void {
-  const { W, D, t } = d;
-  const cu = Math.floor(W / 2);
-  const cv = Math.floor(D / 2);
+  const { W, D } = d;
   for (let v = 0; v < D; v++)
     for (let u = 0; u < W; u++) {
       d.foot(u, v);
-      d.put(u, -1, v, t >= 2 && d.edge(u, v) ? B.STONE_BRICKS : B.COBBLESTONE);
+      d.put(u, -1, v, d.edge(u, v) ? d.mat("border") : d.mat("paving"));
       d.put(u, 0, v, "a");
       d.put(u, 1, v, "a");
     }
-  // torch posts at the corners (lantern posts from tier 2), a step in from the edge
   for (const [u, v] of [[1, 1], [W - 2, 1], [1, D - 2], [W - 2, D - 2]]) {
-    if (t >= 2) {
-      d.put(u, 0, v, B.STONE_BRICKS);
-      d.put(u, 1, v, B.OAK_FENCE);
-      d.put(u, 2, v, B.LANTERN);
-    } else {
-      d.put(u, 0, v, B.OAK_LOG);
-      d.put(u, 1, v, B.OAK_LOG);
-      d.put(u, 2, v, B.TORCH);
-    }
+    d.put(u, 0, v, d.mat("footing"));
+    d.put(u, 1, v, d.mat("post"));
+    d.put(u, 2, v, d.mat("light"));
   }
-  if (t >= 2) {
-    // benches facing the middle along each side
-    for (const du of [-1, 0, 1]) {
-      d.put(cu + du, 0, 0, B.OAK_STAIRS + d.OUT);
-      d.put(cu + du, 0, D - 1, B.OAK_STAIRS + d.IN);
-      d.put(0, 0, cv + du, B.OAK_STAIRS + d.LEFT);
-      d.put(W - 1, 0, cv + du, B.OAK_STAIRS + d.RIGHT);
-    }
-  }
-  if (t >= 3) {
-    // a monument in the middle: a stone brick plinth in a ring of slabs, a pillar and a lantern on top (water would
-    // run all over the paving, so no fountain)
-    for (let dv = -1; dv <= 1; dv++) for (let du = -1; du <= 1; du++) if (du || dv) d.put(cu + du, 0, cv + dv, B.STONE_BRICK_SLAB);
-    d.put(cu, 0, cv, B.STONE_BRICKS);
-    d.put(cu, 1, cv, B.STONE_BRICK_WALL);
-    d.put(cu, 2, cv, B.STONE_BRICK_WALL);
-    d.put(cu, 3, cv, B.LANTERN);
-  }
+  furnish(d);
 }
 
-const DESIGNS: Record<Plain, { core: [number, number]; m: number; draw: (d: Draft) => void }> = {
-  house: { core: [7, 7], m: 1, draw: house },
-  storehouse: { core: [8, 9], m: 1, draw: storehouse },
-  hall: { core: [9, 11], m: 1, draw: hall },
-  market: { core: [9, 5], m: 1, draw: market },
-  well: { core: [5, 5], m: 0, draw: well },
-  lamp: { core: [1, 1], m: 0, draw: lamp },
-  tower: { core: [5, 5], m: 0, draw: tower },
-  keep: { core: [9, 9], m: 0, draw: keep },
-  plaza: { core: [9, 9], m: 0, draw: plaza },
-};
+const SHAPES: Record<Blueprint["shape"], (d: Draft) => void> = { cottage, stalls, well, lamp, tower, keep, plaza };
 
 /** The order a person builds in: the foundation, then a layer at a time from the bottom, each layer walked round
  *  from the blocks already standing (a wall's top before the roof that rests on it, the inner roof row before the
@@ -739,17 +851,17 @@ function order(cells: (Cell & { x: number; y: number; z: number })[], r: Rect, f
 /** The plan of a building at a tier: its cells in build order. `ground` gives the ground under a column, so low spots
  *  get a foundation first. */
 export function planFor(s: Site, tier: number, ground: (x: number, z: number) => number): PlanCell[] {
-  const ds = DESIGNS[s.kind as Plain];
-  if (!ds) return [];
-  const top = KINDS[s.kind as Plain].tiers;
+  const bp = BLUEPRINTS[s.kind as Plain];
+  if (!bp) return [];
+  const top = bp.tiers.length - 1;
   const t = Math.max(1, Math.min(tier, top));
-  const d = new Draft(s, t, ds.core, ds.m);
-  ds.draw(d);
+  const d = new Draft(s, t, bp);
+  SHAPES[bp.shape](d);
   // what the later tiers put in the same cells does for this one too (glass where this tier has fence bars, a chest
   // where it keeps the floor clear): an upgraded building still meets every tier under it
   for (let up = t + 1; up <= top; up++) {
-    const u = new Draft(s, up, ds.core, ds.m);
-    ds.draw(u);
+    const u = new Draft(s, up, bp);
+    SHAPES[bp.shape](u);
     for (const [key, c] of d.cells) {
       const later = u.cells.get(key);
       const lt = later && cellTarget(later.k);
@@ -759,12 +871,14 @@ export function planFor(s: Site, tier: number, ground: (x: number, z: number) =>
       c.k += `|${lt.id}`;
     }
   }
-  // the foundation: low ground under the building filled up to its floor, at most three deep
+  // the foundation: low ground under the building filled up to its floor, at most three deep; cobblestone round the
+  // outside where it shows (a stone plinth, not dirt, planks and stone as they came), anything inside
   for (const col of d.found) {
     const [x, z] = col.split(",").map(Number);
     const g = ground(x, z);
     if (g < 0) continue;
-    for (let yy = Math.max(g + 1, s.y - 3); yy < s.y; yy++) if (!d.cells.has(`${x},${yy},${z}`)) d.cells.set(`${x},${yy},${z}`, { x, y: yy, z, k: "d", late: false });
+    const outer = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => !d.found.has(`${x + dx},${z + dz}`));
+    for (let yy = Math.max(g + 1, s.y - 3); yy < s.y; yy++) if (!d.cells.has(`${x},${yy},${z}`)) d.cells.set(`${x},${yy},${z}`, { x, y: yy, z, k: outer ? exact(B.COBBLESTONE) : "d", late: false });
   }
   return order([...d.cells.values()], s, s.y - 1);
 }
@@ -882,11 +996,28 @@ export function roadPlan(hub: { x: number; z: number }, builds: Building[], grou
   return { cells, of };
 }
 
+/** A cottage as a home: the room inside, its door (the lower cell) and where its bed goes (and the bed's state). */
+export function homeOf(b: Building): { room: Rect; door: [number, number, number]; bed: [number, number, number, number] | null } | null {
+  const bp = BLUEPRINTS[b.kind as Plain];
+  if (!bp || bp.shape !== "cottage") return null;
+  const d = new Draft(b, 1, bp);
+  const [ax, az] = d.at(1, 1);
+  const [bx, bz] = d.at(d.W - 2, d.D - 2);
+  const [dx, dz] = d.at(d.u(bp.doors?.[0] ?? "mid"), 0);
+  const f = bp.furniture.find((x) => x.block === B.RED_BED);
+  let bed: [number, number, number, number] | null = null;
+  if (f) {
+    const [fx, fz] = d.at(d.u(f.at[0]), d.v(f.at[2]));
+    bed = [fx, b.y + f.at[1], fz, B.RED_BED + d.dir(f.facing ?? "in")];
+  }
+  return { room: { x0: Math.min(ax, bx), z0: Math.min(az, bz), x1: Math.max(ax, bx), z1: Math.max(az, bz) }, door: [dx, b.y, dz], bed };
+}
+
 /** The cell in front of a building's door (outside it), or null for something without a door. */
 export function doorStep(b: Building): [number, number] | null {
-  const ds = DESIGNS[b.kind as Plain];
-  if (!ds || b.kind === "lamp" || b.kind === "well" || b.kind === "plaza") return null;
-  const d = new Draft(b, 1, ds.core, ds.m);
+  const bp = BLUEPRINTS[b.kind as Plain];
+  if (!bp || b.kind === "lamp" || b.kind === "well" || b.kind === "plaza") return null;
+  const d = new Draft(b, 1, bp);
   return d.at(d.mid, -1);
 }
 
@@ -929,7 +1060,7 @@ export function materialsFor(kind: Plain | "wall", tier: number, from = 0): Map<
 }
 
 // how many blocks each tier takes (for the AIs: what a build or an upgrade costs), on flat ground
-for (const k of Object.keys(DESIGNS) as Plain[]) {
+for (const k of Object.keys(BLUEPRINTS) as Plain[]) {
   const [w, dd] = KINDS[k].size;
   const s: Site = { kind: k, x0: 100, z0: 100, x1: 100 + w - 1, z1: 100 + dd - 1, y: 60 };
   KINDS[k].blocks = [0];

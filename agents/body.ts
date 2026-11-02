@@ -700,7 +700,7 @@ export class Body {
     let unstuck = false;
     // setting off from inside its own house: open the doorway first (blocked up for the night, or a shut door), or
     // every way out is a wall it won't dig through
-    if (this.home && this.atHome() && Math.hypot(x - (this.home.x0 + 2), z - (this.home.z0 + 2)) > 1.5) await this.openDoorway();
+    if (this.home && this.atHome() && Math.hypot(x - this.homeMiddle()[0], z - this.homeMiddle()[1]) > 1.5) await this.openDoorway();
     while (!this.abort && !this.dead && Date.now() - t0 < maxMs) {
       if (arrived()) break;
       const d = Math.hypot(x - this.phys.x, z - this.phys.z);
@@ -1883,8 +1883,15 @@ export class Body {
 
   // ---------------------------------------------------------------- a home
 
-  /** Its house, once it has built one: the room's two standing cells, its doorway, and its floor height. */
-  home: { x0: number; z0: number; y: number; door: [number, number, number] } | null = null;
+  /** Its house, once it has one: its north-west corner, its floor height and its doorway; `room` for a town cottage it
+   *  moved into (the room inside), else the room is the two by two in a shelter it put up itself (build_house). */
+  home: { x0: number; z0: number; y: number; door: [number, number, number]; room?: Rect } | null = null;
+
+  /** The middle of its home's room. */
+  homeMiddle(): [number, number] {
+    const h = this.home!;
+    return h.room ? [(h.room.x0 + h.room.x1 + 1) / 2, (h.room.z0 + h.room.z1 + 1) / 2] : [h.x0 + 2, h.z0 + 2];
+  }
 
   /** Blocks it can build walls with, and how many it has. */
   buildingBlocks(): { ids: number[]; n: number } {
@@ -2537,7 +2544,8 @@ export class Body {
     if (!h) return false;
     const x = Math.floor(this.phys.x);
     const z = Math.floor(this.phys.z);
-    return x >= h.x0 + 1 && x <= h.x0 + 2 && z >= h.z0 + 1 && z <= h.z0 + 2 && Math.abs(this.phys.y - h.y) < 1;
+    const r = h.room ?? { x0: h.x0 + 1, z0: h.z0 + 1, x1: h.x0 + 2, z1: h.z0 + 2 };
+    return x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1 && Math.abs(this.phys.y - h.y) < 1;
   }
 
   /** Back home for the night: walk in, block the doorway behind it if there's no door, sleep if there's a bed. */
@@ -2545,7 +2553,8 @@ export class Body {
     const h = this.home;
     if (!h) return "you have no house yet (build_house)";
     if (!this.atHome()) {
-      await this.goto(h.x0 + 1.5, h.y, h.z0 + 1.5, 0.6, { maxMs: 60000, done: () => this.atHome() });
+      const [mx, mz] = this.homeMiddle();
+      await this.goto(h.room ? mx : h.x0 + 1.5, h.y, h.room ? mz : h.z0 + 1.5, 0.6, { maxMs: 60000, done: () => this.atHome() });
       if (!this.atHome()) return "couldn't get back into your house";
     }
     const [dx, dy, dz] = h.door;
@@ -2571,7 +2580,12 @@ export class Body {
     const h = this.home;
     if (!h || !this.atHome()) return "not at home";
     const [dx, dy, dz] = h.door;
-    await this.goto(dx + 0.5, dy, dz - 1.5, 0.8, { maxMs: 8000 });
+    // out through the door, the way away from the middle of the room
+    const [mx, mz] = this.homeMiddle();
+    const ox = Math.abs(dx + 0.5 - mx) > Math.abs(dz + 0.5 - mz) ? Math.sign(dx + 0.5 - mx) : 0;
+    const oz = ox ? 0 : Math.sign(dz + 0.5 - mz) || -1;
+    await this.openDoorway();
+    await this.goto(dx + 0.5 + ox * 2, dy, dz + 0.5 + oz * 2, 0.8, { maxMs: 8000 });
     return "out of the house";
   }
 

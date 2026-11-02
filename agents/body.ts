@@ -2126,6 +2126,9 @@ export class Body {
     if (!dir) return "water all around here: move somewhere drier to mine";
     const [sx, sz] = dir;
     const stairs: [number, number, number][] = [[fx0, fy0, fz0]];
+    // every cell this staircase opened, so a cave can be told from its own steps
+    const dug = new Set<string>([`${fx0},${fy0},${fz0}`, `${fx0},${fy0 + 1},${fz0}`]);
+    let caveAt = "";
     let x = fx0;
     let y = fy0;
     let z = fz0;
@@ -2144,8 +2147,24 @@ export class Body {
           ok = false;
           break;
         }
+        dug.add(`${a},${b},${c}`);
       }
       if (!ok) break;
+      // broke into a cave: open air round the new step that this staircase didn't dig. Monsters spawn in the dark
+      // there even by day (haiku dug into one on season 10's first day, met a rattler and a shambler and died):
+      // close the openings with spare blocks and stop going this way
+      const open: [number, number, number][] = [];
+      for (const [a, b, c] of [[nx + 1, ny, nz], [nx - 1, ny, nz], [nx, ny, nz + 1], [nx, ny, nz - 1], [nx + 1, ny + 1, nz], [nx - 1, ny + 1, nz], [nx, ny + 1, nz + 1], [nx, ny + 1, nz - 1], [nx, ny + 2, nz], [nx + sx, ny, nz + sz]] as [number, number, number][])
+        if (!dug.has(`${a},${b},${c}`) && this.get(a, b, c) === B.AIR) open.push([a, b, c]);
+      if (open.length >= 2) {
+        for (const [a, b, c] of open) {
+          const f = this.fillerBlock();
+          if (!f) break;
+          await this.place(f, a, b, c, 3000);
+        }
+        caveAt = `${nx} ${ny} ${nz}`;
+        break;
+      }
       if (!SOLID[this.get(nx, ny - 1, nz)]) {
         const f = this.fillerBlock();
         if (!f || !(await this.place(f, nx, ny - 1, nz))) break;
@@ -2172,6 +2191,7 @@ export class Body {
       }
     }
     await this.pickUp(3, 2500);
+    if (caveAt) this.debug(`stairMine: broke into a cave at ${caveAt}, closed it and stopped`);
     const got = have() - start;
     const depth = fy0 - Math.floor(this.phys.y + 0.1);
     // and back up the same stairs
@@ -2180,7 +2200,7 @@ export class Body {
       const [a, b, c] = stairs[k];
       await this.goto(a + 0.5, b, c + 0.5, 0.5, { maxMs: 4000 });
     }
-    return `dug a staircase ${stairs.length - 1} steps down (${depth} deep), got ${got} of ${count}, and walked back up to the top`;
+    return `dug a staircase ${stairs.length - 1} steps down (${depth} deep), got ${got} of ${count}${caveAt ? ", broke into a cave (closed it off: monsters wait in the dark there)" : ""}, and walked back up to the top`;
   }
 
   // ---------------------------------------------------------------- building the settlement

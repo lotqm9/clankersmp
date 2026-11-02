@@ -1103,14 +1103,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const short = [...this.billOf(cells)].map(([id, n]) => `${n} ${key(id)}`);
     if (missing <= Math.floor(req.length * (kind === "wall" ? 0.06 : 0.03))) {
       const fixed = s.fix;
-      const old = s.done ? tierOf(s) : 0;
+      const wasDone = s.done;
       s.done = true;
       s.fix = false;
       s.tier = tier;
       s.best = Math.max(s.best ?? 0, tier);
       s.up = undefined;
       s.stuck = 0;
-      const news = upgrade ? `${this.name} upgraded ${civLabel(kind)} at ${where(s)} to tier ${tier}` : fixed ? `${this.name} fixed up ${civLabel(kind)}` : old === 0 && s.tier === 1 && s.best === 1 && s.by.length ? `${s.by.join(" and ")} finished ${civLabel(kind)}` : `${this.name} rebuilt ${civLabel(kind)}`;
+      const news = upgrade ? `${this.name} upgraded ${civLabel(kind)} at ${where(s)} to tier ${tier}` : fixed ? `${this.name} fixed up ${civLabel(kind)}` : wasDone ? `${this.name} rebuilt ${civLabel(kind)} to the town's design` : `${s.by.join(" and ")} finished ${civLabel(kind)}`;
       this.civUpdate(news);
       return `${upgrade ? `upgraded ${civLabel(kind)} at ${where(s)} to tier ${tier}` : `finished ${what} at ${where(s)}`} (${placed} blocks placed). ${tier < maxTier(kind) ? `It can go to tier ${tier + 1}: ${upText(kind, tier + 1)} (upgrade ${kind}).` : ""}`;
     }

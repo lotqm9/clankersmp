@@ -660,7 +660,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           const x = Number(i.x);
           const z = Number(i.z);
           if (!Number.isFinite(x) || !Number.isFinite(z)) return "bad coordinates";
-          const ok = await b.goto(x, b.phys.y, z, 2, { maxMs: 90000, done: () => Math.hypot(x - b.phys.x, z - b.phys.z) < 2.5 });
+          // to the ground there, not to its own height: from a tunnel it aimed under the destination and went round in
+          // circles (opus, "go to 173 300" from 13 blocks down)
+          const top = b.surfaceAt(Math.floor(x), Math.floor(z));
+          const ok = await b.goto(x, top >= 0 ? top + 1 : NaN, z, 2, { maxMs: 90000, done: () => Math.hypot(x - b.phys.x, z - b.phys.z) < 2.5 });
           return ok ? "arrived" : `stopped at x=${Math.round(b.phys.x)} z=${Math.round(b.phys.z)}, couldn't get further`;
         }
         case "explore": {
@@ -668,7 +671,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           const [dx, dz] = d === "east" ? [1, 0] : d === "west" ? [-1, 0] : d === "south" ? [0, 1] : [0, -1];
           const x = Math.max(8, Math.min(504, b.phys.x + dx * 40));
           const z = Math.max(8, Math.min(504, b.phys.z + dz * 40));
-          await b.goto(x, b.phys.y, z, 3, { maxMs: 45000 });
+          const top = b.surfaceAt(Math.floor(x), Math.floor(z));
+          await b.goto(x, top >= 0 ? top + 1 : NaN, z, 3, { maxMs: 45000, done: () => Math.hypot(x - b.phys.x, z - b.phys.z) < 3 });
           return `walked ${d} to x=${Math.round(b.phys.x)} z=${Math.round(b.phys.z)}`;
         }
         case "give": return await this.give(String(i.player ?? ""), String(i.item ?? ""), Math.max(1, Math.min(64, Number(i.count) || 1)));

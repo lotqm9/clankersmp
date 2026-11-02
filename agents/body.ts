@@ -677,9 +677,11 @@ export class Body {
     const far = Math.hypot(x - this.phys.x, z - this.phys.z) > 24;
     // the height counts too: aimed only at the column, haiku "got home" to a cave ten blocks under its house and opus
     // "built" the watchtower from a tunnel under it
-    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z), y });
+    // (no height known, NaN: the column alone, as before)
+    const gy = Number.isFinite(y) ? y : undefined;
+    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z), y: gy });
     if (!s) return null;
-    const i = s.reached >= 0 ? s.reached : s.closestTo(x, z, y);
+    const i = s.reached >= 0 ? s.reached : s.closestTo(x, z, gy);
     return s.pathTo(i);
   }
 
@@ -2046,6 +2048,17 @@ export class Body {
   // ---------------------------------------------------------------- building the settlement
 
   /** The ground under a column near `near`: the top solid block, -1 for water, -2 for a tree. */
+  /** The top of a column: its highest solid block that isn't a tree, -1 over water or where nothing is loaded. For
+   *  "go to x z", where only the column is known. */
+  surfaceAt(x: number, z: number): number {
+    for (let y = 120; y >= 2; y--) {
+      const id = this.get(x, y, z);
+      if (IS_WATER[id]) return -1;
+      if (SOLID[id] && !TREE.has(id)) return y;
+    }
+    return -1;
+  }
+
   groundAt(x: number, z: number, near: number): number {
     for (let y = Math.min(126, near + 8); y >= Math.max(2, near - 10); y--) {
       const id = this.get(x, y, z);

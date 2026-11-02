@@ -989,6 +989,9 @@ export function roadPlan(hub: { x: number; z: number }, builds: Building[], grou
     if (b.kind === "road" || b.kind === "wall" || b.kind === "farm" || b.kind === "lamp" || b.kind === "plaza") return;
     const door = doorStep(b);
     if (!door) return;
+    // only the town's own buildings: a house sonnet once built 250 blocks out put road cells at x=300-370, out of
+    // reach from the town, and the road job stood still trying them
+    if (Math.hypot(door[0] - hub.x, door[1] - hub.z) > 64) return;
     let [x, z] = door;
     const step = (nx: number, nz: number) => {
       x = nx;

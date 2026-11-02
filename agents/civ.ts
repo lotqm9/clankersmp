@@ -401,7 +401,7 @@ export const BLUEPRINTS: Record<Plain, Blueprint> = {
   },
   tower: {
     what: "a stone watchtower: a door, a ladder up inside, a lookout floor with battlements and torches, seen from far away",
-    shape: "tower", core: [5, 5], eaves: 0, walls: 7,
+    shape: "tower", core: [5, 5], eaves: 0, walls: 7, doors: ["mid"],
     rooms: "a stair well 3 by 3 with a ladder, a lookout on top",
     parts: { footing: all3(COB), wall: all3(COB), corner: [COB, SBR, SBR], floor: all3(COB), battlement: [COB, SBR, SBR], window: [0, PANE, PANE], light: [B.TORCH, B.TORCH, B.LANTERN] },
     furniture: [{ block: B.TORCH, at: [1, 0, 1], tier: 1 }],
@@ -746,10 +746,6 @@ function tower(d: Draft): void {
   d.ceiling = () => H;
   // slits (none in the back wall: the ladder leans on it)
   for (const [u, v] of [[0, Math.floor(D / 2)], [W - 1, Math.floor(D / 2)], [mid, 0]]) for (const dy of [3, 4]) d.put(u, dy, v, d.mat("window"));
-  d.put(mid, 0, 0, doorId(d.IN, false, false));
-  d.put(mid, 1, 0, "o");
-  d.put(mid, 0, -1, "o");
-  d.put(mid, 1, -1, "o");
   const lv = D > 3 ? D - 2 : 1;
   for (let dy = 0; dy <= H; dy++) d.put(mid, dy, lv, B.LADDER + d.OUT);
   d.put(mid, H + 1, lv, "o");
@@ -885,6 +881,19 @@ export function planFor(s: Site, tier: number, ground: (x: number, z: number) =>
     if (g < 0) continue;
     const outer = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => !d.found.has(`${x + dx},${z + dz}`));
     for (let yy = Math.max(g + 1, s.y - 3); yy < s.y; yy++) if (!d.cells.has(`${x},${yy},${z}`)) d.cells.set(`${x},${yy},${z}`, { x, y: yy, z, k: outer ? exact(B.COBBLESTONE) : "d", late: false });
+  }
+  // steps down from each door when the ground falls away in front of it: the step outside a cottage on a slope stood
+  // two blocks over the grass, and nobody could get in (sonnet walked round its own house for minutes)
+  for (const du of bp.doors ?? []) {
+    const u = d.u(du);
+    for (let k = 1; k <= 3; k++) {
+      const [x, z] = d.at(u, -1 - k);
+      const g = ground(x, z);
+      const lvl = s.y - 1 - k;
+      if (g < 0 || g >= lvl) break;
+      d.cells.set(`${x},${lvl},${z}`, { x, y: lvl, z, k: exact(B.COBBLE_STAIRS + d.IN), late: false });
+      for (let yy = Math.max(g + 1, lvl - 3); yy < lvl; yy++) d.cells.set(`${x},${yy},${z}`, { x, y: yy, z, k: exact(B.COBBLESTONE), late: false });
+    }
   }
   return order([...d.cells.values()], s, s.y - 1);
 }

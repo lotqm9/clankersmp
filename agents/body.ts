@@ -2375,7 +2375,7 @@ export class Body {
             if (here !== B.AIR && !IS_WATER[here] && !BLOCKS[here]?.replaceable && (KEEP(here) || !(await this.mine(c[0], c[1], c[2], false)))) continue;
             if (await this.place(w.item, c[0], c[1], c[2], 20000, w.state)) placed++;
           }
-          if (up > 0) await this.climbDown(up);
+          if (up > 0) await this.climbDown(up, { x: this.lastPillar.x, z: this.lastPillar.z, top: this.lastPillar.top, keep: blocks });
           if (!missing(todo[i])) {
             misses = 0;
             continue;
@@ -2429,15 +2429,22 @@ export class Body {
     if (!there()) return -1;
     await this.center(cx, cz, 20);
     if (k > 0 && this.buildingBlocks().n < k + 1) return -1;
+    this.lastPillar = { x: cx, z: cz, top: g + k };
     return k > 0 ? await this.pillarUp(k) : 0;
   }
 
+  /** Where its last scaffold pillar went up: the column, and the height of its top block. */
+  private lastPillar = { x: 0, z: 0, top: 0 };
+
   /** Down the pillar it stands on, a block at a time (it gets the blocks back). */
-  private async climbDown(n: number): Promise<void> {
+  private async climbDown(n: number, pillar?: { x: number; z: number; top: number; keep?: Set<string> }): Promise<void> {
     for (let k = 0; k < n && !this.dead; k++) {
       const x = Math.floor(this.phys.x);
       const z = Math.floor(this.phys.z);
       const y = Math.floor(this.phys.y + 0.1) - 1;
+      // only its own pillar: stepped off it (onto a roof, the top of a wall), what's underfoot is the building, and it
+      // ate the keep's battlements block by block on the way "down"
+      if (pillar && (x !== pillar.x || z !== pillar.z || y > pillar.top || pillar.keep?.has(`${x},${y},${z}`))) break;
       if (!SOLID[this.get(x, y, z)] || !(await this.mine(x, y, z, false))) break;
       await this.dropInto(x, y, z);
     }

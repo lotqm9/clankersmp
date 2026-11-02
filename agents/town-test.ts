@@ -152,7 +152,7 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
     const top = kind === "wall" ? KINDS.wall.tiers : KINDS[kind].tiers;
     for (let tier = 1; tier <= top; tier++) {
       const plan = () => (kind === "wall"
-        ? wallPlan((site.x0 + site.x1) >> 1, (site.z0 + site.z1) >> 1, 13, (x, z) => b.landAt(x, z, site.y), tier)
+        ? wallPlan((site.x0 + site.x1) >> 1, (site.z0 + site.z1) >> 1, 13, (x, z) => b.landAt(x, z, site.y), tier, (x, z) => used.filter((r) => r.x1 - r.x0 < 30).some((r) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1))
         : planFor(site as never, tier, ground)) as [number, number, number, string][];
       let cells = plan();
       const t0 = Date.now();

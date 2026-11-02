@@ -53,7 +53,7 @@ async function supply(b: Body, cells: [number, number, number, string][]): Promi
   await b.wait(20);
 }
 
-async function shot(name: string, file: string, s: { kind: string; x0: number; z0: number; x1: number; z1: number; y: number; face?: number }, h: number): Promise<void> {
+async function shot(b: Body, name: string, file: string, s: { kind: string; x0: number; z0: number; x1: number; z1: number; y: number; face?: number }, h: number): Promise<void> {
   if (!shots) return;
   const cx = (s.x0 + s.x1 + 1) / 2;
   const cz = (s.z0 + s.z1 + 1) / 2;
@@ -64,9 +64,24 @@ async function shot(name: string, file: string, s: { kind: string; x0: number; z
   // windows, the back the chimney and the back windows; and one in through the door
   const look = [cx, s.y + h * 0.35, cz];
   const at = (front: number, side: number, up: number) => [cx + fx * dist * front - fz * dist * side, s.y + h * 0.55 + dist * up, cz + fz * dist * front + fx * dist * side];
+  // a hill or a tree between the camera and the building: up until the view is clear (inside a hill it shot black)
+  const clear = (e: number[]) => {
+    for (let k = 0; k <= 40; k++) {
+      const f = k / 40;
+      const [x, y, z] = [e[0] + (look[0] - e[0]) * f, e[1] + (look[1] - e[1]) * f, e[2] + (look[2] - e[2]) * f];
+      if (Math.hypot(x - cx, z - cz) < w / 2 + 1) break; // the building itself
+      if (BLOCKS[b.get(Math.floor(x), Math.floor(y), Math.floor(z))]?.solid) return false;
+    }
+    return true;
+  };
+  const view = (front: number, side: number) => {
+    let e = at(front, side, 0.35);
+    for (let k = 0; k < 12 && !clear(e); k++) e = [e[0], e[1] + 2, e[2]];
+    return e;
+  };
   const poses = [
-    { out: `${OUT}/${file}.png`, eye: at(1, 0.6, 0.35), look, fov: 70 },
-    { out: `${OUT}/${file}-back.png`, eye: at(-1, -0.6, 0.35), look, fov: 70 },
+    { out: `${OUT}/${file}.png`, eye: view(1, 0.6), look, fov: 70 },
+    { out: `${OUT}/${file}-back.png`, eye: view(-1, -0.6), look, fov: 70 },
   ];
   if (["house", "hall", "storehouse", "keep", "market"].includes(s.kind)) {
     const half = Math.min(s.x1 - s.x0, s.z1 - s.z0) / 2;
@@ -142,14 +157,14 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
       let cells = plan();
       const t0 = Date.now();
       let rounds = 0;
-      for (; rounds < 10; rounds++) {
+      for (; rounds < 16; rounds++) {
         cells = plan();
         if (!check(b, cells).bad.length) break;
         await supply(b, cells);
         const mx = Math.floor((site.x0 + site.x1) / 2);
         const mz = Math.floor((site.z0 + site.z1) / 2);
         if (kind !== "wall" && kind !== "lamp" && kind !== "tower") await b.goto(mx + 0.5, site.y, mz + 0.5, 0.8, { maxMs: 20000 });
-        const r = await b.buildCells(cells, 400, `building ${kind} tier ${tier}`, site.y);
+        const r = await b.buildCells(cells, 150, `building ${kind} tier ${tier}`, site.y);
         console.log(name, kind, `tier ${tier} round ${rounds}:`, JSON.stringify({ placed: r.placed, left: r.left, outOf: r.outOf, why: r.why, short: [...r.short].map(([id, n]) => `${itemDef(id)?.key} ${n}`) }));
         if (b.dead || b.closed) throw new Error(`${name} ${b.dead ? `died: ${b.deathMsg}` : `was disconnected: ${b.kicked}`}`);
       }
@@ -165,7 +180,7 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
       const mz = Math.floor((site.z0 + site.z1) / 2);
       const off = Math.ceil((kind === "wall" ? 14 : Math.max(site.x1 - site.x0, site.z1 - site.z0) / 2) + 3);
       await b.goto(mx + fx * off + 0.5, site.y, mz + fz * off + 0.5, 2, { maxMs: 20000 });
-      await shot(name, `${kind}-t${tier}`, site, kind === "keep" || kind === "tower" ? 10 : kind === "hall" ? 10 : kind === "lamp" ? 4 : 7);
+      await shot(b, name, `${kind}-t${tier}`, site, kind === "keep" || kind === "tower" ? 10 : kind === "hall" ? 10 : kind === "lamp" ? 4 : 7);
     }
   }
   b.close();

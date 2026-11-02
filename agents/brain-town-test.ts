@@ -11,7 +11,7 @@ import { Body } from "./body.ts";
 import { BLOCKS } from "../shared/blocks.ts";
 
 const url = process.argv[2] || "ws://127.0.0.1:8789";
-const [ax, az] = (process.env.AT || "220,160").split(",").map(Number);
+const [ax, az] = (process.env.AT || "264,64").split(",").map(Number);
 const name = process.env.BODY || "sonnet";
 const b = new Body(name);
 await b.connect(url, process.env.AGENT_SECRET ?? "");
@@ -34,10 +34,10 @@ const brain = new Brain(name, b, "test", "http://127.0.0.1:9", "http://127.0.0.1
 brain.load();
 
 const give = (k: string, n: number) => b.send({ t: "chat", text: `/give ${k} ${n}` });
-for (const [k, n] of [["stone_pickaxe", 1], ["stone_shovel", 1], ["stone_axe", 1], ["cobblestone", 192], ["oak_log", 96], ["sand", 16], ["coal", 24], ["raw_iron", 4], ["bread", 16]] as [string, number][]) give(k, n);
+for (const [k, n] of [["stone_pickaxe", 1], ["stone_shovel", 1], ["stone_axe", 1], ["cobblestone", 192], ["oak_log", 96], ["sand", 16], ["coal", 24], ["raw_iron", 4], ["bread", 16], ["red_bed", 1]] as [string, number][]) give(k, n);
 await b.wait(30);
 
-const steps: [string, string][] = (process.env.STEPS || "build:plaza,build:house,build:road,build:lamp,build:lamp,upgrade:house").split(",").map((s) => s.split(":") as [string, string]);
+const steps: [string, string][] = (process.env.STEPS || "build:plaza,build:house,build_house:-,build:road,build:lamp,build:lamp,upgrade:house").split(",").map((s) => s.split(":") as [string, string]);
 const t0 = Date.now();
 for (const [tool, what] of steps) {
   b.send({ t: "chat", text: "/time 2000" });
@@ -45,7 +45,7 @@ for (const [tool, what] of steps) {
   for (let k = 0; k < 4; k++) {
     const r = await brain.exec(tool, { what });
     console.log(`[${Math.round((Date.now() - t0) / 1000)}s] ${tool} ${what}: ${r}`);
-    if (/^(finished|upgraded)/.test(r) || /couldn't|no flat|there is no|already/.test(r)) break;
+    if (/^(finished|upgraded|moved)/.test(r) || /couldn't|no flat|there is no|already/.test(r)) break;
     // what an AI would do between calls: top up what the job says it couldn't get by itself
     if (/coal/.test(r)) give("coal", 8);
   }

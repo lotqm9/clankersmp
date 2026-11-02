@@ -587,20 +587,23 @@ function furnish(d: Draft): void {
     d.put(du, -1, -1, "?p");
     d.foot(du, -1);
   }
+  // (in an old building's smaller room two pieces can land on one spot: the first keeps it)
+  const taken = new Set<string>();
   for (const f of bp.furniture) {
     if (f.tier > d.t) continue;
     const u = d.u(f.at[0]);
     const v = d.v(f.at[2]);
     const dy = f.hang ? d.ceiling(u, v) - 1 : f.at[1];
+    // the bed's head lies the way it faces: that cell is kept clear for it
+    const head = f.block === B.RED_BED ? (f.facing === "in" ? [u, v + 1] : f.facing === "out" ? [u, v - 1] : f.facing === "left" ? [u - 1, v] : [u + 1, v]) : null;
+    const spots = [[u, v], ...(head ? [head] : [])].map(([a, c]) => `${a},${dy},${c}`);
+    if (spots.some((k) => taken.has(k))) continue;
+    for (const k of spots) taken.add(k);
     let id = f.block;
     if (f.facing && (isChest(id) || isFurnace(id) || id === B.RED_BED || stairBase(id) >= 0 || isLadder(id))) id += d.dir(f.facing);
     if (f.optional) d.opt(u, dy, v, id);
     else d.put(u, dy, v, id);
-    if (f.block === B.RED_BED) {
-      // the bed's head lies the way it faces: that cell is kept clear for it
-      const [hu, hv] = f.facing === "in" ? [u, v + 1] : f.facing === "out" ? [u, v - 1] : f.facing === "left" ? [u - 1, v] : [u + 1, v];
-      d.put(hu, dy, hv, "a");
-    }
+    if (head) d.put(head[0], dy, head[1], "a");
   }
 }
 

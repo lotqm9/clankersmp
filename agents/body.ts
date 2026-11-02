@@ -2349,9 +2349,9 @@ export class Body {
       if (this.abort || this.dead) break;
       // too high to reach from the ground (a roof's ridge, the top of a tower): up a pillar beside it (or inside the
       // room, on the floor), every block in reach from up there, then back down the pillar
-      if (this.reachTo(x, y, z) > REACH && lifts < 4) {
+      if (this.reachTo(x, y, z) > REACH && lifts < 12) {
         lifts++;
-        const up = await this.scaffoldTo(x, y, z, footprint, inside);
+        const up = await this.scaffoldTo(x, y, z, footprint, inside, todo.slice(i).filter(missing));
         if (up >= 0) {
           for (const c of todo.slice(i)) {
             if (this.abort || this.dead || placed >= max) break;
@@ -2383,7 +2383,7 @@ export class Body {
   /** Up beside a cell it can't reach from the ground: a pillar of its spare blocks under its feet (the way a player
    *  builds up to a roof), next to the building and never on its walls, or on the floor of the room inside (it takes
    *  the pillar back down with it). How many blocks it went up, or -1 if there is no spot for one. */
-  private async scaffoldTo(x: number, y: number, z: number, footprint: Set<string>, inside: Map<string, number> = new Map()): Promise<number> {
+  private async scaffoldTo(x: number, y: number, z: number, footprint: Set<string>, inside: Map<string, number> = new Map(), rest: PlanCell[] = []): Promise<number> {
     const R = REACH - 0.3;
     let best: { cx: number; cz: number; g: number; k: number; score: number } | null = null;
     for (let dz = -3; dz <= 3; dz++)
@@ -2401,7 +2401,11 @@ export class Body {
         let room = true;
         for (let yy = g + 1; yy <= g + k + 2 && room; yy++) if (SOLID[this.get(cx, yy, cz)] || IS_WATER[this.get(cx, yy, cz)]) room = false;
         if (!room) continue;
-        const score = k * 3 + Math.hypot(cx + 0.5 - this.phys.x, cz + 0.5 - this.phys.z);
+        // the spot that brings the most of what's still missing into reach (a roof's whole row from one pillar)
+        const ey = g + 1 + k + EYE_HEIGHT;
+        let covers = 0;
+        for (const c of rest) if (Math.hypot(c[0] - cx, c[1] + 0.5 - ey, c[2] - cz) <= R) covers++;
+        const score = k * 3 + Math.hypot(cx + 0.5 - this.phys.x, cz + 0.5 - this.phys.z) - Math.min(covers, 40) * 0.5;
         if (!best || score < best.score) best = { cx, cz, g, k, score };
       }
     if (!best) return -1;

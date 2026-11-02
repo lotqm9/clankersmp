@@ -1986,7 +1986,7 @@ export class Body {
 
   /** A footprint w by d near (cx, cz), `near` to `far` blocks out: ground within 1 of level, no water or trees, clear
    *  of the rectangles in `avoid`. The north-west corner and the floor height (one above the highest ground). */
-  siteNear(cx: number, cz: number, cy: number, w: number, d: number, avoid: Rect[], far = 18, near = 3): { x0: number; z0: number; y: number } | null {
+  siteNear(cx: number, cz: number, cy: number, w: number, d: number, avoid: Rect[], far = 18, near = 3, slope = 2): { x0: number; z0: number; y: number } | null {
     let best: { x0: number; z0: number; y: number } | null = null;
     let bd = Infinity;
     for (let oz = -far; oz <= far; oz++)
@@ -2006,7 +2006,7 @@ export class Body {
             else {
               lo = Math.min(lo, g);
               hi = Math.max(hi, g);
-              if (hi - lo > 2) ok = false; // up to two blocks of slope: the plan fills a foundation under the low side
+              if (hi - lo > slope) ok = false; // a little slope is fine: the plan fills a foundation under the low side
             }
           }
         if (!ok) continue;

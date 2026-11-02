@@ -876,7 +876,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       } else {
         const [w, d] = KINDS[kind].size;
         // a lamp post is one block wide: it can stand anywhere round the town, the village's edge included
-        const spot = b.siteNear(base.x, base.z, base.y, w, d, kind === "lamp" ? footprints() : [...footprints(), ...villages], kind === "lamp" ? 24 : 22, kind === "lamp" ? 2 : 3);
+        // the big ones (a 7 by 7 hall) rarely find dead flat ground by a crowded base: they look further and take a
+        // three block slope, which the plan's foundation fills (haiku walked out 41 blocks and back, again and again)
+        const big = w * d >= 25;
+        const spot = b.siteNear(base.x, base.z, base.y, w, d, kind === "lamp" ? footprints() : [...footprints(), ...villages], kind === "lamp" ? 24 : big ? 34 : 22, kind === "lamp" ? 2 : 3, big ? 3 : 2);
         if (!spot) return `no flat open spot near the base for ${civLabel(kind)} (${w} by ${d}): clear some trees or level some ground near the base`;
         site = { kind, x0: spot.x0, z0: spot.z0, x1: spot.x0 + w - 1, z1: spot.z0 + d - 1, y: spot.y, by: [], done: false, at: Date.now() };
       }

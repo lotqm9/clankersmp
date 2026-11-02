@@ -21,7 +21,7 @@ console.log("hall at", s.x0, s.y, s.z0, "cells", cells.length);
 
 // the mess: dirt in the bottom of the walls, leaves inside and in a window
 let messed = 0;
-for (const [x, y, z, k] of cells.filter(([, y, , k]) => (k === "s" || k === "w") && y <= s.y + 1).slice(0, 10))
+for (const [x, y, z] of cells.filter(([, y, , k]) => (k === "s" || k === "w") && y <= s.y + 1).slice(0, 10))
   if (await b.place(B.DIRT, x, y, z, 6000)) messed++;
 for (const [x, y, z] of cells.filter(([, y, , k]) => k === "a" && y === s.y).slice(0, 5))
   if (await b.place(B.OAK_LEAVES, x, y, z, 6000)) messed++;

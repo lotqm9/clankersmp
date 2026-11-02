@@ -45,6 +45,7 @@ function civCount(k: Kind | "trade"): number {
   return PACK.builds.filter((b) => b.kind === k && b.done).length;
 }
 /** Everything built or being built: where new buildings must not go. */
+let lastAudit = 0;
 function footprints(): Rect[] {
   return [...houseRects(), ...PACK.builds.filter((b) => b.kind !== "house").map((b) => (b.kind === "wall" ? { x0: b.x0 + 1, z0: b.z0 + 1, x1: b.x0 + 1, z1: b.z0 + 1 } : b))];
 }
@@ -529,6 +530,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   }
 
   private async decide(): Promise<{ says: string[]; actions: { name: string; input: Record<string, unknown>; label: string; desc: string }[] } | null> {
+    this.auditTown();
     const prompt = this.moment();
     const t0 = Date.now();
     let resp: Anthropic.Message;
@@ -795,15 +797,25 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // the villages: a player digs a quarry, not a hole here and a hole there all over the base
     const soft = !plan.blocks.includes(B.STONE) && plan.blocks.some((id) => id === B.DIRT || id === B.GRASS || id === B.SAND || id === B.GRAVEL);
     const villages = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean);
-    const offLimits = (x: number, z: number) =>
-      (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 16) || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 27) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
+    const theirs = (x: number, z: number) => villages.some((v) => Math.hypot(x - v.x, z - v.z) < 27) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
+    const offLimits = (x: number, z: number) => (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 16) || theirs(x, z);
     let pit: [number, number, number] | null = null;
+    // stone comes out of the ground away from the town: never the town's own walls (the nearest "cobblestone" was
+    // the town hall's, so they took its lower walls apart for a house), and never a village's houses
+    const stone = plan.blocks.includes(B.STONE);
+    if (stone && offLimits(b.phys.x, b.phys.z) && PACK.base) {
+      const a = Math.atan2(b.phys.z - PACK.base.z, b.phys.x - PACK.base.x);
+      b.action = `walking out of the town to mine`;
+      await b.goto(PACK.base.x + Math.cos(a) * 20 + 0.5, b.phys.y, PACK.base.z + Math.sin(a) * 20 + 0.5, 3, { maxMs: 20000 });
+    }
     while (!b.abort && !b.dead && have() - start < count && Date.now() - t0 < 90000) {
       // nothing deep: the deep caves are where Rattlers wait in the dark
       const floor = Math.max(30, Math.floor(b.phys.y) - 8);
       // and nothing touching water: breaking it lets the water flood in on top of you
       const wet = (x: number, y: number, z: number) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([dx, dy, dz]) => IS_WATER[b.get(x + dx, y + dy, z + dz)] === 1);
-      let found = b.findBlocks(plan.blocks, 32, soft ? 4000 : 16).filter(([x, y, z]) => y >= floor && !wet(x, y, z) && !skip.has(x + z * 512 + y * 262144));
+      let found = b.findBlocks(plan.blocks, 32, soft ? 4000 : stone ? 400 : 16).filter(([x, y, z]) => y >= floor && !wet(x, y, z) && !skip.has(x + z * 512 + y * 262144));
+      if (stone) found = found.filter(([x, , z]) => !offLimits(x, z)).slice(0, 16);
+      else if (!soft) found = found.filter(([x, , z]) => !theirs(x, z));
       if (soft) {
         found = found.filter(([x, , z]) => !offLimits(x, z));
         if (pit) {
@@ -860,7 +872,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // the town already has as many of these as any stage asks for: point at what the next stage still needs instead
     // (they put up a third well and a second storehouse while the town hall waited)
     const most = Math.max(0, ...STAGES.flatMap((st) => st.needs.filter(([k]) => k === kind).map(([, n]) => n)));
-    if (most && civCount(kind) >= most && !PACK.builds.some((x) => x.kind === kind && !x.done)) {
+    this.auditTown();
+    if (most && civCount(kind) >= most && !PACK.builds.some((x) => x.kind === kind && (!x.done || x.fix))) {
       const pr = progress(civCount);
       const want = pr.next ? pr.next.needs.filter((n) => n.have < n.need).map((n) => `${civLabel(n.k, n.need - n.have)}${n.need - n.have > 1 ? ` (${n.need - n.have} more)` : ""}`) : [];
       return `the town already has all the ${civLabel(kind, 2)} it needs (${civCount(kind)}). to become ${pr.next ? pr.next.name : "more"} it still needs: ${want.join(", ") || "nothing more"}`;
@@ -868,7 +881,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const ground = (x: number, z: number) => b.naturalGround(x, z, base.y);
     // never on the villages' land: their houses, roads and farms are theirs (and roofs aren't ground)
     const villages: Rect[] = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean).map((v) => ({ x0: v.x - 25, z0: v.z - 25, x1: v.x + 25, z1: v.z + 25 }));
-    let site = PACK.builds.find((x) => x.kind === kind && !x.done);
+    let site = PACK.builds.find((x) => x.kind === kind && (!x.done || x.fix));
     if (!site) {
       if (kind === "wall") {
         if (PACK.builds.some((x) => x.kind === "wall")) return "the wall round the base is already finished";
@@ -941,8 +954,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const missing = left();
     const where = `x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)}`;
     if (missing <= Math.floor(solid.length * (kind === "wall" ? 0.05 : 0.02))) {
+      const fixed = site.fix;
       site.done = true;
-      this.civUpdate(`${site.by.join(" and ")} finished ${civLabel(kind)}`);
+      site.fix = false;
+      this.civUpdate(fixed ? `${this.name} fixed up ${civLabel(kind)}` : `${site.by.join(" and ")} finished ${civLabel(kind)}`);
       return `finished ${civLabel(kind)} at ${where} (${r.placed} blocks placed${fetched ? `, ${fetched} stone mined for it on the way` : ""})`;
     }
     // a spot where nothing will go in, turn after turn (on a roof, walled off, out of reach): give up on it, so the next
@@ -967,6 +982,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     t += pr.next ? ` Next, ${pr.next.name}: ${pr.next.needs.map((n) => `${civLabel(n.k, n.need)} ${n.have}/${n.need}`).join(", ")}.` : " You have built a city.";
     const open = PACK.builds.filter((x) => !x.done).map((x) => `${civLabel(x.kind)} at x=${Math.round((x.x0 + x.x1) / 2)} z=${Math.round((x.z0 + x.z1) / 2)} (started by ${x.by.join(" and ") || "someone"})`);
     if (open.length) t += ` Half built, anyone can carry on with build: ${open.join("; ")}.`;
+    const fix = PACK.builds.filter((x) => x.done && x.fix).map((x) => `${civLabel(x.kind)} at x=${Math.round((x.x0 + x.x1) / 2)} z=${Math.round((x.z0 + x.z1) / 2)}`);
+    if (fix.length) t += ` Needs fixing (walls missing, or still dirt and leaves): ${fix.join("; ")}. build that kind to fix it up in stone and planks.`;
     const b = this.body;
     const w = b.world;
     if (w) {
@@ -976,6 +993,26 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (gold) t += ` The nearest island treasure chest: x=${gold.c.x} z=${gold.c.z}, ${Math.round(gold.d)} blocks ${dirWord(gold.c.x - b.phys.x, gold.c.z - b.phys.z)}, across the water.`;
     }
     return t;
+  }
+
+  /** A finished building that has lost a good part of itself, or is still dirt and leaves from before town buildings
+   *  were stone and wood, is marked as needing a fix: it still counts, and the next builder of that kind fixes it up. */
+  private auditTown(): void {
+    if (Date.now() - lastAudit < 60000 || !PACK.base) return;
+    lastAudit = Date.now();
+    const b = this.body;
+    const base = PACK.base;
+    const ground = (x: number, z: number) => b.naturalGround(x, z, base.y);
+    for (const site of PACK.builds) {
+      if (!site.done || site.fix || site.kind === "wall" || site.kind === "farm") continue;
+      // only what it can see from here: a chunk it hasn't loaded reads as air
+      if (Math.hypot((site.x0 + site.x1) / 2 - b.phys.x, (site.z0 + site.z1) / 2 - b.phys.z) > 40) continue;
+      const solid = planFor(site.kind, site.x0, site.z0, site.y, ground).filter(([, , , k]) => k !== "t" && k !== "c" && k !== "g");
+      const bad = solid.filter((c) => b.needsWork(c)).length;
+      if (bad <= Math.max(4, solid.length * 0.1)) continue;
+      site.fix = true;
+      this.civUpdate(`${civLabel(site.kind)} at x=${Math.round((site.x0 + site.x1) / 2)} z=${Math.round((site.z0 + site.z1) / 2)} needs fixing: ${bad} blocks missing or dirt`);
+    }
   }
 
   /** Something got built: save the pack, tell the site, and mark a new stage. */
@@ -999,7 +1036,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       next: pr.next,
       built: Object.fromEntries(kinds.map((k) => [k, civCount(k)])),
       trades: PACK.trades,
-      open: PACK.builds.filter((x) => !x.done).map((x) => ({ kind: x.kind, by: x.by })),
+      open: PACK.builds.filter((x) => !x.done || x.fix).map((x) => ({ kind: x.kind, by: x.by, fix: !!x.fix })),
     });
   }
 

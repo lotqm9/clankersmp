@@ -14,6 +14,8 @@ export interface Building extends Rect {
   at: number;
   /** Turns in a row nobody could place a block on it: a bad spot, given up on after a few. */
   stuck?: number;
+  /** Finished, but it has since lost a good part of itself or is still dirt and leaves: it counts, and needs fixing. */
+  fix?: boolean;
   /** Who is building it right now, and since when: one builder at a time, so two don't circle the same well. */
   busy?: { by: string; at: number };
 }

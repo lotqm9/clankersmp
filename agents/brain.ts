@@ -1269,7 +1269,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return;
     }
     if (b.home && !b.atHome() && tod >= 11600 && tod < 23000 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
-      && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill) && (!b.isNight() || homeFar < 40)) {
+      && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill) && (!b.isNight() || homeFar < 40)
+      && Date.now() - b.homeFailAt > 5 * 60000) {
       this.lastHomeTrip = Date.now();
       await this.reflex("heading home for the night", async () => `It was getting dark, so you went home: ${await b.goHome()}.`);
       return;
@@ -1290,7 +1291,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // dusk or night in the open with no house: take cover before the archers come out (they spawn at dark and
     // shoot from range, so waiting until it's night already is too late)
     const dusk = tod >= 11900 && tod < 23000;
-    if ((dusk || b.isNight()) && !b.covered() && !b.phys.inWater && !(b.home && !b.atHome() && /home/.test(b.action))) {
+    if ((dusk || b.isNight()) && !b.covered() && !b.phys.inWater && !(b.home && !b.atHome() && /home/.test(b.action) && Date.now() - b.homeFailAt > 5 * 60000)) {
       if (!this.nightOutSince) this.nightOutSince = Date.now();
       else if (Date.now() - this.nightOutSince > (b.isNight() ? 4000 : 12000) && !/shelter|bed|sleep|home/.test(b.action)) {
         this.nightOutSince = Date.now();

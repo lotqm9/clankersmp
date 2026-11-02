@@ -1862,6 +1862,8 @@ export class Body {
 
   /** Its house, once it has built one: the room's two standing cells, its doorway, and its floor height. */
   home: { x0: number; z0: number; y: number; door: [number, number, number] } | null = null;
+  /** When it last failed to get into its house: the evening reflex digs in instead of trying again in the dark. */
+  homeFailAt = 0;
 
   /** Blocks it can build walls with, and how many it has. */
   buildingBlocks(): { ids: number[]; n: number } {
@@ -2398,7 +2400,17 @@ export class Body {
     if (!h) return "you have no house yet (build_house)";
     if (!this.atHome()) {
       await this.goto(h.x0 + 1.5, h.y, h.z0 + 1.5, 0.6, { maxMs: 60000, done: () => this.atHome() });
-      if (!this.atHome()) return "couldn't get back into your house";
+      // the doorway it blocked up behind itself last night (no door) shuts it out from the outside too: sonnet
+      // walked round its own house in the dark and was shot. Open it from outside and go in
+      if (!this.atHome()) {
+        const [dx, dy, dz] = h.door;
+        for (const yy of [dy, dy + 1]) if (SOLID[this.get(dx, yy, dz)] && !isDoor(this.get(dx, yy, dz))) await this.mine(dx, yy, dz);
+        await this.goto(h.x0 + 1.5, h.y, h.z0 + 1.5, 0.6, { maxMs: 20000, done: () => this.atHome() });
+      }
+      if (!this.atHome()) {
+        this.homeFailAt = Date.now();
+        return "couldn't get back into your house";
+      }
     }
     const [dx, dy, dz] = h.door;
     const d = this.get(dx, dy, dz);

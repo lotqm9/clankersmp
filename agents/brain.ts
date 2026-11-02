@@ -935,7 +935,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         // the big ones (a 7 by 7 hall) rarely find dead flat ground by a crowded base: they look further and take a
         // three block slope, which the plan's foundation fills (haiku walked out 41 blocks and back, again and again)
         const big = w * d >= 25;
-        const spot = b.siteNear(base.x, base.z, base.y, w, d, kind === "lamp" ? footprints() : [...footprints(), ...villages], kind === "lamp" ? 24 : big ? 34 : 22, kind === "lamp" ? 2 : 3, big ? 3 : 2);
+        // further out, and a little more slope, each time the town is too crowded (sonnet walked round and round a
+        // full base looking for 3 by 3 of flat ground for a watchtower)
+        const avoid = kind === "lamp" ? footprints() : [...footprints(), ...villages];
+        let spot: ReturnType<typeof b.siteNear> = null;
+        for (const [far, slope] of kind === "lamp" ? [[24, 2]] : big ? [[34, 3], [44, 3]] : [[22, 2], [34, 3], [44, 3]]) {
+          spot = b.siteNear(base.x, base.z, base.y, w, d, avoid, far, kind === "lamp" ? 2 : 3, slope);
+          if (spot) break;
+        }
         if (!spot) return `no flat open spot near the base for ${civLabel(kind)} (${w} by ${d}): clear some trees or level some ground near the base`;
         site = { kind, x0: spot.x0, z0: spot.z0, x1: spot.x0 + w - 1, z1: spot.z0 + d - 1, y: spot.y, by: [], done: false, at: Date.now() };
       }

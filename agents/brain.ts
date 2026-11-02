@@ -1008,7 +1008,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (site.kind === "farm" && t === 1) return 1; // a farm is a farm once its field is planted
       const req = this.planOf(site, t).cells.filter(([, , , k]) => !cellTarget(k)?.optional && k !== "?p");
       const bad = req.filter((c) => b.needsWork(c)).length;
-      if (bad <= Math.floor(req.length * (site.kind === "wall" ? 0.06 : 0.03))) return t;
+      // the same allowance as finishing a build: a few trim blocks no pillar reaches don't make it a ruin (the audit
+      // had marked sonnet's just-finished cottage "down to tier 0" nine seconds after it counted it done)
+      if (bad <= Math.floor(req.length * (site.kind === "wall" ? 0.06 : 0.035)) || (bad <= 6 && req.length >= 120 && site.kind !== "wall")) return t;
     }
     return 0;
   }

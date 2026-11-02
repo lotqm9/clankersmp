@@ -969,6 +969,19 @@ export class Body {
   }
 
   /** A plain block it can spare for building (dirt first, then cobblestone, then planks). */
+  /** How many blocks round it are open (the roof and both levels of the four sides): what sealing in needs. */
+  openGaps(): number {
+    const x = Math.floor(this.phys.x), y = Math.floor(this.phys.y + 0.1), z = Math.floor(this.phys.z);
+    let n = SOLID[this.get(x, y + 2, z)] ? 0 : 1;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1]) if (!SOLID[this.get(x + dx, y + dy, z + dz)]) n++;
+    return n;
+  }
+
+  /** Blocks it carries that fillerBlock() would use. */
+  fillerCount(): number {
+    return [B.DIRT, B.COBBLESTONE, B.SAND, B.GRAVEL, B.OAK_PLANKS, B.BIRCH_PLANKS, B.STONE].reduce((t, id) => t + (id !== undefined ? this.count(id) : 0), 0);
+  }
+
   fillerBlock(): number {
     for (const id of [B.DIRT, B.COBBLESTONE, B.SAND, B.GRAVEL, B.OAK_PLANKS, B.BIRCH_PLANKS, B.STONE]) if (id !== undefined && this.has(id)) return id;
     return 0;
@@ -1539,6 +1552,14 @@ export class Body {
       if (!(await this.dropInto(x, y0 - k, z))) return "dug a hole but couldn't get into it";
     }
     for (let k = 0; k < 30 && !this.fillerBlock(); k++) await this.nextTick(); // the dirt it fell onto gets picked up
+    // in a cave the sides are open too: down further, into rock that closes round it, rather than run out of blocks
+    // halfway (opus dug in at y=36 in a cave and was left with an open side)
+    for (let k = 0; k < 4 && !this.abort && !this.dead && this.openGaps() > this.fillerCount(); k++) {
+      const fx = Math.floor(this.phys.x), fy = Math.floor(this.phys.y + 0.1), fz = Math.floor(this.phys.z);
+      const below = this.get(fx, fy - 1, fz);
+      if (IS_WATER[below] || !SOLID[below] || !(await this.mine(fx, fy - 1, fz, false)) || !(await this.dropInto(fx, fy - 1, fz))) break;
+      for (let t = 0; t < 10; t++) await this.nextTick();
+    }
     if (!this.fillerBlock()) return "dug down but has nothing to close the roof with";
     await this.sealIn();
     const lit = await this.lightUp();

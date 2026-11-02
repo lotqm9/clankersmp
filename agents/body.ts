@@ -420,6 +420,43 @@ export class Body {
     return this.inv[this.sel]?.id ?? 0;
   }
 
+  /** Nearly full, it loses what it crafts or mines (opus crafted a crafting table three times at 36 of 36 slots and
+   *  it was gone each time): throw out the least useful stacks until a few slots are free. What it threw, or "". */
+  async tidyInventory(free = 5): Promise<string> {
+    const used = () => this.inv.filter(Boolean).length;
+    if (this.inv.length - used() >= free) return "";
+    // least useful first, and how many of each to keep
+    const order: [RegExp, number][] = [
+      [/^rotten_flesh$|^poppy$|^dandelion$|flower|tulip|orchid|allium|bluet|daisy|^tall_grass$|^dead_bush$|_leaves$/, 0],
+      [/_sapling$/, 0],
+      [/^gravel$|^flint$/, 0],
+      [/^bone$|^string$|^feather$|^spider_eye$/, 0],
+      [/^sand$/, 0],
+      [/^dirt$/, 32],
+      [/^wheat_seeds$/, 16],
+      [/^cobblestone$/, 128],
+    ];
+    const thrown = new Map<string, number>();
+    // throw it out ahead and up, then step back out of reach: dropped at its feet, it picked it all straight back up
+    const a = (this.yaw * Math.PI) / 180;
+    await this.lookAt(this.phys.x - Math.sin(a) * 4, this.phys.y + 2.6, this.phys.z + Math.cos(a) * 4, 10);
+    for (const [re, keep] of order) {
+      for (let k = 0; k < 12 && this.inv.length - used() < free && !this.abort; k++) {
+        const id = this.inv.find((s) => s && re.test(itemName(s.id)) && this.count(s.id) > keep)?.id;
+        if (id === undefined) break;
+        const before = this.count(id);
+        if (!(await this.hold(id))) break;
+        this.send({ t: "drop", all: true });
+        await this.wait(3);
+        const went = before - this.count(id);
+        if (went <= 0) break;
+        thrown.set(itemName(id), (thrown.get(itemName(id)) ?? 0) + went);
+      }
+    }
+    if (thrown.size) await this.goto(this.phys.x + Math.sin(a) * 5, this.phys.y, this.phys.z - Math.cos(a) * 5, 1, { maxMs: 5000 });
+    return [...thrown].map(([k, n]) => `${n} ${k}`).join(", ");
+  }
+
   count(id: number): number {
     let n = 0;
     for (const st of this.inv) if (st && st.id === id) n += st.n;

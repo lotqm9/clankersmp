@@ -212,6 +212,7 @@ export class Brain {
   private nightOutSince = 0;
   /** Monsters it fought without getting anywhere (behind a wall, across a gap): left alone for a minute. */
   private leftAlone = new Map<number, number>();
+  private lastTidy = 0;
   private lastEat = 0;
   private lastPlayerHit = 0;
   private lastFail = "";
@@ -1205,6 +1206,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           });
         }
       }
+      return;
+    }
+    // a full bag loses whatever it crafts or mines next: make room (at most once a minute, never mid-fight)
+    if (b.inv.filter(Boolean).length >= 33 && Date.now() - this.lastTidy > 60000 && !b.hostiles(10).length) {
+      this.lastTidy = Date.now();
+      await this.reflex("making room in its inventory", async () => {
+        const t = await b.tidyInventory();
+        return t ? `Your inventory was full, so you threw out ${t}.` : "Your inventory is full of things you need: use some, or put them in a chest at the storehouse.";
+      });
       return;
     }
     // hungry with food on it: eat (not more than every 10 s)

@@ -6,7 +6,8 @@
 
 import WebSocket from "ws";
 import { inflateRawSync } from "node:zlib";
-import { EYE_HEIGHT, PROTOCOL_NAME, PROTOCOL_VERSION, WORLD_SIZE, idx, inWorld } from "../shared/constants.ts";
+import { EYE_HEIGHT, PROTOCOL_NAME, PROTOCOL_VERSION, SPAWN_X, SPAWN_Z, WORLD_SIZE, idx, inWorld } from "../shared/constants.ts";
+import { HUB_R } from "../shared/hub12.ts";
 import { FLAG, OP, decodeBlocks, decodePlayers, encodeMove, readBlockEntries, type S2C, type Stats } from "../shared/protocol.ts";
 import { OP_ANIMALS, OP_ANIMALS_GONE, SPECS as ANIMAL_SPECS, decodeAnimals, decodeGone } from "../shared/animals.ts";
 import { OP_ITEMS, OP_ITEMS_GONE, OP_ITEM_PICKUP, decodeIds, decodeItems, decodePickups, type ItemSnap } from "../shared/drops.ts";
@@ -42,6 +43,10 @@ export interface Rect {
 }
 /** One cell of a building plan: where, and what goes there (b building block, t torch, f fence, g glass, c chest). */
 export type PlanCell = [number, number, number, string];
+
+/** The spawn hub (its plaza, paths, boards and monument) is the world's landmark and is never dug up: sonnet
+ *  staircase-mined for cobblestone 49 blocks from spawn on day 1 of season 7 and tore up its paths. */
+export const inHub = (x: number, z: number) => Math.hypot(x + 0.5 - SPAWN_X, z + 0.5 - SPAWN_Z) < HUB_R + 4;
 
 /** Town building materials: stone walls, wooden corners, trim and roofs. Dirt, sand and whatever was growing there
  *  never stay in a town building above the ground: they get dug out and the right block goes in. */
@@ -677,9 +682,11 @@ export class Body {
     const far = Math.hypot(x - this.phys.x, z - this.phys.z) > 24;
     // the height counts too: aimed only at the column, haiku "got home" to a cave ten blocks under its house and opus
     // "built" the watchtower from a tunnel under it
-    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z), y });
+    // (no height known, NaN: the column alone, as before)
+    const gy = Number.isFinite(y) ? y : undefined;
+    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z), y: gy });
     if (!s) return null;
-    const i = s.reached >= 0 ? s.reached : s.closestTo(x, z, y);
+    const i = s.reached >= 0 ? s.reached : s.closestTo(x, z, gy);
     return s.pathTo(i);
   }
 
@@ -972,6 +979,7 @@ export class Body {
 
   /** Mine one block: walk into reach, the best tool, look at it, dig for as long as it takes, then make sure it went. */
   async mine(x: number, y: number, z: number, approach = true): Promise<boolean> {
+    if (inHub(x, z) && y >= (this.world?.info.spawnHeight ?? 0) - 6) return false;
     const id = this.get(x, y, z);
     if (id === B.AIR || IS_WATER[id] || BLOCKS[id]?.breakTicks < 0) return false;
     if (this.reachTo(x, y, z) > REACH) {
@@ -1476,12 +1484,32 @@ export class Body {
         // treading water against a wall: climb out the hard way
         stuck = 0;
         this.halt();
+        // walled in two high all round (opus, in a pocket of farm water with dirt on three sides): cut a step, the
+        // top block out of a wall, so there is a one block edge to climb onto. Whether or not a bank shows up
+        // further off: that one was across the walls, and it swam at them for an hour
+        if (await this.cutStepOutOfWater()) continue;
         if (this.fillerBlock()) await this.pillarUp(1);
         else await this.stepUp();
       }
     }
     this.halt();
     return !this.phys.inWater;
+  }
+
+  /** In water with a two-high wall on every side: break the top block of a wall beside it (never the town's own
+   *  blocks if there's another choice), leaving a one block step. True if it cut one. */
+  private async cutStepOutOfWater(): Promise<boolean> {
+    const x = Math.floor(this.phys.x);
+    const y = Math.floor(this.phys.y + 0.1);
+    const z = Math.floor(this.phys.z);
+    const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+      .map(([dx, dz]) => [x + dx, z + dz] as const)
+      .filter(([sx, sz]) => SOLID[this.get(sx, y, sz)] && SOLID[this.get(sx, y + 1, sz)] && !SOLID[this.get(sx, y + 2, sz)] && !IS_WATER[this.get(sx, y + 1, sz)]);
+    // natural ground first: dirt and grass, then anything else
+    const natural = (sx: number, sz: number) => { const id = this.get(sx, y + 1, sz); return id === B.DIRT || id === B.GRASS ? 0 : 1; };
+    sides.sort(([ax, az], [bx, bz]) => natural(ax, az) - natural(bx, bz));
+    for (const [sx, sz] of sides) if (await this.mine(sx, y + 1, sz, false)) return true;
+    return false;
   }
 
   /** The nearest dry spot to stand on within r blocks that a swimmer can climb onto (its floor at most about a block
@@ -2051,6 +2079,17 @@ export class Body {
   // ---------------------------------------------------------------- building the settlement
 
   /** The ground under a column near `near`: the top solid block, -1 for water, -2 for a tree. */
+  /** The top of a column: its highest solid block that isn't a tree, -1 over water or where nothing is loaded. For
+   *  "go to x z", where only the column is known. */
+  surfaceAt(x: number, z: number): number {
+    for (let y = 120; y >= 2; y--) {
+      const id = this.get(x, y, z);
+      if (IS_WATER[id]) return -1;
+      if (SOLID[id] && !TREE.has(id)) return y;
+    }
+    return -1;
+  }
+
   groundAt(x: number, z: number, near: number): number {
     for (let y = Math.min(126, near + 8); y >= Math.max(2, near - 10); y--) {
       const id = this.get(x, y, z);
@@ -2168,13 +2207,14 @@ export class Body {
     return -1;
   }
 
-  /** The top of the ground under a column as anyone walks on it (a path, paving, grass): plants and trees aside. */
-  surfaceAt(x: number, z: number, near: number): number {
+  /** The top of the ground under a column near `near` as anyone walks on it (a path, paving, grass): plants aside,
+   *  -1 water, -2 under a tree (a road goes round it, it doesn't fell it). */
+  pathAt(x: number, z: number, near: number): number {
     for (let y = Math.min(126, near + 8); y >= Math.max(2, near - 10); y--) {
       const id = this.get(x, y, z);
       if (IS_WATER[id]) return -1;
       if (TREE.has(id)) return -2;
-      if (SOLID[id] || id === B.DIRT_PATH) return y;
+      if (SOLID[id]) return y;
     }
     return -1;
   }

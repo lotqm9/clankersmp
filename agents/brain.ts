@@ -7,7 +7,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { Body, NIGHT_END, NIGHT_START, type PlanCell, type Rect, type Target } from "./body.ts";
+import { Body, NIGHT_END, NIGHT_START, inHub, type PlanCell, type Rect, type Target } from "./body.ts";
+import { SPAWN_X, SPAWN_Z } from "../shared/constants.ts";
+import { HUB_R } from "../shared/hub12.ts";
 import { KINDS, STAGES, UP_EXTRA, cellTarget, doorStep, faceToward, farmPlan, itemOf, label as civLabel, maxTier, needText, planFor, progress, roadPlan, sizeFacing, wallPlan, type Building, type Kind } from "./civ.ts";
 import { VILLAGE_SITES } from "../shared/villages.ts";
 import { B, BLOCKS, IS_WATER, SOLID } from "../shared/blocks.ts";
@@ -57,6 +59,9 @@ function civCount(k: Kind | "trade", tier = 1): number {
 }
 /** Everything built or being built: where new buildings must not go (the wall and the roads are lines, not lots). */
 let lastAudit = 0;
+/** Where each agent is mining right now, so two don't work the same tree or the same spot. */
+const MINING = new Map<string, { x: number; z: number; at: number }>();
+const takenByOther = (me: string, x: number, z: number) => [...MINING].some(([n, m]) => n !== me && Date.now() - m.at < 20000 && Math.hypot(m.x - x, m.z - z) < 5);
 function footprints(): Rect[] {
   return [...houseRects(), ...PACK.builds.filter((b) => b.kind !== "house" && b.kind !== "road").map((b) => (b.kind === "wall" ? { x0: b.x0 + 1, z0: b.z0 + 1, x1: b.x0 + 1, z1: b.z0 + 1 } : b))];
 }
@@ -668,7 +673,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           const x = Number(i.x);
           const z = Number(i.z);
           if (!Number.isFinite(x) || !Number.isFinite(z)) return "bad coordinates";
-          const ok = await b.goto(x, b.phys.y, z, 2, { maxMs: 90000, done: () => Math.hypot(x - b.phys.x, z - b.phys.z) < 2.5 });
+          // to the ground there, not to its own height: from a tunnel it aimed under the destination and went round in
+          // circles (opus, "go to 173 300" from 13 blocks down)
+          const top = b.surfaceAt(Math.floor(x), Math.floor(z));
+          const ok = await b.goto(x, top >= 0 ? top + 1 : NaN, z, 2, { maxMs: 90000, done: () => Math.hypot(x - b.phys.x, z - b.phys.z) < 2.5 });
           return ok ? "arrived" : `stopped at x=${Math.round(b.phys.x)} z=${Math.round(b.phys.z)}, couldn't get further`;
         }
         case "explore": {
@@ -676,7 +684,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           const [dx, dz] = d === "east" ? [1, 0] : d === "west" ? [-1, 0] : d === "south" ? [0, 1] : [0, -1];
           const x = Math.max(8, Math.min(504, b.phys.x + dx * 40));
           const z = Math.max(8, Math.min(504, b.phys.z + dz * 40));
-          await b.goto(x, b.phys.y, z, 3, { maxMs: 45000 });
+          const top = b.surfaceAt(Math.floor(x), Math.floor(z));
+          await b.goto(x, top >= 0 ? top + 1 : NaN, z, 3, { maxMs: 45000, done: () => Math.hypot(x - b.phys.x, z - b.phys.z) < 3 });
           return `walked ${d} to x=${Math.round(b.phys.x)} z=${Math.round(b.phys.z)}`;
         }
         case "give": return await this.give(String(i.player ?? ""), String(i.item ?? ""), Math.max(1, Math.min(64, Number(i.count) || 1)));
@@ -785,8 +794,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         case "wait": {
           b.halt();
           const s = Math.max(2, Math.min(30, Number(i.seconds) || 5));
+          // look around the way a person does: a glance one way or the other and back, or at someone nearby. It used
+          // to turn another 40 to 100 degrees every 3 s, always the same way, so a long wait was opus spinning in circles
+          const ahead = b.yaw;
           for (let k = 0; k < s * 20 && !b.abort && !b.dead; k++) {
-            if (k % 60 === 0) b.wantYaw = (b.yaw + 40 + Math.random() * 60) % 360; // look around now and then
+            if (k % 100 === 50) {
+              const o = [...b.others.values()].find((p) => Math.hypot(p.x - b.phys.x, p.z - b.phys.z) < 16);
+              if (o && Math.random() < 0.5) b.wantYaw = ((Math.atan2(-(o.x - b.phys.x), o.z - b.phys.z) * 180) / Math.PI + 360) % 360;
+              else b.wantYaw = (ahead + (Math.random() < 0.5 ? -1 : 1) * (20 + Math.random() * 40) + 360) % 360;
+            } else if (k % 100 === 0 && k) b.wantYaw = ahead;
             await b.nextTick();
           }
           return "waited";
@@ -814,26 +830,30 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // the villages: a player digs a quarry, not a hole here and a hole there all over the base
     const soft = !plan.blocks.includes(B.STONE) && plan.blocks.some((id) => id === B.DIRT || id === B.GRASS || id === B.SAND || id === B.GRAVEL);
     const villages = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean);
-    const theirs = (x: number, z: number) => villages.some((v) => Math.hypot(x - v.x, z - v.z) < 27) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
+    const theirs = (x: number, z: number) => inHub(x, z) || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 27) || footprints().some((r) => x >= r.x0 - 2 && x <= r.x1 + 2 && z >= r.z0 - 2 && z <= r.z1 + 2);
     const offLimits = (x: number, z: number) => (PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 16) || theirs(x, z);
     let pit: [number, number, number] | null = null;
     // stone comes out of the ground away from the town: never the town's own walls (the nearest "cobblestone" was
     // the town hall's, so they took its lower walls apart for a house), and never a village's houses
     const stone = plan.blocks.includes(B.STONE);
-    if (stone && offLimits(b.phys.x, b.phys.z) && PACK.base) {
+    // out of the spawn hub, or out of the town, before mining stone
+    const away = inHub(b.phys.x, b.phys.z) || !PACK.base
+      ? { x: SPAWN_X, z: SPAWN_Z, r: HUB_R + 14, y: b.world?.info.spawnHeight ?? Math.floor(b.phys.y), what: "the spawn hub" }
+      : { x: PACK.base.x, z: PACK.base.z, r: 20, y: PACK.base.y, what: "the town" };
+    if (stone && offLimits(b.phys.x, b.phys.z)) {
       // out on the ground, not through the rock: in a tunnel under the town it stood still for 3 minutes aiming at a
       // spot 20 blocks out at its own depth (opus)
-      if (b.phys.y < PACK.base.y - 3) {
+      if (b.phys.y < away.y - 3) {
         b.action = `climbing up out of the tunnel`;
         await b.digOut();
       }
-      const a = Math.atan2(b.phys.z - PACK.base.z, b.phys.x - PACK.base.x);
-      const tx = Math.floor(PACK.base.x + Math.cos(a) * 20);
-      const tz = Math.floor(PACK.base.z + Math.sin(a) * 20);
-      const g = b.groundAt(tx, tz, PACK.base.y);
-      b.action = `walking out of the town to mine`;
-      await b.goto(tx + 0.5, g >= 0 ? g + 1 : PACK.base.y, tz + 0.5, 3, { maxMs: 25000 });
-      if (offLimits(b.phys.x, b.phys.z)) return `couldn't get out of the town to mine stone (it never comes out of the town's own ground): walk out of the base a little (explore), then collect`;
+      const a = Math.atan2(b.phys.z - away.z, b.phys.x - away.x);
+      const tx = Math.floor(away.x + Math.cos(a) * away.r);
+      const tz = Math.floor(away.z + Math.sin(a) * away.r);
+      const g = b.groundAt(tx, tz, away.y);
+      b.action = `walking out of ${away.what} to mine`;
+      await b.goto(tx + 0.5, g >= 0 ? g + 1 : away.y, tz + 0.5, 3, { maxMs: 30000 });
+      if (offLimits(b.phys.x, b.phys.z)) return `couldn't get out of ${away.what} to mine stone (stone never comes out of ${away.what}'s ground): walk out a little further (explore), then collect`;
     }
     while (!b.abort && !b.dead && have() - start < count && Date.now() - t0 < 90000) {
       // nothing deep: the deep caves are where Rattlers wait in the dark
@@ -843,6 +863,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       let found = b.findBlocks(plan.blocks, 32, soft ? 4000 : stone ? 400 : 16).filter(([x, y, z]) => y >= floor && !wet(x, y, z) && !skip.has(x + z * 512 + y * 262144));
       if (stone) found = found.filter(([x, , z]) => !offLimits(x, z)).slice(0, 16);
       else if (!soft) found = found.filter(([x, , z]) => !theirs(x, z));
+      // not where another agent is already working (all three went for the same oak at the start of season 7)
+      const free = found.filter(([x, , z]) => !takenByOther(this.name, x, z));
+      if (free.length) found = free;
       if (soft) {
         found = found.filter(([x, , z]) => !offLimits(x, z));
         if (pit) {
@@ -875,6 +898,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       const tool = b.bestToolFor(id);
       if (!canHarvest(id, tool)) return `${BLOCKS[id]?.key ?? item} drops nothing without the right tool (craft a pickaxe first)`;
       tried++;
+      MINING.set(this.name, { x, z, at: Date.now() });
       const ok = await b.mine(x, y, z);
       if (!ok) skip.add(x + z * 512 + y * 262144);
       else await b.pickUp(5, 5000);
@@ -907,7 +931,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       const skip = (x: number, z: number) => paths.has(`${x},${z}`) || lots.some((r) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1);
       return { cells: wallPlan(Math.floor((site.x0 + site.x1) / 2), Math.floor((site.z0 + site.z1) / 2), Math.floor((site.x1 - site.x0) / 2), (x, z) => b.landAt(x, z, base.y), tier, skip) };
     }
-    if (site.kind === "road") return roadPlan(this.hub(), PACK.builds.filter((x) => x.done || x === site), (x, z) => b.surfaceAt(x, z, base.y), tier);
+    if (site.kind === "road") return roadPlan(this.hub(), PACK.builds.filter((x) => x.done || x === site), (x, z) => b.pathAt(x, z, base.y), tier);
     if (site.kind === "farm") return { cells: farmPlan(site, tier, this.hub(), (x, z) => b.landAt(x, z, base.y)) };
     return { cells: planFor(site, tier, (x, z) => b.naturalGround(x, z, base.y)) };
   }
@@ -933,8 +957,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   private roadCount(road: Building): [number, number, number] {
     const b = this.body;
     const builds = PACK.builds.filter((x) => x.done || x === road);
-    const p1 = roadPlan(this.hub(), builds, (x, z) => b.surfaceAt(x, z, PACK.base!.y), 1);
-    const p2 = roadPlan(this.hub(), builds, (x, z) => b.surfaceAt(x, z, PACK.base!.y), 2);
+    const p1 = roadPlan(this.hub(), builds, (x, z) => b.pathAt(x, z, PACK.base!.y), 1);
+    const p2 = roadPlan(this.hub(), builds, (x, z) => b.pathAt(x, z, PACK.base!.y), 2);
     const doors = builds.map((x, i) => (doorStep(x) && x.kind !== "lamp" ? i : -1)).filter((i) => i >= 0);
     const joined = (p: { cells: PlanCell[]; of: number[] }) => doors.filter((i) => p.cells.every((c, k) => p.of[k] !== i || !b.needsWork(c))).length;
     return [joined(p1), joined(p2), doors.length];

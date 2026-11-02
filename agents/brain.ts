@@ -771,8 +771,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         case "wait": {
           b.halt();
           const s = Math.max(2, Math.min(30, Number(i.seconds) || 5));
+          // look around the way a person does: a glance one way or the other and back, or at someone nearby. It used
+          // to turn another 40 to 100 degrees every 3 s, always the same way, so a long wait was opus spinning in circles
+          const ahead = b.yaw;
           for (let k = 0; k < s * 20 && !b.abort && !b.dead; k++) {
-            if (k % 60 === 0) b.wantYaw = (b.yaw + 40 + Math.random() * 60) % 360; // look around now and then
+            if (k % 100 === 50) {
+              const o = [...b.others.values()].find((p) => Math.hypot(p.x - b.phys.x, p.z - b.phys.z) < 16);
+              if (o && Math.random() < 0.5) b.wantYaw = ((Math.atan2(-(o.x - b.phys.x), o.z - b.phys.z) * 180) / Math.PI + 360) % 360;
+              else b.wantYaw = (ahead + (Math.random() < 0.5 ? -1 : 1) * (20 + Math.random() * 40) + 360) % 360;
+            } else if (k % 100 === 0 && k) b.wantYaw = ahead;
             await b.nextTick();
           }
           return "waited";

@@ -935,6 +935,14 @@ export class Body {
     return best;
   }
 
+  /** Well armoured (iron or better on most of the body) with a real sword or axe: it can take a monster on rather
+   *  than hide from it (opus dug in from a rattler in full iron with an iron sword). */
+  strong(): boolean {
+    const armor = this.armor.reduce((n, st) => n + ((st && itemDef(st.id)?.armor?.points) || 0), 0);
+    const w = this.bestWeapon();
+    return armor >= 12 && !!w && (itemDef(w)?.tool?.damage ?? 0) >= 5;
+  }
+
   bestWeapon(): number {
     let best = 0;
     let dmg = 1;

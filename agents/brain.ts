@@ -1163,10 +1163,13 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // at night to chase one 23 blocks past two shamblers, and died)
       const night = b.isNight();
       const others = r ? b.hostiles(14).filter((m) => m.id !== r.id).length : 0;
-      if (r && r.d < (night ? 7 : 14) && b.bestWeapon() && b.stats.hp >= (night ? 12 : 8) && others <= (night ? 0 : 1)) {
+      // in iron with an iron sword it goes after it even at night, with a monster or two about
+      const strong = b.strong();
+      const careful = night && !strong;
+      if (r && r.d < (careful ? 7 : 14) && b.bestWeapon() && b.stats.hp >= (careful ? 12 : 8) && others <= (strong ? 2 : night ? 0 : 1)) {
         let res = "";
         await this.reflex("going after a rattler", async () => {
-          res = await b.fight({ kind: "mob", id: r.id }, 20000, 6, night ? 8 : 14);
+          res = await b.fight({ kind: "mob", id: r.id }, 20000, strong ? 5 : 6, careful ? 8 : 14);
           return `A rattler was shooting at you and you went for it (${res}).`;
         });
         if (/backed off/.test(res) && !b.dead && !b.sealed()) await this.reflex("hurt, digging in away from the rattler", async () => `You were badly hurt fighting a rattler, so you dug in: ${await b.digIn()}.`);
@@ -1179,7 +1182,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // the blocks, and it swung at the wall for 3 minutes, a 15 s fight at a time; at home it's safe, so leave it)
     if (h && (h.d < 3.2 || (hurtRecently && h.d < 6)) && !b.sealed() && !((this.leftAlone.get(h.id) ?? 0) > Date.now() && !hurtRecently)) {
       const armed = !!b.bestWeapon();
-      if (b.stats.hp < 8 && b.covered()) {
+      const strong = b.strong();
+      if (b.stats.hp < (strong ? 5 : 8) && b.covered()) {
         await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled yourself in to heal: ${await b.digIn()}.`);
         return;
       }
@@ -1193,7 +1197,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         // 20 health to 0 without stopping)
         let res = "";
         await this.reflex(`fighting a ${h.key}`, async () => {
-          res = await b.fight({ kind: "mob", id: h.id }, 15000, 7);
+          res = await b.fight({ kind: "mob", id: h.id }, 15000, strong ? 5 : 7);
           return `A ${h.key} attacked you and you fought it (${res}).`;
         });
         if (/ran out of time|couldn't get to it|out of reach/.test(res)) this.leftAlone.set(h.id, Date.now() + 60000);

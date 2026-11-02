@@ -2364,6 +2364,7 @@ export class Body {
    *  (dirt in a wall, cobblestone an upgrade turns into stone bricks), furniture and anyone's chest never do. `short`
    *  comes back with the items it ran out of, cell by cell, so the job can go and get them. */
   async buildCells(cells: PlanCell[], max: number, label: string, floorY = -1): Promise<{ placed: number; left: number; outOf: boolean; why: string; short: Map<number, number> }> {
+    this.scaffoldNeed = 0;
     const missing = (c: PlanCell) => this.needsWork(c);
     const footprint = new Set(cells.map(([x, , z]) => `${x},${z}`));
     // the cells a block goes in: never somewhere to stand while it builds
@@ -2484,7 +2485,7 @@ export class Body {
       if (!why && missing(todo[i])) {
         const g = this.groundAt(x, z, y);
         why = this.reachTo(x, y, z) > REACH
-          ? `the block at x=${x} y=${y} z=${z} is out of reach${g >= 0 && y - g > 3 ? ` (${y - g} above the ground there)` : ""}`
+          ? `the block at x=${x} y=${y} z=${z} is out of reach${g >= 0 && y - g > 3 ? ` (${y - g} above the ground there)` : ""}${this.scaffoldNeed ? `, and no spare blocks to build a pillar up to it (${this.scaffoldNeed} dirt would do)` : ""}`
           : `something is in the way at x=${x} y=${y} z=${z} (someone standing there, or a block that isn't yours to replace)`;
       }
     }
@@ -2525,13 +2526,18 @@ export class Body {
     if (!there()) await this.goto(cx + 0.5, g + 1, cz + 0.5, 0.4, { maxMs: 15000, done: there });
     if (!there()) return -1;
     await this.center(cx, cz, 20);
-    if (k > 0 && this.buildingBlocks().n < k + 1) return -1;
+    if (k > 0 && this.buildingBlocks().n < k + 1) {
+      this.scaffoldNeed = Math.max(this.scaffoldNeed, k + 1 - this.buildingBlocks().n);
+      return -1;
+    }
     this.lastPillar = { x: cx, z: cz, top: g + k };
     return k > 0 ? await this.pillarUp(k) : 0;
   }
 
   /** Where its last scaffold pillar went up: the column, and the height of its top block. */
   private lastPillar = { x: 0, z: 0, top: 0 };
+  /** Spare blocks the last buildCells was short of for a pillar up to a cell out of reach (0: none short). */
+  scaffoldNeed = 0;
 
   /** Down the pillar it stands on, a block at a time (it gets the blocks back). */
   private async climbDown(n: number, pillar?: { x: number; z: number; top: number; keep?: Set<string> }): Promise<void> {

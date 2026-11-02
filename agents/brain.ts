@@ -1113,6 +1113,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     let placed = 0;
     const lacking = new Set<string>();
     let first = true;
+    let dirtTried = false;
     for (let round = 0; round < 8 && !b.abort && !b.dead && Date.now() < deadline && left() > 0; round++) {
       s.busy = { by: this.name, at: Date.now() };
       const need = this.billOf(cells);
@@ -1132,6 +1133,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       await toMiddle();
       r = await b.buildCells(cells, kind === "wall" || kind === "road" ? 64 : 120, `${upgrade ? "upgrading" : "building"} ${what}`, s.y);
       placed += r.placed;
+      // out of reach for want of a few spare blocks to stand on (the pillar it climbs is built of them): dig some dirt
+      // and go again (sonnet tried a cottage's last six roof blocks turn after turn with none)
+      if (!r.placed && !r.outOf && b.scaffoldNeed > 0 && !dirtTried) {
+        dirtTried = true;
+        b.action = `getting dirt to climb up to ${nameOf(kind)}`;
+        await this.collect("dirt", Math.min(32, b.scaffoldNeed + 10));
+        continue;
+      }
       if (!r.placed && !r.outOf) break; // in the way or out of reach: more blocks won't help
       if (!r.placed && r.outOf && !this.billOf(cells).size) break;
     }

@@ -1566,19 +1566,71 @@ export class Body {
     return (this.sealed() ? "sealed in underground" : "dug in, but the hole isn't fully closed (out of blocks to close it?)") + (lit ? ", with a torch" : "");
   }
 
+  /** Badly hurt with a monster at arm's length: digging three blocks down first takes seconds with it hitting all the
+   *  while (opus died two seconds into it, 11/2). Back off a step if it's right up against it (no block goes into a
+   *  cell it stands in), block its side first, then the rest round it where it stands. Only if that leaves a gap,
+   *  dig in as before. */
+  async wallOff(): Promise<string> {
+    if (this.sealed()) return "already sealed in";
+    this.halt();
+    if (this.phys.inWater || this.openGaps() > this.fillerCount()) return this.digIn();
+    const key = this.hostiles(5)[0]?.key ?? "monster";
+    for (let k = 0; k < 3 && !this.sealed() && !this.dead && !this.abort; k++) {
+      const m = this.hostiles(5)[0];
+      if (m && this.mobInGap()) await this.flee(m.x, m.z, 8);
+      await this.sealIn(true);
+    }
+    if (this.sealed()) return `walled itself off from the ${key}${(await this.lightUp()) ? ", with a torch" : ""}`;
+    // never dig down with it at arm's length: it drops into the hole too, and gets sealed in with it (the test: dead
+    // in a closed hole, a shambler inside)
+    if (this.hostiles(4).length) return `couldn't wall the ${key} off (${this.openGaps()} gaps still open)`;
+    return this.digIn();
+  }
+
+  /** A tunnel it can close in a step or two: few gaps round it, the blocks for them, none with a monster in it. */
+  canWallOff(): boolean {
+    const gaps = this.openGaps();
+    return gaps <= 3 && this.fillerCount() >= gaps && !this.mobInGap() && !this.phys.inWater;
+  }
+
+  /** Is a monster standing in one of the cells round it (a side at its feet or head)? */
+  mobInGap(): boolean {
+    const x = Math.floor(this.phys.x), y = Math.floor(this.phys.y + 0.1), z = Math.floor(this.phys.z);
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1]) if (this.mobIn(x + dx, y + dy, z + dz)) return true;
+    return false;
+  }
+
+  private mobIn(gx: number, gy: number, gz: number): boolean {
+    return this.hostiles(5).some((m) => {
+      const w = (MOB_SPECS[m.kind]?.w ?? 0.6) / 2, h = MOB_SPECS[m.kind]?.h ?? 1.95;
+      return m.x + w > gx && m.x - w < gx + 1 && m.z + w > gz && m.z - w < gz + 1 && m.y + h > gy && m.y < gy + 1;
+    });
+  }
+
   /** Close every gap round it: the roof over its head and the four sides at its feet and head (dug into a
    *  staircase or a cave, a hole three blocks down still opens onto the old tunnels). A torch or a plant in a gap
    *  comes out first. */
-  async sealIn(): Promise<void> {
+  async sealIn(mobFirst = false): Promise<void> {
     const x = Math.floor(this.phys.x);
     const y = Math.floor(this.phys.y + 0.1);
     const z = Math.floor(this.phys.z);
-    const gaps: [number, number, number][] = [[x, y + 2, z]];
+    let gaps: [number, number, number][] = [[x, y + 2, z]];
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) gaps.push([x + dx, y + 1, z + dz], [x + dx, y, z + dz]);
+    // walling a monster off: the side it's on first, the roof last, and a cell it stands in left till the end (a
+    // block put there is refused, and waiting on it loses a second)
+    const m = mobFirst ? this.hostiles(6)[0] : undefined;
+    if (m) {
+      // and the feet before the head on each side, the roof after them (a block needs one beside it to go on: in the
+      // open a head-high one or the roof has nothing to go against till those are in)
+      const far = (g: [number, number, number]) => (g[1] === y + 2 ? 99 : (g[1] - y) * 0.5) + Math.hypot(g[0] + 0.5 - m.x, g[2] + 0.5 - m.z) * 2;
+      gaps = gaps.sort((p, q) => far(p) - far(q));
+      gaps = [...gaps.filter((g) => !this.mobIn(...g)), ...gaps.filter((g) => this.mobIn(...g))];
+    }
     for (const [gx, gy, gz] of gaps) {
       if (this.abort || this.dead) return;
       let id = this.get(gx, gy, gz);
       if (SOLID[id]) continue;
+      if (m && this.mobIn(gx, gy, gz)) continue;
       if (id !== B.AIR && !IS_WATER[id] && !BLOCKS[id]?.replaceable) {
         await this.mine(gx, gy, gz, false);
         id = this.get(gx, gy, gz);

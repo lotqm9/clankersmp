@@ -1233,14 +1233,20 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return;
     }
     // a monster in its face: fight it (with a weapon or health to spare), else run; badly hurt in a tunnel there is
-    // nowhere to run (sonnet died fighting and fleeing in turns down a one-wide staircase): wall itself in instead
+    // nowhere to run (sonnet died fighting and fleeing in turns down a one-wide staircase). Wall it off if a block or
+    // two closes the tunnel; otherwise fight it out. Digging in with it at arm's length is death: it drops into the
+    // hole too, and three blocks down takes seconds of its hits (opus died two seconds into it, 11/2; on the test
+    // server at 7 health, a stone sword and no armour, digging in and walling off in the open died every time, and
+    // standing to fight lived)
     // (not one it just fought without getting anywhere: a shambler right outside sonnet's wall was in reach but behind
     // the blocks, and it swung at the wall for 3 minutes, a 15 s fight at a time; at home it's safe, so leave it)
     if (h && (h.d < 3.2 || (hurtRecently && h.d < 6)) && !b.sealed() && !((this.leftAlone.get(h.id) ?? 0) > Date.now() && !hurtRecently)) {
       const armed = !!b.bestWeapon();
       const strong = b.strong();
-      if (b.stats.hp < (strong ? 5 : 8) && b.covered()) {
-        await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled yourself in to heal: ${await b.digIn()}.`);
+      const below = b.covered();
+      if (b.stats.hp < (strong ? 5 : 8) && below && b.canWallOff()) {
+        await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled it off to heal: ${await b.wallOff()}.`);
+        if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
         return;
       }
       if ((h.key === "rattler" && !armed && h.d > 3) || (!armed && b.stats.hp < 8)) {
@@ -1251,14 +1257,16 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       } else {
         // fight it, but not to the death: badly hurt, it breaks off and runs (shamblers are slow; opus fought one from
         // 20 health to 0 without stopping)
+        // underground with no quick wall to put up, no backing off: there's nowhere to go
         let res = "";
         await this.reflex(`fighting a ${h.key}`, async () => {
-          res = await b.fight({ kind: "mob", id: h.id }, 15000, strong ? 5 : 7);
+          res = await b.fight({ kind: "mob", id: h.id }, 15000, below && !b.canWallOff() ? 0 : strong ? 5 : 7);
           return `A ${h.key} attacked you and you fought it (${res}).`;
         });
         if (/ran out of time|couldn't get to it|out of reach/.test(res)) this.leftAlone.set(h.id, Date.now() + 60000);
         if (/backed off/.test(res) && !b.dead && b.covered()) {
-          await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${h.key} underground, so you walled yourself in to heal: ${await b.digIn()}.`);
+          await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${h.key} underground, so you walled it off to heal: ${await b.wallOff()}.`);
+          if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
         } else if (/backed off/.test(res) && !b.dead) {
           await this.reflex(`running from a ${h.key}, badly hurt`, async () => {
             await b.flee(h.x, h.z, 140);

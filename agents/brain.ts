@@ -801,7 +801,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         }
         case "go_to_base": {
           if (!PACK.base) return "the pack has no base yet: the first house anyone builds becomes it";
-          const ok = await b.goto(PACK.base.x + 0.5, PACK.base.y, PACK.base.z + 0.5, 4, { maxMs: 90000 });
+          // within 7 counts: the base is the first house, and its middle is inside that house, so from outside the walls
+          // "within 4" was never reached and they circled the house at dusk (sonnet and haiku, season 11)
+          const base = PACK.base;
+          const ok = await b.goto(base.x + 0.5, base.y, base.z + 0.5, 7, { maxMs: 90000, done: () => Math.hypot(base.x + 0.5 - b.phys.x, base.z + 0.5 - b.phys.z) <= 7 });
           return ok ? "you're at the pack's base" : `you couldn't get all the way to the base (${Math.round(Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z))} blocks left)`;
         }
         case "go_home": return await b.goHome();

@@ -11,7 +11,7 @@ import { Body, NIGHT_END, NIGHT_START, inHub, type PlanCell, type Rect, type See
 import { SPAWN_X, SPAWN_Z } from "../shared/constants.ts";
 import { HUB_R } from "../shared/hub12.ts";
 import { KINDS, ONCE, STAGES, UP_EXTRA, cellTarget, doorStep, faceToward, farmPlan, homeOf, itemOf, label as civLabel, materialsFor, maxTier, needText, planFor, progress, sizeFacing, wallPlan, type Building, type Kind, type Plain } from "./civ.ts";
-import { chooseLot, districtFar, districtOf, keptLots, lotRoom, plazaRect, streetPlan, streetsOf, wallRadius, STREET_HALF, WALL, type Point } from "./town.ts";
+import { HEADS, chooseLot, districtFar, districtOf, keptLots, lotRoom, plazaRect, streetPlan, streetsOf, wallRadius, STREET_HALF, WALL, type Point } from "./town.ts";
 import { ROLES, assignRoles, jobText, rawIn, rawOf, slotOf, slotText, type Raw, type Role, type Slot } from "./board.ts";
 import { VILLAGE_SITES } from "../shared/villages.ts";
 import { JOBS } from "../shared/villagers.ts";
@@ -78,6 +78,29 @@ function isHome(b: Rect & { kind?: Kind }): boolean {
 }
 /** A building's tier: what it was last measured at (an old record nobody has measured yet: 1). */
 const tierOf = (b: Building) => (isHome(b) ? 0 : b.tier ?? 1);
+/** Trees: a lot's trees come down before it is built, the canopy and all. */
+const TREE_IDS = new Set<number>([B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG, B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES]);
+/** Buildings with a spot of their own in the town plan (the plaza in the middle, the landmarks at the heads of the
+ *  avenues): never given up as "a bad spot" (the same spot comes round again), what's in the way gets said instead. */
+const FIXED: ReadonlySet<Kind> = new Set<Kind>(["plaza", ...(Object.keys(HEADS) as Kind[])]);
+/** The spawn hub as rectangles (strips of its circle), for site searches that take rectangles to keep off. */
+const HUB_RECTS: Rect[] = (() => {
+  const R = HUB_R + 4;
+  const out: Rect[] = [];
+  for (let z = -R; z <= R; z += 4) {
+    const zz = z <= 0 && z + 3 >= 0 ? 0 : Math.min(Math.abs(z), Math.abs(z + 3));
+    const half = Math.ceil(Math.sqrt(Math.max(0, R * R - zz * zz)));
+    out.push({ x0: SPAWN_X - half, x1: SPAWN_X + half, z0: SPAWN_Z + z, z1: SPAWN_Z + z + 3 });
+  }
+  return out;
+})();
+/** A plan without its cells inside the spawn hub: nothing is ever dug there (body.mine), so a building or a street
+ *  whose corner runs into the hub is done without that corner (the hub is levelled already). */
+function noHub<T extends { cells: PlanCell[]; of?: number[] }>(p: T): T {
+  const keep = p.cells.map((c) => !inHub(c[0], c[2]));
+  if (keep.every(Boolean)) return p;
+  return { ...p, cells: p.cells.filter((_, i) => keep[i]), of: p.of?.filter((_, i) => keep[i]) };
+}
 /** A kind as the thing being built (the roads are one network: "the roads", not "a building joined by a path"). */
 const nameOf = (k: Kind) => (k === "road" ? "the roads" : civLabel(k));
 /** What a tier adds, in words. */
@@ -1319,7 +1342,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         }
       if (best < 0) {
         const spot = this.body.siteNear(base.x, base.z, base.y, 11, 11, avoid, 32, 0, 3);
-        if (spot && !inHub(spot.x0 + 5, spot.z0 + 5)) c = { x: spot.x0 + 5, z: spot.z0 + 5 };
+        // (the whole plaza square clear of the spawn hub, not just its middle: season 13's plaza had a third of its
+        // square in the hub, where nothing is dug, and was given up as a bad spot)
+        if (spot) {
+          const cc = { x: spot.x0 + 5, z: spot.z0 + 5 };
+          const r = plazaRect(cc);
+          let clear = true;
+          for (let x = r.x0; x <= r.x1 && clear; x++) for (let z = r.z0; z <= r.z1 && clear; z++) if (inHub(x, z)) clear = false;
+          if (clear) c = cc;
+        }
       }
     }
     PACK.centre = c;
@@ -1346,7 +1377,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   }
 
   /** A building's plan at a tier, whatever its kind (the wall, the roads and the farms have their own). */
-  private planOf(site: Building, tier: number): { cells: PlanCell[]; of?: number[] } {
+  private planOf(site: Building, tier: number, building = false): { cells: PlanCell[]; of?: number[] } {
     const b = this.body;
     const base = PACK.base!;
     if (site.kind === "wall") {
@@ -1355,11 +1386,42 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       const road = PACK.builds.find((x) => x.kind === "road");
       const paths = new Set(road ? this.planOf(road, 1).cells.map(([x, , z]) => `${x},${z}`) : []);
       const skip = (x: number, z: number) => paths.has(`${x},${z}`) || lots.some((r) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1);
-      return { cells: wallPlan(Math.floor((site.x0 + site.x1) / 2), Math.floor((site.z0 + site.z1) / 2), Math.floor((site.x1 - site.x0) / 2), (x, z) => b.landAt(x, z, base.y), tier, skip) };
+      return noHub({ cells: wallPlan(Math.floor((site.x0 + site.x1) / 2), Math.floor((site.z0 + site.z1) / 2), Math.floor((site.x1 - site.x0) / 2), (x, z) => b.landAt(x, z, base.y), tier, skip) });
     }
-    if (site.kind === "road") return streetPlan(this.hub(), PACK.builds.filter((x) => x.done || x === site), (x, z) => b.pathAt(x, z, base.y), tier);
-    if (site.kind === "farm") return { cells: farmPlan(site, tier, this.hub(), (x, z) => b.landAt(x, z, base.y)) };
-    return { cells: planFor(site, tier, (x, z) => b.naturalGround(x, z, base.y)) };
+    if (site.kind === "road") return noHub(streetPlan(this.hub(), PACK.builds.filter((x) => x.done || x === site), (x, z) => b.pathAt(x, z, base.y), tier));
+    if (site.kind === "farm") return noHub({ cells: farmPlan(site, tier, this.hub(), (x, z) => b.landAt(x, z, base.y)) });
+    const cells = planFor(site, tier, (x, z) => b.naturalGround(x, z, base.y));
+    if (!building || site.done) return noHub({ cells });
+    // building it: the trees on its lot come down first, the canopy and all (a trunk left standing on the plaza, or
+    // leaves hanging over a lot, are in the way of the blocks there)
+    const have = new Set(cells.map(([x, y, z]) => `${x},${y},${z}`));
+    const trees: PlanCell[] = [];
+    for (let x = site.x0; x <= site.x1; x++) for (let z = site.z0; z <= site.z1; z++) for (let y = site.y; y <= site.y + 14; y++) if (TREE_IDS.has(b.get(x, y, z)) && !have.has(`${x},${y},${z}`)) trees.push([x, y, z, "a"]);
+    return noHub({ cells: trees.length ? [...trees.sort((p, q) => q[1] - p[1]), ...cells] : cells });
+  }
+
+  /** Why nothing would go in, when the build couldn't say: what is in the first cells still to do (inside the spawn
+   *  hub, a tree, water, out of reach, someone's things). */
+  private whyStuck(cells: PlanCell[]): string {
+    const b = this.body;
+    const left = cells.filter((c) => !cellTarget(c[3])?.optional && b.needsWork(c));
+    if (!left.length) return "";
+    const say: string[] = [];
+    for (const [x, y, z, k] of left.slice(0, 60)) {
+      const id = b.get(x, y, z);
+      const what = BLOCKS[id]?.name ?? "something";
+      const want = cellTarget(k.split("|")[0]);
+      const at = `x=${x} y=${y} z=${z}`;
+      const why = inHub(x, z) ? `${at} is inside the spawn hub, where nothing is dug`
+        : TREE_IDS.has(id) ? `a tree in the way (${what} at ${at}${b.reachTo(x, y, z) > 4.3 ? ", out of reach" : ""})`
+        : IS_WATER[id] ? `water at ${at}`
+        : isStorage(id) ? `somebody's ${what} at ${at}`
+        : b.reachTo(x, y, z) > 4.3 ? `${want ? (BLOCKS[want.id]?.name ?? "the block") : what} at ${at} is out of reach from where it stood`
+        : `${what} at ${at}${want ? ` where ${BLOCKS[want.id]?.name ?? "a block"} goes` : ""}`;
+      if (!say.includes(why)) say.push(why);
+      if (say.length >= 3) break;
+    }
+    return `${left.length} cells won't take: ${say.join("; ")}`;
   }
 
   /** How far a building is built up: the highest tier whose plan it meets (a few blocks short is fine: a torch
@@ -1454,7 +1516,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     s.busy = { by: this.name, at: Date.now() };
     if (!s.by.includes(this.name)) s.by.push(this.name);
     const what = `${nameOf(kind)}${tier > 1 ? ` (tier ${tier})` : ""}`;
-    const cells = this.planOf(s, tier).cells;
+    const cells = this.planOf(s, tier, true).cells;
     if (kind === "road" && !cells.length) {
       s.busy = undefined;
       if (!s.done) PACK.builds = PACK.builds.filter((x) => x !== s);
@@ -1565,15 +1627,18 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // given up as "a bad spot" after dusk sent opus home three times on its way back with the oak, and the same
     // ground was picked again straight after)
     s.stuck = placed ? 0 : tried ? (s.stuck ?? 0) + 1 : s.stuck ?? 0;
-    if (!upgrade && s.stuck >= 3 && !r.outOf && !s.done && kind !== "wall" && kind !== "road") {
+    // (what is in the way, when the build couldn't say)
+    const why = r.why || (!placed && tried ? this.whyStuck(cells) : "");
+    // (a building with a spot of its own is never given up: the same spot would come round again)
+    if (!upgrade && s.stuck >= 3 && !r.outOf && !s.done && kind !== "wall" && kind !== "road" && !FIXED.has(kind)) {
       PACK.builds = PACK.builds.filter((x) => x !== s);
       savePack();
-      return `gave up on ${nameOf(kind)} at ${where(s)}: nothing would go in there three times (${r.why || "a bad spot"}). build it again and a better spot gets picked`;
+      return `gave up on ${nameOf(kind)} at ${where(s)}: nothing would go in there three times (${why || "a bad spot"}). build it again and a better spot gets picked`;
     }
     savePack();
     const still = short.length ? ` Still needed: ${short.join(", ")}${lacking.size ? ` (${[...lacking].join("; ")})` : ""}.` : "";
     if (!placed && !tried) return `stopped work on ${what} at ${where(s)} before a block went in (${b.dead ? "you died" : "something else came up"}); ${missing} blocks to go.${still}`;
-    if (!placed) return `couldn't ${upgrade ? "upgrade" : "build"} ${what} at ${where(s)}: ${r.outOf ? "out of materials" : r.why || "in the way, or out of reach"}; ${missing} blocks to go.${still}`;
+    if (!placed) return `couldn't ${upgrade ? "upgrade" : "build"} ${what} at ${where(s)}: ${r.outOf ? "out of materials" : why || "in the way, or out of reach"}; ${missing} blocks to go.${still}${FIXED.has(kind) && (s.stuck ?? 0) >= 3 ? ` (it has a spot of its own in the town plan: clear what is in the way there, or build something else meanwhile)` : ""}`;
     return `placed ${placed} blocks on ${what} at ${where(s)}: ${missing} to go.${still}`;
   }
 
@@ -1637,7 +1702,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const steps: [number, number][] = kind === "plaza" ? [[16, 2], [24, 3], [34, 3], [44, 3]] : big ? [[40, 3], [52, 3]] : [[30, 2], [40, 3], [52, 3]];
     for (const [far, slope] of steps)
       for (const [sw, sd] of w === d ? [[w, d]] : [[w, d], [d, w]]) {
-        const spot = b.siteNear(base.x, base.z, base.y, sw, sd, [...footprints(), ...villages, ...this.planRects()], far, near, slope);
+        const spot = b.siteNear(base.x, base.z, base.y, sw, sd, [...footprints(), ...villages, ...this.planRects(), ...HUB_RECTS], far, near, slope);
         if (!spot) continue;
         const rect = { x0: spot.x0, z0: spot.z0, x1: spot.x0 + sw - 1, z1: spot.z0 + sd - 1 };
         let face = kind === "plaza" || kind === "well" ? 0 : faceToward(rect, hub.x, hub.z);
@@ -1660,7 +1725,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   /** The ground check for a lot: the floor height for a rectangle, or -1 when the ground won't take it (more than three
    *  of slope, which is as deep as the foundation fills; water, trees or anything standing on it; the spawn hub; far
    *  above or below the base). */
-  private groundFits(): (r: Rect) => number {
+  private groundFits(hubOk = false): (r: Rect) => number {
     const b = this.body;
     const base = PACK.base!;
     return (r: Rect): number => {
@@ -1668,16 +1733,34 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       let hi = -1;
       for (let x = r.x0; x <= r.x1; x++)
         for (let z = r.z0; z <= r.z1; z++) {
-          if (inHub(x, z)) return -1;
-          const g = b.naturalGround(x, z, base.y);
+          // (the plaza takes a corner in the spawn hub, built without it, and a tree on its square, cut down first)
+          if (inHub(x, z)) {
+            if (hubOk) continue;
+            return -1;
+          }
+          const g = hubOk ? this.soil(x, z, base.y) : b.naturalGround(x, z, base.y);
           if (g < 0) return -1;
           lo = Math.min(lo, g);
           hi = Math.max(hi, g);
           if (hi - lo > 3 || Math.abs(g - base.y) > 12) return -1;
         }
-      for (let x = r.x0; x <= r.x1; x++) for (let z = r.z0; z <= r.z1; z++) for (let yy = hi + 1; yy <= hi + 4; yy++) if (SOLID[b.get(x, yy, z)]) return -1;
+      if (hi < 0) return -1;
+      for (let x = r.x0; x <= r.x1; x++) for (let z = r.z0; z <= r.z1; z++) for (let yy = hi + 1; yy <= hi + 4; yy++) if (!(hubOk && (inHub(x, z) || TREE_IDS.has(b.get(x, yy, z)))) && SOLID[b.get(x, yy, z)]) return -1;
       return hi + 1;
     };
+  }
+
+  /** The natural ground under a column, looking through trees (they get cut down): its top, -1 over water or where
+   *  nothing is loaded, -3 where something is built there. */
+  private soil(x: number, z: number, near: number): number {
+    const b = this.body;
+    for (let y = Math.min(126, near + 14); y >= Math.max(2, near - 14); y--) {
+      const id = b.get(x, y, z);
+      if (IS_WATER[id]) return -1;
+      if (!SOLID[id] || TREE_IDS.has(id)) continue;
+      return id === B.GRASS || id === B.DIRT || id === B.SAND || id === B.GRAVEL || id === B.CLAY || id === B.STONE ? y : -3;
+    }
+    return -1;
   }
 
   /** A site on the town plan: the plaza's square at the centre, or the best lot along the streets for the kind, on
@@ -1691,7 +1774,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (kind === "plaza") {
       const r = plazaRect(c);
       if (footprints().some((f) => r.x0 <= f.x1 && r.x1 >= f.x0 && r.z0 <= f.z1 && r.z1 >= f.z0)) return null;
-      const y = fits(r);
+      // on its own spot in the middle of the town plan, even when a corner of the square runs into the spawn hub
+      const y = this.groundFits(true)(r);
       return y < 0 ? null : { ...r, y, face: 0 };
     }
     // the wall: where it stands (an old town's wall may not be where the plan has it), else where it will go

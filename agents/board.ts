@@ -222,6 +222,8 @@ export interface TownState {
 }
 
 const ROLE_OF: Partial<Record<Raw, Role>> = { stone: "mason", coal: "mason", iron: "mason", wood: "woodcutter", birch: "woodcutter", sand: "woodcutter", food: "farmer" };
+/** The town's own kinds in words, where the catalog has none. */
+const WORDS: Record<string, string> = { wall: "the wall round the town", road: "the roads", lamp: "a lamp post", house: "a house", plaza: "the plaza", farm: "a field" };
 const RAW_WORDS: Record<Raw, string> = { stone: "cobblestone", wood: "oak logs", birch: "birch logs", sand: "sand", coal: "coal", iron: "iron", food: "food" };
 
 /** The queue: every job the town has, most urgent first (see the top of this file). */
@@ -245,10 +247,11 @@ export function planJobs(s: TownState): Job[] {
     else if (b.up) add(upJob(b, 14));
   }
   // the next stage, need by need, in the order the stage lists them
+  const one = (k: string) => s.kinds.find((x) => x.k === k)?.one ?? WORDS[k] ?? k;
   s.needs.forEach((nd, i) => {
     if (nd.have >= nd.n) return;
     const pri = 20 + i * 0.25;
-    const left = nd.n - nd.have;
+    let left = nd.n - nd.have;
     if (nd.k === "trade" || (nd.k === "house" && nd.tier === 0)) return;
     if (nd.k === "farm") {
       add({ id: "farm", kind: "farm", k: "farm", text: `make ${left} more field${left > 1 ? "s" : ""} and keep the town fed`, role: "farmer", pri });
@@ -258,8 +261,10 @@ export function planJobs(s: TownState): Job[] {
       add({ id: nd.tier > 1 ? "pave" : "streets", kind: nd.tier > 1 ? "pave" : "streets", k: "road", n: left, text: nd.tier > 1 ? `pave the streets in cobblestone (${left} more buildings on paved streets)` : `extend the streets to the doors (${left} more buildings joined)`, role: "woodcutter", pri });
       return;
     }
-    if (nd.k === "lamp" && nd.tier <= 1) {
-      add({ id: "light", kind: "light", k: "lamp", n: left, text: `light the streets: ${left} more lamp post${left > 1 ? "s" : ""}`, role: "woodcutter", pri });
+    if (nd.k === "lamp") {
+      // (the lamp posts aren't each on the list: one job for the lot of them)
+      if (nd.tier <= 1) add({ id: "light", kind: "light", k: "lamp", n: left, text: `light the streets: ${left} more lamp post${left > 1 ? "s" : ""}`, role: "woodcutter", pri });
+      else add({ id: `up:lamp:${nd.tier}`, kind: "upgrade", k: "lamp", tier: nd.tier, n: left, text: `put lanterns on ${left} more lamp post${left > 1 ? "s" : ""} (tier ${nd.tier})`, role: "woodcutter", pri });
       return;
     }
     const built = s.buildings.filter((b) => b.kind === nd.k && b.done && b.tier >= 1).length;
@@ -267,8 +272,14 @@ export function planJobs(s: TownState): Job[] {
       for (const b of lowest(nd.k, nd.tier, left)) add(upJob(b, pri, ", for the next stage"));
       return;
     }
+    // (what is already going up counts: its "finish" job is on the list)
+    const started = s.buildings.filter((b) => b.kind === nd.k && !b.done).length;
+    left = Math.min(left, nd.n - built) - started;
     const kind = s.kinds.find((x) => x.k === nd.k);
-    for (let c = 0; c < Math.min(left, 3); c++) add({ id: `build:${nd.k}:${built + c + 1}`, kind: "build", k: nd.k, text: `build ${kind?.one ?? nd.k}${nd.n > 1 ? ` (${built + c + 1} of ${nd.n})` : ""}${kind?.district ? `, ${kind.district}` : ""}`, role: "builder", pri: pri + c * 0.5 });
+    for (let c = 0; c < Math.min(left, 3); c++) {
+      const nth = built + started + c + 1;
+      add({ id: `build:${nd.k}:${nth}`, kind: "build", k: nd.k, text: `build ${one(nd.k)}${nd.n > 1 ? ` (${nth} of ${nd.n})` : ""}${kind?.district ? `, ${kind.district}` : ""}`, role: "builder", pri: pri + c * 0.5 });
+    }
   });
   // the wood economy: a tree farm near the town before the oak runs out, then its trees cut and the saplings planted again
   if (s.stage >= 0 && !s.trees.farms) add({ id: "build:treefarm:1", kind: "build", k: "treefarm", text: "build a tree farm near the town (oak saplings that grow back: wood without the long trips)", role: "woodcutter", pri: 22 });
@@ -297,12 +308,13 @@ export function planJobs(s: TownState): Job[] {
   const wanted = new Set(s.needs.map((n) => n.k));
   for (const k of s.kinds) {
     if (wanted.has(k.k) || k.have >= k.most || k.district === "beside a street" || k.from > s.stage + 3) continue;
+    if (s.buildings.some((b) => b.kind === k.k && !b.done)) continue; // one going up already: its finish job is there
     const pri = (k.from <= s.stage + 1 ? 60 : 72) + Math.max(0, k.from - s.stage) * 2 + (k.small ? 0 : 3);
     add({ id: `build:${k.k}:${k.have + 1}`, kind: "build", k: k.k, text: `build ${k.one}${k.district ? `, ${k.district}` : ""}`, role: k.k === "quarry" ? "mason" : k.k === "treefarm" || k.k === "lumberyard" ? "woodcutter" : ["garden", "orchard", "pen", "coop", "granary"].includes(k.k) ? "farmer" : "builder", pri });
   }
   // the pool kept stocked for whatever comes next
   const keep: [Raw, number][] = [["stone", 64], ["wood", 32], ["sand", 16], ["coal", 8], ...(s.birch ? ([["birch", 24]] as [Raw, number][]) : [])];
-  for (const [raw, n] of keep) if ((s.stock[raw] ?? 0) < n) add({ id: `stock:${raw}`, kind: "stock", k: raw, n: n - (s.stock[raw] ?? 0), text: `stock the storehouse with ${n - (s.stock[raw] ?? 0)} ${RAW_WORDS[raw]} (it keeps ${n} for the next builds)`, role: ROLE_OF[raw] ?? "mason", pri: 66 });
+  for (const [raw, n] of keep) if ((s.stock[raw] ?? 0) < n) add({ id: `stock:${raw}`, kind: "stock", k: raw, n: n - (s.stock[raw] ?? 0), text: `stock the storehouse with ${n - (s.stock[raw] ?? 0)} ${RAW_WORDS[raw]} (it keeps ${n} for the next builds)`, role: ROLE_OF[raw] ?? "mason", pri: 56 });
   // and the town keeps growing
   const houses = s.buildings.filter((b) => b.kind === "house").length;
   add({ id: `build:house:${houses + 1}`, kind: "build", k: "house", text: "build another house on the next lot", role: "builder", pri: 76 });
@@ -317,6 +329,7 @@ export function pickJob(queue: Job[], role: Role, name: string, now: number, can
   if (mine) return mine;
   const open = queue.filter((j) => (!j.by || j.by === name || now - (j.since ?? 0) >= CLAIM_MS) && can(j));
   if (!open.length) return null;
-  const score = (j: Job) => j.pri - (j.role === role ? 40 : 0);
+  // (another role's job well behind its own: a mason with no hoe doesn't go farming while there is stone to bring in)
+  const score = (j: Job) => j.pri + (j.role === role ? -40 : 10);
   return open.reduce((best, j) => (score(j) < score(best) ? j : best));
 }

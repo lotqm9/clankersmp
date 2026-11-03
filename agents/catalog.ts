@@ -165,7 +165,7 @@ const SIZES: Record<string, HomeSize> = {
     core: [5, 9], walls: 6, floors: [3], name: "row house", what: "two storeys on a narrow front: the kitchen and a bed below, two beds up the ladder", roofs: ["gable"],
     furniture: (st) => [
       ...torchesAt([1, 0, 1], [1, 4, 2]), { block: B.CRAFTING_TABLE, at: [2, 0, -2], tier: 1 }, { block: B.CHEST, at: [3, 0, -2], facing: "out", tier: 1 }, { block: B.FURNACE, at: [3, 0, -3], facing: "left", tier: 1 },
-      bed(3, 0, 1, 1), { block: st.table, at: [1, 0, 4], tier: 2 }, { block: st.stair, at: [2, 0, 4], facing: "right", tier: 2 },
+      bed(3, 0, 1, 2), { block: st.table, at: [1, 0, 4], tier: 2 }, { block: st.stair, at: [2, 0, 4], facing: "right", tier: 2 },
       bed(1, 4, 3, 2), bed(3, 4, 3, 3), { block: B.CHEST, at: [3, 4, -2], facing: "out", tier: 2 }, { block: LANTERN, at: [1, 1, 4], tier: 3, optional: true }, ...doorLamps(3),
     ],
   },
@@ -173,7 +173,7 @@ const SIZES: Record<string, HomeSize> = {
     core: [7, 7], walls: 6, floors: [3], name: "townhouse", what: "two storeys: the kitchen, the table and a bed below, the bedroom above up a ladder", roofs: ["gable", "cross", "flat"],
     furniture: (st) => [
       ...torchesAt([1, 0, 1], [1, 4, 2]), { block: B.CRAFTING_TABLE, at: [2, 0, -2], tier: 1 }, { block: B.CHEST, at: [3, 0, -2], facing: "out", tier: 1 }, { block: B.FURNACE, at: [-2, 0, -2], facing: "out", tier: 1 },
-      bed(-2, 0, 1, 1), { block: B.BARREL, at: [4, 0, -2], tier: 2 }, { block: st.table, at: [3, 0, 3], tier: 2 }, { block: st.stair, at: [2, 0, 3], facing: "left", tier: 2 }, { block: st.stair, at: [4, 0, 3], facing: "right", tier: 2 },
+      bed(-2, 0, 1, 2), { block: B.BARREL, at: [4, 0, -2], tier: 2 }, { block: st.table, at: [3, 0, 3], tier: 2 }, { block: st.stair, at: [2, 0, 3], facing: "left", tier: 2 }, { block: st.stair, at: [4, 0, 3], facing: "right", tier: 2 },
       bed(3, 4, 1, 2), bed(5, 4, 1, 3), { block: B.CHEST, at: [-2, 4, -2], facing: "out", tier: 2 }, { block: LANTERN, at: [3, 1, 3], tier: 3, optional: true }, hangMid(), ...doorLamps(3),
     ],
   },
@@ -181,7 +181,7 @@ const SIZES: Record<string, HomeSize> = {
     core: [11, 9], walls: 6, floors: [3], name: "manor", what: "two storeys: a hall with a long table and the kitchen below, four beds above", roofs: ["gable", "cross", "flat"],
     furniture: (st) => [
       ...torchesAt([1, 0, 1], [8, 0, 1], [1, 4, 2], [-2, 4, 4]), { block: B.CRAFTING_TABLE, at: [2, 0, -2], tier: 1 }, { block: B.CHEST, at: [3, 0, -2], facing: "out", tier: 1 }, { block: B.FURNACE, at: [-2, 0, -2], facing: "out", tier: 1 },
-      bed(-2, 0, 1, 1), { block: B.FURNACE, at: [-3, 0, -2], facing: "out", tier: 2 }, { block: B.BARREL, at: [-4, 0, -2], tier: 2 },
+      bed(-2, 0, 1, 2), { block: B.FURNACE, at: [-3, 0, -2], facing: "out", tier: 2 }, { block: B.BARREL, at: [-4, 0, -2], tier: 2 },
       ...along("mid", 0, 3, 5, { block: st.table, tier: 2 }), ...along("mid-1", 0, 3, 5, { block: st.stair, facing: "left", tier: 2 }), ...along("mid+1", 0, 3, 5, { block: st.stair, facing: "right", tier: 3 }),
       bed(3, 4, 1, 2), bed(5, 4, 1, 2), bed(7, 4, 1, 3), bed(9, 4, 1, 3), { block: B.CHEST, at: [-2, 4, -2], facing: "out", tier: 2 },
       { block: B.BOOKSHELF, at: [4, 0, -2], tier: 3, optional: true }, { block: B.BOOKSHELF, at: [5, 0, -2], tier: 3, optional: true }, { block: LANTERN, at: ["mid", 1, 4], tier: 3, optional: true },
@@ -856,17 +856,17 @@ kind("guardhouse", "a guardhouse", "guardhouses", 5, "edge", 4);
 reg("guardhouse", building("guardhouse", {
   style: "stone", core: [5, 7], walls: 4, ridge: "flat", what: "a guardhouse: a bunk, the watch's chest, a weapon rack (a fence), a crafting table, a lookout on the flat roof",
   rooms: "one guard room 3 by 5", windows: [[0, 2, 2], [-1, 2, 2], [0, 2, -3], [-1, 2, -3]],
-  furniture: [{ block: TORCH, at: [1, 0, 1], tier: 1 }, bed(1, 0, 2, 1), { block: B.CHEST, at: [-2, 0, -2], facing: "out", tier: 1 }, { block: FEN, at: [-2, 0, 2], tier: 2 }, { block: B.CRAFTING_TABLE, at: [1, 0, -2], tier: 2 }, hangMid()],
-  tiers: ["", "the guard room: a bunk and the watch's chest", "a weapon rack and a crafting table", "stone brick walls, a lantern"],
+  furniture: [{ block: TORCH, at: [1, 0, 1], tier: 1 }, bed(1, 0, 2, 2), { block: B.CHEST, at: [-2, 0, -2], facing: "out", tier: 1 }, { block: FEN, at: [-2, 0, 2], tier: 2 }, { block: B.CRAFTING_TABLE, at: [1, 0, -2], tier: 2 }, hangMid()],
+  tiers: ["", "the guard room and the watch's chest", "a bunk, a weapon rack and a crafting table", "stone brick walls, a lantern"],
 }), "guardhouse", "stone");
 kind("barracks", "a barracks", "barracks", 7, "edge", 1);
 reg("barracks", building("barracks", {
   style: "stone", core: [9, 13], walls: 4, what: "a barracks: rows of bunks down both walls, the armoury chests, the mess table down the middle",
   rooms: "one long dormitory 7 by 11", posts: [[0, "mid"], [-1, "mid"]],
   windows: [[0, 2, 3], [0, 2, 9], [-1, 2, 3], [-1, 2, 9], ["mid", 2, -1]],
-  furniture: [...torches, ...[2, 5, 8].flatMap((v): Furniture[] => [bed(1, 0, v, v === 2 ? 1 : 2), bed(-2, 0, v, v === 2 ? 1 : 2)]),
+  furniture: [...torches, ...[2, 5, 8].flatMap((v): Furniture[] => [bed(1, 0, v, v === 2 ? 2 : 3), bed(-2, 0, v, v === 2 ? 2 : 3)]),
     { block: B.CHEST, at: [1, 0, -2], facing: "out", tier: 1 }, { block: B.CHEST, at: [-2, 0, -2], facing: "out", tier: 2 }, ...along("mid", 0, 3, 8, { block: TABLE, tier: 3 }), ...t3()],
-  tiers: ["", "two bunks and the armoury chest", "four more bunks, a second chest", "the mess table, stone brick walls, lanterns"],
+  tiers: ["", "the dormitory and the armoury chest", "two bunks (beds take wool) and a second chest", "four more bunks, the mess table, stone brick walls, lanterns"],
 }), "barracks", "stone");
 kind("armory", "an armoury", "armouries", 7, "edge", 1);
 reg("armory", building("armory", {
@@ -910,9 +910,9 @@ reg("inn", building("inn", {
   windows: [[2, 1, 0], [-3, 1, 0], [2, 5, 0], [-3, 5, 0], [0, 1, 2], [0, 5, 2], [0, 1, 6], [0, 5, 6], [-1, 1, 2], [-1, 5, 2], [-1, 1, 6], [-1, 5, 6]],
   furniture: [...torches, ...across(3, 6, 0, -4, { block: TABLE, tier: 1 }), { block: B.FURNACE, at: [-2, 0, -2], facing: "out", tier: 1 }, { block: B.BARREL, at: [3, 0, -2], tier: 1 }, { block: B.CHEST, at: [4, 0, -2], facing: "out", tier: 1 },
     { block: TABLE, at: [2, 0, 3], tier: 1 }, { block: OST, at: [1, 0, 3], facing: "left", tier: 1 }, { block: OST, at: [3, 0, 3], facing: "right", tier: 1 },
-    bed(3, 4, 1, 1), bed(5, 4, 1, 2), bed(7, 4, 1, 2), bed(-2, 4, 5, 3), { block: B.CHEST, at: [3, 4, -2], facing: "out", tier: 2 },
+    bed(3, 4, 1, 2), bed(5, 4, 1, 2), bed(7, 4, 1, 2), bed(-2, 4, 5, 3), { block: B.CHEST, at: [3, 4, -2], facing: "out", tier: 2 },
     { block: TABLE, at: [-3, 0, 3], tier: 2 }, { block: OST, at: [-4, 0, 3], facing: "left", tier: 2 }, { block: OST, at: [-2, 0, 3], facing: "right", tier: 2 }, ...t3()],
-  tiers: ["", "the taproom with its bar and hearth, a guest room upstairs", "two more guest rooms, a second table, the linen chest", "a fourth bed, lanterns"],
+  tiers: ["", "the taproom with its bar and hearth, the guest rooms upstairs", "three guest beds, a second table, the linen chest", "a fourth bed, lanterns"],
 }), "inn", "timber");
 kind("courthouse", "a courthouse", "courthouses", 7, "square", 1);
 reg("courthouse", building("courthouse", {

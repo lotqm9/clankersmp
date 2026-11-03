@@ -4,13 +4,15 @@
 // time. With SHOTS=1 a picture of each building at each tier is taken through the game client (tools/cam.cjs).
 //   AGENT_SECRET=... node agents/town-test.ts [ws://127.0.0.1:8789]
 //   KINDS=house,well BODIES=opus AT=288,216 SHOTS=1 node agents/town-test.ts
+//   KINDS takes the catalog's design ids too (agents/catalog.ts): KINDS=house/birch-townhouse-cross,silo,windmill
 //   (SHOTS=1: tools/cam.cjs with the client served by vite; SERVER=ws://... for the camera, CENTRES=x,z;x,z;... a patch of
 //   ground for each body, outside the spawn hub)
 import { execFile } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Body } from "./body.ts";
-import { KINDS, cellTarget, itemOf, planFor, sizeFacing, wallPlan, type Plain } from "./civ.ts";
+import { DESIGNS, KINDS, cellTarget, itemOf, planFor, sizeFacing, wallPlan, type Plain } from "./civ.ts";
+import "./catalog.ts";
 import { B, BLOCKS } from "../shared/blocks.ts";
 import { I, itemDef } from "../shared/items.ts";
 
@@ -137,7 +139,9 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
     b.send({ t: "chat", text: "/hunger 20" });
     const cy = Math.floor(b.phys.y + 0.1);
     const ground = (x: number, z: number) => b.naturalGround(x, z, cy);
-    let site: { kind: Plain | "wall"; x0: number; z0: number; x1: number; z1: number; y: number; face: number };
+    // (a design of the catalog: its kind, its own size and tiers)
+    const design = kind !== "wall" && DESIGNS[kind] ? kind : undefined;
+    let site: { kind: Plain | "wall"; design?: string; x0: number; z0: number; x1: number; z1: number; y: number; face: number };
     if (kind === "wall") {
       // the wall goes round the base whatever the ground does (it follows it, round trees and water): round the middle
       // of this body's patch
@@ -151,10 +155,10 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
         console.log(`${name} ${kind}: no site`);
         continue;
       }
-      site = { kind, x0: s.x0, z0: s.z0, x1: s.x0 + w - 1, z1: s.z0 + d - 1, y: s.y, face };
+      site = { kind: (design ? DESIGNS[design].kind : kind) as Plain, design, x0: s.x0, z0: s.z0, x1: s.x0 + w - 1, z1: s.z0 + d - 1, y: s.y, face };
     }
     used.push({ x0: site.x0 - 2, z0: site.z0 - 2, x1: site.x1 + 2, z1: site.z1 + 2 });
-    const top = kind === "wall" ? KINDS.wall.tiers : KINDS[kind].tiers;
+    const top = kind === "wall" ? KINDS.wall.tiers : design ? DESIGNS[design].tiers : KINDS[kind].tiers;
     for (let tier = 1; tier <= top; tier++) {
       const plan = () => (kind === "wall"
         ? wallPlan((site.x0 + site.x1) >> 1, (site.z0 + site.z1) >> 1, 13, (x, z) => b.landAt(x, z, site.y), tier, (x, z) => used.filter((r) => r.x1 - r.x0 < 30).some((r) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1))
@@ -185,7 +189,9 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
       const mz = Math.floor((site.z0 + site.z1) / 2);
       const off = Math.ceil((kind === "wall" ? 14 : Math.max(site.x1 - site.x0, site.z1 - site.z0) / 2) + 3);
       await b.goto(mx + fx * off + 0.5, site.y, mz + fz * off + 0.5, 2, { maxMs: 20000 });
-      await shot(b, name, `${kind}-t${tier}`, site, ({ keep: 10, tower: 10, hall: 10, tavern: 10, library: 10, barn: 10, chapel: 13, cathedral: 15, lamp: 4, fountain: 5, monument: 8 } as Record<string, number>)[kind] ?? 7);
+      // (the picture's height: the plan's own top)
+      const high = Math.max(4, ...plan().map((c) => c[1] - site.y + 1));
+      await shot(b, name, `${kind.replace(/\//g, "_")}-t${tier}`, site, ({ keep: 10, tower: 10, hall: 10, tavern: 10, library: 10, barn: 10, chapel: 13, cathedral: 15, lamp: 4, fountain: 5, monument: 8 } as Record<string, number>)[kind] ?? Math.min(15, high));
     }
   }
   b.close();

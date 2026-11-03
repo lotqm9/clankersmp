@@ -4,6 +4,7 @@
 // craft and smelt everything itself (planks, stairs, a door, fences, glass panes, stone bricks, lanterns), and the
 // town text has to point at the next thing to do.
 //   AGENT_SECRET=... AT=x,z node agents/brain-town-test.ts [ws://127.0.0.1:8789]
+//   CENTRE=x,z puts the town's centre there (the plaza goes on it); TREE=x,z grows an oak there first (a tree on a lot).
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,9 +36,24 @@ b.send({ t: "chat", text: `/tp ${ax + 0.5} ${gy + 1} ${az + 0.5}` });
 b.send({ t: "chat", text: "/time 2000" });
 await b.wait(40);
 
-// a pack with its base here and nothing built (the brain reads it on load)
+// a tree on the lot to be (TREE=x,z): a sapling planted there and grown at once
+if (process.env.TREE) {
+  const [tx, tz] = process.env.TREE.split(",").map(Number);
+  let ty = 120;
+  while (ty > 2 && !BLOCKS[b.get(tx, ty, tz)]?.solid) ty--;
+  b.send({ t: "chat", text: "/give oak_sapling 1" });
+  await b.wait(10);
+  const ok = await b.place(BLOCKS.find((d) => d?.key === "oak_sapling")!.id, tx, ty + 1, tz, 20000);
+  b.send({ t: "chat", text: "/grow" });
+  await b.wait(20);
+  console.log(`a tree at ${tx},${tz}: ${ok ? "planted and grown" : "the sapling wouldn't go in"} (${BLOCKS[b.get(tx, ty + 1, tz)]?.key} at its foot)`);
+  b.send({ t: "chat", text: `/tp ${ax + 0.5} ${gy + 1} ${az + 0.5}` });
+  await b.wait(20);
+}
+// a pack with its base here and nothing built (the brain reads it on load); the centre where CENTRE says
 const dir = mkdtempSync(join(tmpdir(), "clanker-pack-"));
-writeFileSync(join(dir, "pack.json"), JSON.stringify({ plan: "", by: "", base: { x: ax, y: gy + 1, z: az }, houses: {}, builds: [], trades: 0, stage: -1 }));
+const centre = process.env.CENTRE ? process.env.CENTRE.split(",").map(Number) : null;
+writeFileSync(join(dir, "pack.json"), JSON.stringify({ plan: "", by: "", base: { x: ax, y: gy + 1, z: az }, houses: {}, builds: [], trades: 0, stage: -1, ...(centre ? { centre: { x: centre[0], z: centre[1] } } : {}) }));
 process.env.AGENT_STATE_DIR = dir;
 const { Brain } = await import("./brain.ts");
 const brain = new Brain(name, b, "test", "http://127.0.0.1:9", "http://127.0.0.1:9") as unknown as {

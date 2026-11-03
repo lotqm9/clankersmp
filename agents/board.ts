@@ -294,6 +294,15 @@ export function planJobs(s: TownState): Job[] {
   if (s.lamps.have < s.lamps.want) add({ id: "light", kind: "light", k: "lamp", n: s.lamps.want - s.lamps.have, text: `light the streets: ${s.lamps.want - s.lamps.have} more lamp posts (one every seven blocks)`, role: "woodcutter", pri: 38 });
   // upgrades the stages after this one will ask for
   for (const nd of s.later) if (nd.tier > 1) for (const b of lowest(nd.k, nd.tier, nd.n)) add(upJob(b, 40 + nd.tier, ", for a later stage"));
+  // and the buildings they will ask for, a couple of each ahead of time (the list never runs short, even in a camp)
+  const ahead = new Set<string>();
+  s.later.forEach((nd, i) => {
+    if (nd.tier > 1 || ahead.has(nd.k) || ["trade", "road", "lamp", "farm", "wall"].includes(nd.k)) return;
+    ahead.add(nd.k);
+    const built = s.buildings.filter((b) => b.kind === nd.k).length;
+    const kind = s.kinds.find((x) => x.k === nd.k);
+    for (let c = 0; c < Math.min(2, nd.n - built); c++) add({ id: `build:${nd.k}:${built + c + 1}`, kind: "build", k: nd.k, text: `build ${one(nd.k)} (${built + c + 1} of ${nd.n}, for a later stage)${kind?.district ? `, ${kind.district}` : ""}`, role: "builder", pri: 62 + i * 0.05 + c * 0.5 });
+  });
   if (s.smelt) add({ id: "smelt", kind: "smelt", k: "smelt", text: "smelt stone bricks and glass for the upgrades (cobblestone and sand from the storehouse)", role: "mason", pri: 44 });
   for (const f of s.fields) add({ id: `fence:${f.at}`, kind: "fence", k: "farm", at: f.at, text: `fence the field ${where(f.at)} (a gate toward the town)`, role: "farmer", pri: 46 });
   // street furniture: benches and flower beds along the streets in use

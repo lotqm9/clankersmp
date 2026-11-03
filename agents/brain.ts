@@ -1944,8 +1944,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         if (g < 0 || Math.abs(g - base.y) > 8 || inHub(px, pz)) continue;
         for (let face = 0; face < 4; face++) {
           const [ox, oz] = out(face);
-          if (!wet(px + ox * 2, pz + oz * 2, g)) continue;
           const [sw, sd] = sizeFacing(design, face);
+          // the water: a pier's deck runs out over it from two blocks out; a lighthouse has it right past its far side
+          const deep = (face % 2 ? sw : sd) + 1;
+          if (pier ? !wet(px + ox * 2, pz + oz * 2, g) : !wet(px + ox * deep, pz + oz * deep, g) && !wet(px + ox * (deep + 1), pz + oz * (deep + 1), g)) continue;
           const h = Math.floor(W / 2);
           const x0 = face === 1 ? px - sw + 1 : face === 3 ? px : px - h;
           const z0 = face === 0 ? pz : face === 2 ? pz - sd + 1 : pz - h;
@@ -1960,7 +1962,6 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
               else ok = land >= 0 && Math.abs(land - g) <= 2;
             }
           if (!ok) continue;
-          if (!pier && !wet(px + ox * (sd + 1), pz + oz * (sd + 1), g) && !wet(px + ox * (sd + 2), pz + oz * (sd + 2), g)) continue;
           return { ...rect, y: g + 1, face, design, where: `on the shore ${Math.round(r)} blocks ${dirWord(px - c.x, pz - c.z)} of the plaza` };
         }
       }

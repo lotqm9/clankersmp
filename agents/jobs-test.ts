@@ -20,7 +20,7 @@ const towns: { name: string; s: TownState }[] = [];
   const b = [bld("house", [260, 70], 0)];
   towns.push({
     name: "a camp (one shelter)",
-    s: { stage: 0, needs: needsOf(0, (k) => (k === "house" ? 1 : 0)), later: [], buildings: b, short: {}, stock: {}, roads: { doors: 1, joined: 0, paved: 0 }, lamps: { have: 0, want: 0 }, furniture: { bench: 0, flowerbed: 0, want: 0 }, trees: { farms: 0, grown: 0 }, fields: [], food: { have: 20, want: 30, fields: true }, kinds, smelt: false, birch: false },
+    s: { stage: 0, needs: needsOf(0, (k) => (k === "house" ? 1 : 0)), later: STAGES.slice(2).flatMap((st) => st.needs.map(([k, n, t]) => ({ k, n, tier: t ?? 1 }))), buildings: b, short: {}, stock: {}, roads: { doors: 1, joined: 0, paved: 0 }, lamps: { have: 0, want: 0 }, furniture: { bench: 0, flowerbed: 0, want: 0 }, trees: { farms: 0, grown: 0 }, fields: [], food: { have: 20, want: 30, fields: true }, kinds, smelt: false, birch: false },
   });
 }
 {

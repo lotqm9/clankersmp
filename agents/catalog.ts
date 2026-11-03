@@ -498,14 +498,15 @@ function bench(d: Draft): void {
   furnish(d);
 }
 
-/** A flower bed: a kerb round it, soil inside, flowers in it (the flower parts in turn). */
+/** A flower bed: a kerb round it (a bed one deep, along a street: a kerb at each end), soil inside, flowers in it
+ *  (the flower parts in turn). */
 function flowerbed(d: Draft): void {
   const { W, D } = d;
   const kinds = ["flower", "flower2", "flower3"].map((p) => d.mat(p)).filter(Boolean);
   for (let v = 0; v < D; v++)
     for (let u = 0; u < W; u++) {
       d.foot(u, v);
-      if (d.edge(u, v)) {
+      if (D === 1 ? u === 0 || u === W - 1 : d.edge(u, v)) {
         d.put(u, -1, v, d.mat("footing"));
         d.put(u, 0, v, d.mat("kerb"));
       } else {
@@ -877,9 +878,9 @@ reg("armory", building("armory", {
 kind("gatehouse", "a gatehouse", "gatehouses", 6, "gate", 4);
 reg("gatehouse", {
   kind: "gatehouse", what: "a gatehouse over a gate of the wall: two towers either side of an arch the street runs through, a walkway over the top behind battlements, ladders up inside, slits in the faces",
-  shape: "gatehouse", core: [11, 5], eaves: 0, walls: 6, rooms: "two tower rooms 2 by 3, the arch 3 wide and 4 high",
+  shape: "gatehouse", core: [11, 3], eaves: 0, walls: 6, rooms: "two tower rooms 2 by 1, the arch 3 wide and 4 high",
   parts: { footing: all3(COB), paving: [COB, SBR, SBR], wall: [COB, COB, SBR], corner: [COB, SBR, SBR], floor: [COB, SBR, SBR], battlement: [COB, SBR, SBR], window: [FEN, PANE, PANE], light: [TORCH, TORCH, LANTERN] },
-  furniture: [{ block: HANG, at: ["mid", 0, "mid"], hang: true, tier: 2 }, { block: TORCH, at: [2, 0, 2], tier: 1 }, { block: TORCH, at: [-3, 0, 2], tier: 1 }],
+  furniture: [{ block: HANG, at: ["mid", 0, "mid"], hang: true, tier: 2 }, { block: TORCH, at: [2, 0, 1], tier: 1 }, { block: TORCH, at: [-3, 0, 1], tier: 1 }],
   tiers: ["", "the gatehouse in cobblestone: the towers, the arch, the walkway and its battlements", "stone brick paving, corners and battlements, glass in the slits, a lantern under the arch", "stone brick walls, lanterns on the corners"],
 }, "gatehouse", "stone");
 kind("bastion", "a bastion", "bastions", 6, "edge", 4);
@@ -1047,7 +1048,7 @@ reg("bench/stone", { ...BENCH, parts: { pad: [COB, SBR, SBR], seat: all3(SST), p
 reg("bench/birch", { ...BENCH, parts: { pad: [COB, SBR, SBR], seat: all3(BST), post: all3(BFEN), light: [0, LANTERN, LANTERN] }, what: "a birch bench by the street: a seat of birch stairs between two birch posts" }, "birch bench", "birch");
 kind("flowerbed", "a flower bed", "flower beds", 2, "street", 24);
 const bedOf = (what: string, flowers: number[], kerb: Mat): Blueprint => ({
-  kind: "flowerbed", what, shape: "flowerbed", core: [6, 3], eaves: 0, walls: 1, rooms: "four flowers in a row",
+  kind: "flowerbed", what, shape: "flowerbed", core: [6, 1], eaves: 0, walls: 1, rooms: "four flowers in a row",
   parts: { footing: all3(COB), kerb, flower: all3(flowers[0]), ...(flowers[1] ? { flower2: all3(flowers[1]) } : {}), ...(flowers[2] ? { flower3: all3(flowers[2]) } : {}) },
   furniture: [], tiers: ["", "the bed: a kerb, soil, the flowers", "a stone brick kerb"],
 });

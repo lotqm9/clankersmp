@@ -8,9 +8,18 @@
 // What can't go on a lot (the ground is steep, wet or wooded there, the streets are full) falls back to the nearest
 // open ground, so the town never stops growing.
 //
+// Harmony: each main street and the sides of the rings it crosses are one district in one style (the north avenue
+// stone, the market streets timber-framed, the south street oak, birch for the district on the side of the town the
+// birch woods are: the brain chooses), so every building on a street is of a piece; the houses step down from tall
+// two-storey townhouses round the middle through cottages and lodges inside the wall to longhouses, farmhouses and
+// huts at the edge; the designs go in a rhythm along a street, the same on both sides (a lot across the street from
+// a building of its kind is taken first), so the streets come in pairs. The catalog's street furniture (benches,
+// flower beds) goes in the row beside the streets, a gatehouse over a gate of the wall, an arch across an avenue.
+//
 // Pure geometry: the brain (agents/brain.ts) gives it the ground (fits) and what's built.
 
-import { KINDS, ONCE, doorStep, sizeFacing, type Building, type Kind, type Plain } from "./civ.ts";
+import { DESIGNS, KINDS, ONCE, doorStep, sizeFacing, type Building, type Kind, type Plain } from "./civ.ts";
+import { KIND_INFO, type District } from "./catalog.ts";
 import type { PlanCell, Rect } from "./body.ts";
 
 /** The plaza: PLAZA_HALF each way from the centre. */
@@ -18,13 +27,13 @@ export const PLAZA_HALF = 4;
 /** The streets: STREET_HALF each side of their middle line (3 wide). */
 export const STREET_HALF = 1;
 /** How far out the main streets go at most. */
-export const REACH = 84;
+export const REACH = 100;
 /** The landmarks at the heads of main streets, their lots kept for them from the start: the cathedral at the head of
  *  the north street (the avenue up to it), the keep at the head of the west street, just outside the outer ring. */
-export const HEADS: Partial<Record<Kind, { arm: number; t: number }>> = { cathedral: { arm: 0, t: 52 }, keep: { arm: 3, t: 52 } };
+export const HEADS: Partial<Record<Kind, { arm: number; t: number }>> = { cathedral: { arm: 0, t: 76 }, keep: { arm: 3, t: 76 } };
 /** The ring roads: squares this far out from the centre, the inner one just inside the wall, the outer one round the
  *  new town outside it. */
-export const RINGS = [24, 48];
+export const RINGS = [24, 48, 72];
 /** The wall: a square just outside the inner ring road, its gates where the main streets go through. */
 export const WALL = RINGS[0] + STREET_HALF + 2;
 /** The four main streets, as steps out of the plaza: north, east, south, west. */
@@ -66,7 +75,7 @@ function makeStreets(c: Point): Street[] {
   // each ring's sides, run clockwise from a corner, crossed by a main street in the middle
   RINGS.forEach((R, ri) => {
     const corners: Point[] = [{ x: c.x - R, z: c.z - R }, { x: c.x + R, z: c.z - R }, { x: c.x + R, z: c.z + R }, { x: c.x - R, z: c.z + R }];
-    for (let k = 0; k < 4; k++) out.push({ o: corners[k], d: ARMS[(k + 1) % 4], t0: 0, t1: 2 * R, join: R, name: `the ${ri ? "outer" : "inner"} ring road (${DIRS[k]} side)`, arm: -1, ring: R });
+    for (let k = 0; k < 4; k++) out.push({ o: corners[k], d: ARMS[(k + 1) % 4], t0: 0, t1: 2 * R, join: R, name: `the ${["inner", "outer", "far"][ri]} ring road (${DIRS[k]} side)`, arm: -1, ring: R });
   });
   return out;
 }
@@ -84,11 +93,14 @@ export interface Lot extends Rect {
   where: string;
   /** Set back this much further from the street than the one cell for the door step. */
   back?: number;
+  /** The design that goes on it (the street's style, the size for how far out it is). */
+  design?: string;
 }
 
 /** Where each kind belongs: how far out from the plaza (near to far), which main streets it likes best (none: any),
  *  whether it can stand at the head of a street, and the district's name. */
-const DISTRICT: Record<Exclude<Plain, "plaza" | "lamp">, { near: number; far: number; arms?: number[]; head?: boolean; name: string }> = {
+type Dist = { near: number; far: number; arms?: number[]; head?: boolean; name: string };
+const DISTRICT: Record<string, Dist> = {
   well: { near: 6, far: 12, name: "by the plaza" },
   hall: { near: 6, far: 14, name: "on the square" },
   market: { near: 6, far: 18, arms: [1, 3], name: "on the square" },
@@ -106,6 +118,75 @@ const DISTRICT: Record<Exclude<Plain, "plaza" | "lamp">, { near: number; far: nu
   keep: { near: 30, far: 72, head: true, name: "at the castle end" },
   cathedral: { near: 24, far: 72, head: true, name: "in the cathedral close" },
 };
+/** The catalog's kinds go by their district (agents/catalog.ts). */
+const BY_DISTRICT: Partial<Record<District, Dist>> = {
+  square: { near: 6, far: 26, name: "on the square" },
+  civic: { near: 8, far: 34, arms: [0, 2], name: "on the civic streets" },
+  market: { near: 8, far: 38, arms: [1, 3], name: "on the market street" },
+  homes: { near: 14, far: 70, arms: [0, 2], name: "among the houses" },
+  park: { near: 10, far: 50, name: "in the park quarter" },
+  edge: { near: 26, far: 74, name: "at the edge of the town" },
+  fields: { near: 30, far: 76, name: "out by the fields" },
+  gate: { near: 0, far: 99, name: "over a gate of the wall" },
+  span: { near: 0, far: 99, name: "across an avenue" },
+  street: { near: 0, far: 99, name: "beside a street" },
+  shore: { near: 0, far: 99, name: "by the water" },
+};
+const distOf = (kind: Kind): Dist => DISTRICT[kind] ?? BY_DISTRICT[KIND_INFO[kind]?.district ?? "homes"] ?? BY_DISTRICT.homes!;
+/** The kinds the street runs through (an arch, a gatehouse): they never cut a street short. */
+export const PASSAGE: ReadonlySet<Kind> = new Set<Kind>(["gatehouse", "arch"]);
+
+// ---------------------------------------------------------------- the districts' styles and each lot's design
+
+/** The style of each main street's district, north, east, south, west (the sides of the rings take the style of the
+ *  main street that crosses them): the avenue up to the cathedral in stone, the market streets timber-framed, the
+ *  south street oak. The brain keeps the town's own (with birch where the birch grows). */
+export const STREET_STYLES = ["stone", "timber", "oak", "timber"];
+/** A street's style (styles: the town's, north, east, south, west). */
+export function styleOf(si: number, styles: string[] = STREET_STYLES): string {
+  return styles[si < 4 ? si : (si - 4) % 4] ?? "oak";
+}
+/** The homes' sizes, from the middle of the town out: tall townhouses round the square (manors on a stone avenue),
+ *  cottages and lodges inside the wall, longhouses and farmhouses out past it, farmhouses and huts at the edge. Two
+ *  in turn along a street. */
+const HOME_BANDS: { to: number; sizes: string[]; stone?: string[] }[] = [
+  { to: 16, sizes: ["townhouse", "rowhouse"], stone: ["townhouse", "manor"] },
+  { to: 30, sizes: ["cottage", "lodge"] },
+  { to: 50, sizes: ["longhouse", "farmhouse"] },
+  { to: 999, sizes: ["farmhouse", "hut"] },
+];
+/** The design for a building of a kind on a street, `t` out along it: the street's style; for a house, the size for
+ *  how far out it is and the roof in a rhythm along the street (a gable, then one across the front; flat roofs on
+ *  the stone avenue's townhouses); the same both sides, so the street comes in pairs. Any other kind: its design in
+ *  the street's style if it has one, else its own. */
+export function designFor(kind: Kind, c: Point, si: number, t: number, styles?: string[]): string {
+  const s = streetsOf(c)[si];
+  const style = styleOf(si, styles);
+  const out = s && s.arm >= 0 ? t : s?.ring ?? t;
+  const slot = Math.floor(t / 7);
+  if (kind === "house") {
+    const band = HOME_BANDS.find((b) => out < b.to)!;
+    const sizes = style === "stone" && band.stone ? band.stone : band.sizes;
+    const size = sizes[slot % sizes.length];
+    const roof = style === "stone" && out < 30 && DESIGNS[`house/stone-${size}-flat`] ? "flat" : slot % 2 && DESIGNS[`house/${style}-${size}-cross`] ? "cross" : "gable";
+    const id = `house/${style}-${size}-${roof}`;
+    return DESIGNS[id] ? id : DESIGNS[`house/${style}-${size}-gable`] ? `house/${style}-${size}-gable` : "house";
+  }
+  const all = KINDS[kind]?.designs ?? [];
+  if (!all.length) return kind;
+  const mine = all.filter((id) => DESIGNS[id]?.style === style);
+  const pool = mine.length ? mine : all.includes(kind) ? [kind] : all;
+  return pool[(slot + si) % pool.length];
+}
+/** A rectangle mirrored across a street's middle line. */
+function mirror(s: Street, r: Rect): Rect {
+  if (s.d[0] === 0) {
+    const x = s.o.x;
+    return { x0: 2 * x - r.x1, x1: 2 * x - r.x0, z0: r.z0, z1: r.z1 };
+  }
+  const z = s.o.z;
+  return { x0: r.x0, x1: r.x1, z0: 2 * z - r.z1, z1: 2 * z - r.z0 };
+}
 
 /** The side a vector points to: 0 north, 1 east, 2 south, 3 west. */
 const faceOf = (dx: number, dz: number) => (dz < 0 ? 0 : dx > 0 ? 1 : dz > 0 ? 2 : 3);
@@ -120,7 +201,7 @@ const overlaps = (a: Rect, b: Rect, gap = 1) => a.x0 <= b.x1 + gap && a.x1 >= b.
 const along = (s: Street, x: number, z: number) => s.d[0] * (x - s.o.x) + s.d[1] * (z - s.o.z);
 const across = (s: Street, x: number, z: number) => -s.d[1] * (x - s.o.x) + s.d[0] * (z - s.o.z);
 const corners = (b: Rect): [number, number][] => [[b.x0, b.z0], [b.x1, b.z0], [b.x0, b.z1], [b.x1, b.z1]];
-const onLots = (b: Building) => b.kind !== "road" && b.kind !== "wall" && b.kind !== "farm" && b.kind !== "lamp" && b.kind !== "plaza";
+const onLots = (b: Building) => b.kind !== "road" && b.kind !== "wall" && b.kind !== "farm" && b.kind !== "lamp" && b.kind !== "plaza" && !PASSAGE.has(b.kind);
 /** How far a rectangle is from the centre at its nearest (along the axes: the plaza's square rings). */
 const outOf = (c: Point, r: Rect) => Math.max(Math.max(0, r.x0 - c.x, c.x - r.x1), Math.max(0, r.z0 - c.z, c.z - r.z1));
 
@@ -129,8 +210,25 @@ export function plazaRect(c: Point): Rect {
   return { x0: c.x - PLAZA_HALF, z0: c.z - PLAZA_HALF, x1: c.x + PLAZA_HALF, z1: c.z + PLAZA_HALF };
 }
 
+/** The cells on or beside a street (margin 1), worked out once per centre: what no lot may take. */
+const besideCache = new Map<string, Set<string>>();
+function besideStreets(c: Point): Set<string> {
+  const key = `${c.x},${c.z}`;
+  const hit = besideCache.get(key);
+  if (hit) return hit;
+  const set = new Set<string>();
+  for (let x = c.x - PLAZA_HALF - 1; x <= c.x + PLAZA_HALF + 1; x++) for (let z = c.z - PLAZA_HALF - 1; z <= c.z + PLAZA_HALF + 1; z++) set.add(`${x},${z}`);
+  for (const s of streetsOf(c)) {
+    const [px, pz] = [-s.d[1], s.d[0]];
+    for (let t = s.t0 - 1; t <= s.t1 + 1; t++) for (let a = -STREET_HALF - 1; a <= STREET_HALF + 1; a++) set.add(`${s.o.x + s.d[0] * t + px * a},${s.o.z + s.d[1] * t + pz * a}`);
+  }
+  besideCache.set(key, set);
+  return set;
+}
+
 /** Is (x, z) on a street (or the plaza), or (`margin` 1) the cell beside one, where door paths and lamp posts go? */
 export function onStreet(c: Point, x: number, z: number, margin = 0): boolean {
+  if (margin === 1) return besideStreets(c).has(`${x},${z}`);
   if (Math.abs(x - c.x) <= PLAZA_HALF + margin && Math.abs(z - c.z) <= PLAZA_HALF + margin) return true;
   return streetsOf(c).some((s) => {
     const t = along(s, x, z);
@@ -141,27 +239,54 @@ export function onStreet(c: Point, x: number, z: number, margin = 0): boolean {
 /** Every lot along the streets a building of this kind could take (chooseLot scores them). The front faces the street
  *  with one cell between them (the step and the path to the door); a cathedral or a keep can also stand across the head
  *  of a main street, out past its last building, facing back down it to the plaza. */
-export function lotsFor(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, lengths: number[] = [0, 0, 0, 0]): Lot[] {
+export function lotsFor(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, lengths: number[] = [0, 0, 0, 0], styles?: string[]): Lot[] {
   const out: Lot[] = [];
-  const dist = DISTRICT[kind];
+  const dist = distOf(kind);
+  const where = KIND_INFO[kind]?.district;
+  const pick = (si: number, t: number) => (KINDS[kind]?.designs.length ? designFor(kind, c, si, t, styles) : kind);
+  if (where === "gate" || where === "span") {
+    // over a gate of the wall (the middle of its front on the street's line, where the wall crosses it), or across
+    // an avenue between the plaza and the rings: the street runs through it
+    streetsOf(c).forEach((s, si) => {
+      if (s.arm < 0) return;
+      const [dx, dz] = s.d;
+      const [px, pz] = [-dz, dx];
+      const face = faceOf(-dx, -dz);
+      const design = pick(si, 0);
+      const [sx, sz] = sizeFacing(design, face);
+      const wide = dx !== 0 ? sz : sx;
+      const deep = dx !== 0 ? sx : sz;
+      const half = Math.floor(wide / 2);
+      for (const mid of where === "gate" ? [WALL] : [12, 17, 33, 39]) {
+        const t = mid - Math.floor(deep / 2);
+        const pts: [number, number][] = [];
+        for (const a of [t, t + deep - 1]) for (const k of [-half, wide - 1 - half]) pts.push([s.o.x + dx * a + px * k, s.o.z + dz * a + pz * k]);
+        const r = box(pts);
+        out.push({ ...r, face, street: si, side: where === "gate" ? 3 : 4, t, out: outOf(c, r), where: where === "gate" ? `over the ${DIRS[s.arm]} gate` : `across ${s.name}`, design });
+      }
+    });
+    return out;
+  }
   streetsOf(c).forEach((s, si) => {
     const [dx, dz] = s.d;
     const [px, pz] = [-dz, dx]; // across the street, to its right
     for (const side of [1, -1]) {
       const face = faceOf(-side * px, -side * pz);
-      const [sx, sz] = sizeFacing(kind, face);
-      const al = dx !== 0 ? sx : sz;
-      const deep = dx !== 0 ? sz : sx;
       // a step back from the street (the door step and the path), or set back a little further where the ground
       // right by the street won't take it (the path to the door runs straight out to the street all the same)
       for (const back of [0, 2, 4])
-        for (let t = s.t0 + (s.arm >= 0 ? 1 : 0); t + al - 1 <= s.t1; t++) {
+        for (let t = s.t0 + (s.arm >= 0 ? 1 : 0); t <= s.t1; t++) {
+          const design = pick(si, t);
+          const [sx, sz] = sizeFacing(design, face);
+          const al = dx !== 0 ? sx : sz;
+          const deep = dx !== 0 ? sz : sx;
+          if (t + al - 1 > s.t1) continue;
           const c0 = STREET_HALF + 2 + back;
           const c1 = STREET_HALF + 1 + deep + back;
           const pts: [number, number][] = [];
           for (const a of [t, t + al - 1]) for (const k of [c0, c1]) pts.push([s.o.x + dx * a + px * side * k, s.o.z + dz * a + pz * side * k]);
           const r = box(pts);
-          out.push({ ...r, face, street: si, side, t, out: outOf(c, r) + back, where: `on ${s.name}`, back });
+          out.push({ ...r, face, street: si, side, t, out: outOf(c, r) + back, where: `on ${s.name}`, back, design });
         }
     }
     const kept = HEADS[kind];
@@ -176,7 +301,7 @@ export function lotsFor(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, length
         const pts: [number, number][] = [];
         for (const a of [t, t + deep - 1]) for (const k of [-half, wide - 1 - half]) pts.push([s.o.x + dx * a + px * k, s.o.z + dz * a + pz * k]);
         const r = box(pts);
-        out.push({ ...r, face, street: si, side: 0, t, out: outOf(c, r), where: `at the head of ${s.name}, facing down it to the plaza` });
+        out.push({ ...r, face, street: si, side: 0, t, out: outOf(c, r), where: `at the head of ${s.name}, facing down it to the plaza`, design: kind });
       }
     }
   });
@@ -190,7 +315,7 @@ export function lotsFor(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, length
         const z0 = sz > 0 ? c.z + lo : c.z - lo - d + 1;
         const r = { x0, z0, x1: x0 + w - 1, z1: z0 + d - 1 };
         const outward = lo > WALL;
-        out.push({ ...r, face: (sz < 0) === outward ? 0 : 2, street: -1, side: 2, t: 0, out: outOf(c, r), where: name });
+        out.push({ ...r, face: (sz < 0) === outward ? 0 : 2, street: -1, side: 2, t: 0, out: outOf(c, r), where: name, design: "tower" });
       }
   }
   return out;
@@ -204,35 +329,68 @@ export function keptLots(c: Point, builds: Building[]): Rect[] {
     const lot = lotsFor(k as Exclude<Plain, "plaza" | "lamp">, c).find((l) => l.side === 0 && l.street === h.arm);
     if (lot) out.push(lot);
   }
+  // the gates of the wall, kept for their gatehouses from the start (the street runs through them anyway)
+  for (const g of gateLots(c)) if (!builds.some((b) => b.kind === "gatehouse" && overlaps(b, g, 0))) out.push(g);
   return out;
+}
+const gateCache = new Map<string, Lot[]>();
+function gateLots(c: Point): Lot[] {
+  const key = `${c.x},${c.z}`;
+  if (!gateCache.has(key)) gateCache.set(key, KINDS.gatehouse ? lotsFor("gatehouse", c) : []);
+  return gateCache.get(key)!;
 }
 
 /** The best lot for a building: in its district (how far out, which streets), clear of everything in `avoid` and of
  *  the streets and the plaza, on ground that `fits` (flat enough, dry, no trees), nearest the plaza of its district.
  *  `fits` gives the floor height for a rectangle, or -1. `wall`: the wall's distance out once it is planned (nothing
  *  goes across its line). Null when no lot along the streets will do. */
-export function chooseLot(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, builds: Building[], avoid: Rect[], fits: (r: Rect) => number, wall = WALL, why?: Record<string, number>): (Lot & { y: number }) | null {
+export function chooseLot(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, builds: Building[], avoid: Rect[], fits: (r: Rect) => number, wall = WALL, why?: Record<string, number>, styles?: string[]): (Lot & { y: number }) | null {
   const no = (k: string) => {
     if (why) why[k] = (why[k] ?? 0) + 1;
   };
-  const dist = DISTRICT[kind];
+  const dist = distOf(kind);
   const streets = streetsOf(c);
   const caps = armCaps(c, builds);
   const lengths = armLengths(c, builds);
-  const lots = lotsFor(kind, c, lengths);
+  const lots = lotsFor(kind, c, lengths, styles);
+  // the buildings of this kind already standing, mirrored across their street: a lot there makes a pair
+  const pairs: Rect[] = [];
+  for (const b of builds) {
+    if (b.kind !== kind) continue;
+    const at = streetOf(c, b);
+    if (at) pairs.push(mirror(streets[at[0]], b));
+  }
+  const paired = (l: Lot) => pairs.some((p) => Math.abs(p.x0 - l.x0) + Math.abs(p.z0 - l.z0) + Math.abs(p.x1 - l.x1) + Math.abs(p.z1 - l.z1) <= 2);
+  const civic = !DISTRICT[kind] && (KIND_INFO[kind]?.district === "square" || KIND_INFO[kind]?.district === "civic");
   const score = (l: Lot) => {
     if (l.side === 2) return -20 + l.out * 0.1; // a tower at a corner of the town before anywhere else
+    if (l.side >= 3) return l.out; // a gatehouse or an arch: the nearest first
     const s = streets[l.street];
     let v = Math.max(0, dist.near - l.out) * 4 + Math.max(0, l.out - dist.far) * 1.5 + l.out * 0.25;
     if (dist.arms && s.arm >= 0 && l.side !== 0 && !dist.arms.includes(s.arm)) v += 6;
-    if (s.ring) v += 3; // the rings after the main streets at the same distance
+    // the rings after the main streets at the same distance; the inner ring is the civic ring, kept for the town's
+    // public buildings (the houses go elsewhere first)
+    if (s.ring) v += s.ring === RINGS[0] ? (civic ? -4 : kind === "house" ? 10 : 3) : 3;
     if (l.side === 0) v -= HEADS[kind] ? 40 : 6; // the head of a street, when it's open, is the place for it
+    if (paired(l)) v -= 4; // across the street from one of its kind: the street comes in pairs
     return v;
   };
   lots.sort((a, b) => score(a) - score(b));
   const plaza = plazaRect(c);
-  const all = [...builds.filter((b) => b.kind !== "road" && b.kind !== "wall").map((b) => b as Rect), ...avoid, ...keptLots(c, builds).filter((r) => !lots.some((l) => l.side === 0 && l.x0 === r.x0 && l.z0 === r.z0))];
+  const all = [...builds.filter((b) => b.kind !== "road" && b.kind !== "wall").map((b) => b as Rect), ...avoid, ...keptLots(c, builds).filter((r) => !lots.some((l) => (l.side === 0 || l.side === 3) && l.x0 === r.x0 && l.z0 === r.z0))];
   for (const l of lots) {
+    if (l.side >= 3) {
+      // over a gate or across an avenue: nothing else there (a building may stand right beside it), never on the
+      // plaza, ground that takes it
+      if (all.some((r) => overlaps(l, r, 0)) || overlaps(l, plaza, 1)) {
+        no("taken");
+        continue;
+      }
+      const y = fits(l);
+      if (y >= 0) return { ...l, y };
+      no("ground");
+      continue;
+    }
     if (l.side === 2) {
       if (all.some((r) => overlaps(l, r, 1))) {
         no("taken");
@@ -329,7 +487,7 @@ export function armLengths(c: Point, builds: Building[]): number[] {
 
 /** The stretch of each street that is in use: [from, to] along it ([0, 0]: none). A main street runs from the plaza
  *  out to its last lot; a side of the ring from its crossing with a main street out to its lots either way. */
-function streetSpans(c: Point, builds: Building[]): [number, number][] {
+export function streetSpans(c: Point, builds: Building[]): [number, number][] {
   const streets = streetsOf(c);
   const caps = armCaps(c, builds);
   const spans: [number, number][] = streets.map(() => [0, 0]);
@@ -362,8 +520,9 @@ export function streetPlan(c: Point, builds: Building[], ground: (x: number, z: 
   const of: number[] = [];
   const seen = new Set<string>();
   const k = tier >= 2 ? "4" : "p";
+  // (an arch or a gatehouse the street runs through doesn't block it)
   const lots = builds.filter((b) => b.kind !== "road" && b.kind !== "wall" && b.kind !== "farm" && b.kind !== "plaza");
-  const blocked = (x: number, z: number) => lots.some((b) => x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1);
+  const blocked = (x: number, z: number) => lots.some((b) => x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && !(PASSAGE.has(b.kind) && onStreet(c, x, z)));
   const plaza = plazaRect(c);
   const inPlaza = (x: number, z: number) => x >= plaza.x0 && x <= plaza.x1 && z >= plaza.z0 && z <= plaza.z1;
   const add = (x: number, z: number, i: number) => {
@@ -430,7 +589,44 @@ export function wallRadius(): number {
 
 /** How far out from the plaza a kind belongs at most (its district's far edge). */
 export function districtFar(kind: Kind): number {
-  return kind in DISTRICT ? DISTRICT[kind as keyof typeof DISTRICT].far : 24;
+  return DISTRICT[kind] || KIND_INFO[kind] ? distOf(kind).far : 24;
+}
+
+/** Spots for street furniture (a bench, a flower bed) of this design: in the row beside a street that is in use, along
+ *  it, its front to the street, out of the plaza, clear of the buildings and of `taken` cells (the paths to the doors,
+ *  the lamp posts; "furniture:x,z" for the other pieces, kept `gap` away). Nearest the plaza first. */
+export function streetSpots(c: Point, builds: Building[], design: string, taken: Set<string>, gap = 3): Lot[] {
+  const out: Lot[] = [];
+  const spans = streetSpans(c, builds);
+  const plaza = plazaRect(c);
+  const lots = builds.filter((b) => b.kind !== "road" && b.kind !== "wall" && b.kind !== "plaza");
+  const inLot = (x: number, z: number) => lots.some((b) => x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1);
+  streetsOf(c).forEach((s, si) => {
+    const [lo, hi] = spans[si];
+    if (!lo && !hi) return;
+    const [dx, dz] = s.d;
+    const [px, pz] = [-dz, dx];
+    for (const side of [1, -1]) {
+      const face = faceOf(-side * px, -side * pz);
+      const [sx, sz] = sizeFacing(design, face);
+      const al = dx !== 0 ? sx : sz;
+      const deep = dx !== 0 ? sz : sx;
+      for (let t = Math.max(lo, s.t0 + 1); t + al - 1 <= hi; t++) {
+        const pts: [number, number][] = [];
+        for (const a of [t, t + al - 1]) for (const k of [STREET_HALF + 1, STREET_HALF + deep]) pts.push([s.o.x + dx * a + px * side * k, s.o.z + dz * a + pz * side * k]);
+        const r = box(pts);
+        let ok = !overlaps(r, plaza, 0);
+        for (let x = r.x0 - gap; x <= r.x1 + gap && ok; x++)
+          for (let z = r.z0 - gap; z <= r.z1 + gap && ok; z++) {
+            const inside = x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1;
+            if (inside && (taken.has(`${x},${z}`) || inLot(x, z))) ok = false;
+            else if (taken.has(`furniture:${x},${z}`)) ok = false;
+          }
+        if (ok) out.push({ ...r, face, street: si, side, t, out: outOf(c, r), where: `beside ${s.name}`, design });
+      }
+    }
+  });
+  return out.sort((a, b) => a.out - b.out);
 }
 
 /** How many lots near a centre (out to `out`) the ground would take, up to `cap`: how good a spot it is for a town. */
@@ -449,7 +645,7 @@ export function lotRoom(c: Point, fits: (r: Rect) => number, out = 24, cap = 30)
 
 /** The district of a kind, in words. */
 export function districtOf(kind: Kind): string {
-  return kind in DISTRICT ? DISTRICT[kind as keyof typeof DISTRICT].name : kind === "plaza" ? "in the middle of the town" : kind === "lamp" ? "along the streets" : "";
+  return kind === "plaza" ? "in the middle of the town" : kind === "lamp" ? "along the streets" : DISTRICT[kind] || KIND_INFO[kind] ? distOf(kind).name : "";
 }
 
 /** Is a kind one the town has only one of? */

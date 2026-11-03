@@ -1039,8 +1039,8 @@ reg("statue/founder", {
 }, "founders' statue", "stone");
 kind("arch", "an arch over the avenue", "arches", 6, "span", 2);
 reg("arch", {
-  kind: "arch", what: "an arch across the avenue: two piers, the lintel over a way three wide and four high, a cornice along the top, a light over the middle",
-  shape: "archway", core: [7, 3], eaves: 0, walls: 6, rooms: "a way through 3 wide and 4 high",
+  kind: "arch", what: "an arch across the avenue: two piers in the rows beside the street, the lintel over the way (three wide, four high), a cornice along the top, a light over the middle",
+  shape: "archway", core: [5, 3], eaves: 0, walls: 6, rooms: "a way through 3 wide and 4 high",
   parts: { footing: all3(COB), paving: [COB, SBR, SBR], wall: [COB, SBR, SBR], band: [SBR, SBR, B.MOSSY_STONE_BRICKS], cornice: [CSLAB, SSLAB, SSLAB], light: [TORCH, LANTERN, LANTERN] },
   furniture: [{ block: HANG, at: ["mid", 0, "mid"], hang: true, tier: 2 }],
   tiers: ["", "the arch in cobblestone, a torch on top", "stone brick, a lantern under the arch and on top", "a mossy stone band (old stone)"],

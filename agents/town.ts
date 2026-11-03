@@ -258,7 +258,9 @@ export function lotsFor(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, length
       const wide = dx !== 0 ? sz : sx;
       const deep = dx !== 0 ? sx : sz;
       const half = Math.floor(wide / 2);
-      for (const mid of where === "gate" ? [WALL] : [12, 17, 33, 39]) {
+      // (an arch: every few blocks out along the avenue, never on a crossing with a ring road or at the wall)
+      const mids = where === "gate" ? [WALL] : Array.from({ length: 16 }, (_, k) => 10 + k * 4).filter((m) => m + deep <= REACH && Math.abs(m - WALL) > 3 && RINGS.every((R) => Math.abs(m - R) > 4));
+      for (const mid of mids) {
         const t = mid - Math.floor(deep / 2);
         const pts: [number, number][] = [];
         for (const a of [t, t + deep - 1]) for (const k of [-half, wide - 1 - half]) pts.push([s.o.x + dx * a + px * k, s.o.z + dz * a + pz * k]);

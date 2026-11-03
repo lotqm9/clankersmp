@@ -158,7 +158,7 @@ const HOME_BANDS: { to: number; sizes: string[]; stone?: string[] }[] = [
 /** The town's first homes, before it's a hamlet (four houses): small ones, wherever they stand. Its first lot is by
  *  the square, where the band says a two-storey row house: 379 blocks, and season 16's camp went 25 minutes on day 2
  *  with nothing finished. */
-const EARLY_SIZES = ["cottage", "hut"];
+export const EARLY_SIZES = ["cottage", "hut"];
 export const EARLY_HOUSES = 4;
 /** The design for a building of a kind on a street, `t` out along it: the street's style; for a house, the size for
  *  how far out it is and the roof in a rhythm along the street (a gable, then one across the front; flat roofs on

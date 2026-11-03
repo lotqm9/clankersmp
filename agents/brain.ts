@@ -12,7 +12,7 @@ import { SPAWN_X, SPAWN_Z } from "../shared/constants.ts";
 import { HUB_R } from "../shared/hub12.ts";
 import { DESIGNS, KINDS, ONCE, STAGES, UP_EXTRA, cellTarget, designOf, doorStep, faceToward, farmPlan, homeOf, itemOf, label as civLabel, materialsFor, maxTier, needText, planFor, progress, sizeFacing, wallPlan, type Building, type Kind, type Plain } from "./civ.ts";
 import { KIND_INFO, catalogSize } from "./catalog.ts";
-import { HEADS, STREET_STYLES, chooseLot, designFor, districtFar, districtOf, keptLots, lotRoom, plazaRect, streetAt, streetPlan, streetSpots, streetsOf, styleOf, wallRadius, STREET_HALF, WALL, type Point } from "./town.ts";
+import { EARLY_HOUSES, EARLY_SIZES, HEADS, STREET_STYLES, chooseLot, designFor, districtFar, districtOf, keptLots, lotRoom, plazaRect, streetAt, streetPlan, streetSpots, streetsOf, styleOf, wallRadius, STREET_HALF, WALL, type Point } from "./town.ts";
 import { CLAIM_MS, ROLES, assignRoles, jobText, pickJob, planJobs, rawIn, rawOf, slotOf, slotText, type Job, type Raw, type Role, type Slot, type TownState } from "./board.ts";
 import { VILLAGE_SITES } from "../shared/villages.ts";
 import { JOBS } from "../shared/villagers.ts";
@@ -395,6 +395,13 @@ const MAKE = new Map<number, { rid: string; out: number; ings: [number, number][
 ]);
 const ORDER = [...MAKE.keys()];
 const RAW = [B.COBBLESTONE, LOGS, B.OAK_LOG, B.BIRCH_LOG, B.SAND, I.RAW_IRON, FUEL, B.DIRT, B.OAK_SAPLING, B.BIRCH_SAPLING, B.POPPY, B.DANDELION, B.BLUEBELL];
+
+
+/** A home design bigger than the town's first homes (a hut, a cottage). */
+function bigHome(design?: string): boolean {
+  const size = design?.startsWith("house/") ? design.split("/")[1].split("-")[1] : "";
+  return !!size && !EARLY_SIZES.includes(size);
+}
 
 export class Brain {
   readonly name: string;
@@ -1753,6 +1760,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // on to every new door); else a new one, on the job's lot when it has one
       const again = named && (!named.done || named.fix || tierOf(named) < 1 || job?.kind === "plant" || job?.kind === "repair");
       site = again ? named : PACK.builds.find((x) => x.kind === kind && !isHome(x) && (!x.done || x.fix || tierOf(x) < 1 || kind === "road") && (!others(x) || kind === "road"));
+      // a big home not begun while the town is young comes off the plan, and a small one goes up instead (its lot was
+      // picked before the first homes were kept small: season 16's first house, a 379-block row house, stood
+      // unbegun into day 5 with the camp's builder off fetching oak for it)
+      if (site && !site.done && this.tooBigYet(site)) {
+        PACK.builds = PACK.builds.filter((x) => x !== site);
+        this.log.push(`${designName(site)} at ${where(site)} hadn't been begun: a young town's first homes are small, so a smaller one goes up instead`);
+        site = undefined;
+        savePack();
+      }
       if (!site) {
         const most = Math.max(0, KIND_INFO[kind]?.most ?? 0, ...STAGES.flatMap((st) => st.needs.filter(([k]) => k === kind).map(([, n]) => n)));
         const final = progress(civCount).next === null;
@@ -1766,7 +1782,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         else if (kind === "road") site = { kind, x0: hub.x, z0: hub.z, x1: hub.x, z1: hub.z, y: base.y, by: [], done: false, at: Date.now() };
         else {
           // the lot the board picked for the job (if it is still free and the ground still takes it), else the best now
-          const kept = job?.lot && this.lotFree(job.lot);
+          const kept = job?.lot && !(kind === "house" && this.youngTown() && bigHome(job.lot.design)) && this.lotFree(job.lot);
           const spot = kept ? { ...job!.lot!, y: kept } : this.townSite(kind as Exclude<Kind, "farm" | "road" | "wall">);
           if (typeof spot === "string") return spot;
           site = { kind, x0: spot.x0, z0: spot.z0, x1: spot.x1, z1: spot.z1, y: spot.y, face: spot.face, by: [], done: false, at: Date.now() };
@@ -2942,6 +2958,22 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const again = await this.buildTown("treefarm", false, { ...job, kind: "plant", at: [mx, mz] });
     const dl = this.storehouse() ? await this.toStore() : "";
     return `cut the tree farm's trees: ${got} logs${r.left ? ` (${r.left} blocks of them out of reach)` : ""}; ${again}${dl ? `; ${dl}` : ""}`;
+  }
+
+  /** Before a hamlet's four homes are up: the first homes are small (town.ts's EARLY_SIZES). */
+  private youngTown(): boolean {
+    return PACK.builds.filter((x) => x.kind === "house" && x.done).length < EARLY_HOUSES;
+  }
+
+  /** A home of a bigger size than a young town builds, with nothing of it in place yet. */
+  private tooBigYet(s: Building): boolean {
+    if (s.kind !== "house" || isHome(s) || !bigHome(s.design) || !this.youngTown()) return false;
+    const b = this.body;
+    for (const c of this.planOf(s, 1).cells) {
+      const t = cellTarget(c[3]);
+      if (t && !t.optional && SOLID[t.id] && !b.needsWork(c)) return false;
+    }
+    return true;
   }
 
   /** A building not begun yet goes up in the wood the town can get: an oak design with too little oak for it (in the

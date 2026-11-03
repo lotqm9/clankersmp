@@ -15,10 +15,12 @@ import { B, BLOCKS } from "../shared/blocks.ts";
 import { I, itemDef } from "../shared/items.ts";
 
 const url = process.argv[2] || "ws://127.0.0.1:8789";
-const kinds = (process.env.KINDS || "house,well,lamp,storehouse,market,hall,tower,plaza,keep,wall").split(",") as (Plain | "wall")[];
+const kinds = (process.env.KINDS || "house,well,lamp,storehouse,market,hall,tower,plaza,keep,wall,smithy,bakery,tavern,library,chapel,barn,fountain,monument,cathedral").split(",") as (Plain | "wall")[];
 const names = (process.env.BODIES || "opus,sonnet,haiku").split(",");
 const [ax, az] = (process.env.AT || "288,216").split(",").map(Number);
 const shots = process.env.SHOTS === "1";
+/** Which tiers get pictures (SHOT_TIERS=1,3): each takes a minute in the browser. */
+const shotTiers = (process.env.SHOT_TIERS || "1,2,3").split(",").map(Number);
 const OUT = process.env.OUT || fileURLToPath(new URL("../.local/shots", import.meta.url));
 mkdirSync(OUT, { recursive: true });
 const used: { x0: number; z0: number; x1: number; z1: number }[] = [];
@@ -59,7 +61,7 @@ async function supply(b: Body, cells: [number, number, number, string][]): Promi
 }
 
 async function shot(b: Body, name: string, file: string, s: { kind: string; x0: number; z0: number; x1: number; z1: number; y: number; face?: number }, h: number): Promise<void> {
-  if (!shots) return;
+  if (!shots || !shotTiers.includes(Number(/-t(\d)/.exec(file)?.[1] ?? 0))) return;
   const cx = (s.x0 + s.x1 + 1) / 2;
   const cz = (s.z0 + s.z1 + 1) / 2;
   const w = Math.max(s.x1 - s.x0 + 1, s.z1 - s.z0 + 1);
@@ -88,7 +90,7 @@ async function shot(b: Body, name: string, file: string, s: { kind: string; x0: 
     { out: `${OUT}/${file}.png`, eye: view(1, 0.6), look, fov: 70 },
     { out: `${OUT}/${file}-back.png`, eye: view(-1, -0.6), look, fov: 70 },
   ];
-  if (["house", "hall", "storehouse", "keep", "market"].includes(s.kind)) {
+  if (["house", "hall", "storehouse", "keep", "market", "smithy", "bakery", "tavern", "library", "chapel", "barn", "cathedral"].includes(s.kind)) {
     const half = Math.min(s.x1 - s.x0, s.z1 - s.z0) / 2;
     const step = s.kind === "market" ? half + 1 : half - 0.5;
     // (the market's middle is a post: look into the first stall)
@@ -183,7 +185,7 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
       const mz = Math.floor((site.z0 + site.z1) / 2);
       const off = Math.ceil((kind === "wall" ? 14 : Math.max(site.x1 - site.x0, site.z1 - site.z0) / 2) + 3);
       await b.goto(mx + fx * off + 0.5, site.y, mz + fz * off + 0.5, 2, { maxMs: 20000 });
-      await shot(b, name, `${kind}-t${tier}`, site, kind === "keep" || kind === "tower" ? 10 : kind === "hall" ? 10 : kind === "lamp" ? 4 : 7);
+      await shot(b, name, `${kind}-t${tier}`, site, ({ keep: 10, tower: 10, hall: 10, tavern: 10, library: 10, barn: 10, chapel: 13, cathedral: 15, lamp: 4, fountain: 5, monument: 8 } as Record<string, number>)[kind] ?? 7);
     }
   }
   b.close();

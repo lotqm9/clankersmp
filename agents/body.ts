@@ -1611,7 +1611,14 @@ export class Body {
     if ((w > 2 || h > 2) && !this.tableInReach()) {
       const near = this.findBlocks([B.CRAFTING_TABLE], 20, 1)[0];
       if (near) await this.goto(near[0] + 0.5, near[1], near[2] + 0.5, 2, { maxMs: 25000, done: () => this.tableInReach() });
-      else if (this.has(B.CRAFTING_TABLE)) {
+      // none near and none in the bag: make one (four planks, from a log if need be), the way a player does (opus
+      // asked for a furnace five times running and got "craft one: crafting_table" each time)
+      if (!near && !this.has(B.CRAFTING_TABLE) && rid !== "crafting_table") {
+        const planks = () => this.count(B.OAK_PLANKS) + this.count(B.BIRCH_PLANKS);
+        for (const p of ["oak_planks", "birch_planks", "oak_planks_from_palm"]) if (planks() < 4) await this.craft(p, 1);
+        if (planks() >= 4) await this.craft("crafting_table", 1);
+      }
+      if (!near && this.has(B.CRAFTING_TABLE)) {
         // put it down here, or a few steps off when there's no room (a thicket, a slope): never give up on the first try
         for (let k = 0; k < 4 && !this.tableInReach() && !this.abort; k++) {
           const spot = this.spotNearby();

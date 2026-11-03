@@ -1561,15 +1561,18 @@ export class Body {
   async runAway(threats: { x: number; y: number; z: number; kind: number }[], maxMs = 12000): Promise<string> {
     const t0 = Date.now();
     let legs = 0;
-    while (!this.abort && !this.dead && Date.now() - t0 < maxMs && legs < 3) {
+    let side = 1;
+    while (!this.abort && !this.dead && Date.now() - t0 < maxMs && legs < 4) {
       const near = threats.map((m) => this.mobs.get((m as { id?: number }).id ?? -1) ?? m).filter((m) => Math.hypot(m.x - this.phys.x, m.z - this.phys.z) < 18);
       if (!near.length) break;
+      // archers aim where you are, not where you're going: across their line of fire, zigzagging, never straight away
+      const shooters = near.filter((m) => MOB_SPECS[m.kind]?.key === "rattler");
       const fy = Math.floor(this.phys.y + 0.1);
       let best: [number, number, number] | null = null;
       let bestScore = -Infinity;
       for (let k = 0; k < 16; k++) {
         const a = (k / 16) * Math.PI * 2;
-        for (const r of [10, 15]) {
+        for (const r of shooters.length ? [7, 10] : [10, 15]) {
           const x = Math.floor(this.phys.x + Math.cos(a) * r);
           const z = Math.floor(this.phys.z + Math.sin(a) * r);
           // ground near its own height, dry, room to stand
@@ -1592,6 +1595,14 @@ export class Body {
             if (this.clearSight(m.x, m.y + h * 0.85, m.z, x + 0.5, y + EYE_HEIGHT, z + 0.5)) score -= 6;
           }
           score -= Math.abs(y - fy) * 1.5;
+          for (const m of shooters) {
+            // how square to its line of fire (1: straight across), on the side away from the last leg
+            const bx = m.x - this.phys.x;
+            const bz = m.z - this.phys.z;
+            const bl = Math.hypot(bx, bz) || 1;
+            const cross = ((x - this.phys.x) * bz - (z - this.phys.z) * bx) / (bl * r);
+            score += Math.abs(cross) * 7 + (Math.sign(cross) === side ? 3 : 0);
+          }
           if (score > bestScore) {
             bestScore = score;
             best = [x, y, z];
@@ -1600,6 +1611,7 @@ export class Body {
       }
       if (!best) break;
       legs++;
+      side = -side;
       const [x, y, z] = best;
       await this.goto(x + 0.5, y, z + 0.5, 1.5, { maxMs: 6000 });
     }

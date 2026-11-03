@@ -2007,6 +2007,23 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           FIGHTS.delete(this.name);
           return true;
         }
+        // just an archer, no bow: running is running in its sights (haiku died that way in iron, season 13 day 11:
+        // 11.6 health in 15 s, shot in the back). Armoured and not badly hurt: close in and kill it with whatever it
+        // has. Otherwise break its line of sight with blocks
+        if (!h && r && !outnumbered) {
+          if (armoured && !badlyHurt) {
+            await this.reflex("charging the rattler", async () => {
+              this.fighting(r);
+              const res = await b.fight({ kind: "mob", id: r.id }, 25000, 5, 24);
+              if (/dead or gone/.test(res) && !b.hostiles(8).length) await b.pickUp(5, 3000);
+              return `A rattler had you in its sights; you had no real weapon but you were armoured, so you went at it with what you had (${res}).`;
+            });
+            FIGHTS.delete(this.name);
+            return true;
+          }
+          await this.reflex("breaking the rattler's line of sight", async () => `A rattler had you in its sights and you were ${!real ? "unarmed" : "badly hurt"}, so you got out of its sight: ${await this.blockSight(r)}.`);
+          return true;
+        }
         const from = hostile.filter((m) => m.d < 14);
         this.callForHelp(outnumbered ? `${threats} monsters` : `a ${(h ?? r)!.key}, and I'm ${real ? "hurt" : "unarmed"}`, h ?? r);
         await this.reflex(`getting away, ${!real ? "unarmed" : badlyHurt ? "badly hurt" : "outnumbered"}`, async () => this.escape(from, `${outnumbered ? `${threats} monsters were on you` : `A ${(h ?? r)!.key} was on you`} and you were ${!real ? "unarmed" : badlyHurt ? "badly hurt" : "outnumbered"}`));
@@ -2039,6 +2056,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${target.key} underground, so you walled it off to heal: ${await b.wallOff()}.`);
         } else if (!homeNear && !archer && this.canPillarFight(melee, archers)) {
           await this.reflex(`badly hurt, pillaring up out of reach`, async () => `You were badly hurt fighting a ${target.key}, so you went up a pillar out of its reach: ${await b.pillarFight()}.`);
+        } else if (archer && !b.hostiles(8).some((m) => m.key !== "rattler")) {
+          // an archer: out of its sight with blocks, not a run in its sights
+          await this.reflex("breaking the rattler's line of sight", async () => `You were badly hurt fighting a rattler, so you got out of its sight: ${await this.blockSight(target)}.`);
         } else {
           const from = b.hostiles(16);
           await this.reflex(`getting away, badly hurt`, async () => this.escape(from, `You were badly hurt fighting a ${target.key}`));
@@ -2113,6 +2133,20 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   /** Out of a fight it can't take: home if it's near and it's out in the open (a door between them), else a sprint to
    *  a spot away from them and out of the archers' sight (body.runAway). Never a hole with monsters about. */
+  /** Out of an archer's sight: home if it's near in the open; else a two-high wall toward it (it has to come round, into
+   *  reach), walled in all round when badly hurt or with another archer about; no blocks: a run across its line of
+   *  fire (body.runAway). Never a hole. */
+  private async blockSight(r: Seen): Promise<string> {
+    const b = this.body;
+    if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 25) return `ran home: ${await b.goHome()}`;
+    const archers = b.hostiles(20).filter((m) => m.key === "rattler");
+    if (b.fillerCount() >= 2 && (await b.coverFrom(r.x, r.z))) {
+      if ((b.stats.hp < 8 || archers.length >= 2) && b.fillerCount() >= b.openGaps()) return `walled itself in: ${await b.wallOff()}`;
+      return "put a wall up between you and it (it has to come round it, into reach)";
+    }
+    return await b.runAway(b.hostiles(16));
+  }
+
   private async escape(from: (Seen & { d: number })[], why: string): Promise<string> {
     const b = this.body;
     if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40) return `${why}, so you ran home: ${await b.goHome()}.`;

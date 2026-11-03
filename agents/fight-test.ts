@@ -58,6 +58,8 @@ const SCEN: Record<string, Scenario> = {
   i_ra2: { kit: [...BASE, ...IRON], hp: 20, mobs: [["rattler", 2, 12]] },
   i_mix: { kit: [...BASE, ...IRON], hp: 20, mobs: [["shambler", 2, 8], ["rattler", 1, 13], ["skitter", 1, 10]] },
   a_help: { kit: [...BASE, ...STONE, ...LEATHER], hp: 20, mobs: [["shambler", 2, 7], ["rattler", 1, 12]], team: true, apart: 14 },
+  // haiku's death (season 13 day 11): iron helmet, chestplate and boots, no sword (a pickaxe in the kit), a rattler
+  ip_ra1: { kit: [...BASE, "iron_helmet 1", "iron_chestplate 1", "iron_boots 1"], hp: 20, mobs: [["rattler", 1, 12]] },
   tunnel: { kit: [...BASE, ...STONE], hp: 7, mobs: [["shambler", 1, 4]], tunnel: true },
   // harder ones, like the real deaths: low health against two, three at once, an archer down a mine, no bow
   sh2low: { kit: [...BASE, ...STONE], hp: 10, mobs: [["shambler", 2, 7]] },

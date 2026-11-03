@@ -2442,7 +2442,10 @@ export class Body {
       // something else where this block goes: out with it first (a flower, dirt in a wall, the lower-grade block an
       // upgrade replaces), but never a chest, a bed or a furnace (someone's things), never another building's door
       if (cur !== B.AIR && !IS_WATER[cur] && !BLOCKS[cur]?.replaceable) {
-        if (KEEP(cur)) {
+        // a furnace someone put down where a wall goes comes up (it drops, with what's in it): opus set one on the
+        // second cottage's spot to smelt iron and then couldn't build there ("something is in the way"). Chests and
+        // beds stay: those are someone's things
+        if (KEEP(cur) && !(isFurnace(cur) && (await this.mine(x, y, z, false)))) {
           misses++;
           if (!why) why = `${BLOCKS[cur]?.name ?? "something"} at x=${x} y=${y} z=${z} is in the way`;
           continue;

@@ -1200,20 +1200,26 @@ export class Body {
   /** The fastest thing it has for breaking this block (its hand if nothing helps); the spared tool only where nothing
    *  else can get the block out. */
   private makingPick = false;
+  private pickFailedAt = 0;
 
   /** A pickaxe in the bag, made from what it carries when it has none (the last one wore out): a stone one from
    *  three cobblestone and two sticks, else a wooden one. False when it can't. */
   async ensurePickaxe(): Promise<boolean> {
     const has = () => this.inv.some((st) => st && itemDef(st.id)?.tool?.kind === "pickaxe");
     if (has() || this.makingPick) return has();
+    if (Date.now() - this.pickFailedAt < 60000) return false; // it just couldn't: not again on every block it mines
     this.makingPick = true;
     try {
       const planks = () => this.count(B.OAK_PLANKS) + this.count(B.BIRCH_PLANKS);
       if (!this.has(I.STICK, 2)) for (const p of ["oak_planks", "birch_planks", "oak_planks_from_palm"]) if (planks() < 5) await this.craft(p, 1);
       if (!this.has(I.STICK, 2) && planks() >= 2) await this.craft("sticks", 1);
-      if (!this.has(I.STICK, 2)) return false;
+      if (!this.has(I.STICK, 2)) {
+        this.pickFailedAt = Date.now();
+        return false;
+      }
       if (this.count(B.COBBLESTONE) >= 3 && (await this.craft("stone_pickaxe", 1)).made) return true;
       if (planks() >= 3) await this.craft("wooden_pickaxe", 1);
+      if (!has()) this.pickFailedAt = Date.now();
       return has();
     } finally {
       this.makingPick = false;
@@ -1660,12 +1666,14 @@ export class Body {
       if (near) await this.goto(near[0] + 0.5, near[1], near[2] + 0.5, 2, { maxMs: 25000, done: () => this.tableInReach() });
       // none near and none in the bag: make one (four planks, from a log if need be), the way a player does (opus
       // asked for a furnace five times running and got "craft one: crafting_table" each time)
-      if (!near && !this.has(B.CRAFTING_TABLE) && rid !== "crafting_table") {
+      // (and when the one near couldn't be got to: from a tunnel under the town, sonnet walked at a table up through
+      // the rock and back for minutes, mining stone by hand, every block asking for a pickaxe again)
+      if (!this.tableInReach() && !this.has(B.CRAFTING_TABLE) && rid !== "crafting_table") {
         const planks = () => this.count(B.OAK_PLANKS) + this.count(B.BIRCH_PLANKS);
         for (const p of ["oak_planks", "birch_planks", "oak_planks_from_palm"]) if (planks() < 4) await this.craft(p, 1);
         if (planks() >= 4) await this.craft("crafting_table", 1);
       }
-      if (!near && this.has(B.CRAFTING_TABLE)) {
+      if (!this.tableInReach() && this.has(B.CRAFTING_TABLE)) {
         // put it down here, or a few steps off when there's no room (a thicket, a slope): never give up on the first try
         for (let k = 0; k < 4 && !this.tableInReach() && !this.abort; k++) {
           const spot = this.spotNearby();

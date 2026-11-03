@@ -1577,6 +1577,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (!s.by.includes(this.name)) s.by.push(this.name);
     const what = `${designName(s)}${tier > 1 ? ` (tier ${tier})` : ""}`;
     const cells = this.planOf(s, tier, true).cells;
+    // a pier goes out from the shore: its cells nearest the land first, so the builder walks out along the deck as it
+    // grows (over the water there is nowhere else to stand)
+    if (kind === "pier") {
+      const ds = doorStep(s);
+      if (ds) cells.sort((p, q) => Math.hypot(p[0] - ds[0], p[2] - ds[1]) - Math.hypot(q[0] - ds[0], q[2] - ds[1]));
+    }
     if (kind === "road" && !cells.length) {
       s.busy = undefined;
       if (!s.done) PACK.builds = PACK.builds.filter((x) => x !== s);

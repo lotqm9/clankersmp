@@ -367,8 +367,9 @@ function quarry(d: Draft): void {
   furnish(d);
 }
 
-/** A pier: a plank deck out over the water from the shore, posts under its sides, rails down both sides (open at the
- *  land end), lights on posts at the far end. */
+/** A pier: a plank deck out over the water from the shore, rails down both sides (open at the land end), lights on
+ *  posts at the far end. (It is built from the land end out: brain.buildTown takes its cells nearest the shore first,
+ *  so the builder walks out along the deck as it grows.) */
 function pier(d: Draft): void {
   const { W, D } = d;
   for (let v = 0; v < D; v++)
@@ -377,7 +378,6 @@ function pier(d: Draft): void {
       d.put(u, -1, v, d.mat("deck"));
       d.put(u, 0, v, "a");
       d.put(u, 1, v, "a");
-      if ((u === 0 || u === W - 1) && v % 3 === 2) d.opt(u, -2, v, d.mat("piling"));
     }
   for (let v = 1; v < D - 1; v++) for (const u of [0, W - 1]) d.put(u, 0, v, d.mat("rail"));
   for (const u of [0, W - 1]) {

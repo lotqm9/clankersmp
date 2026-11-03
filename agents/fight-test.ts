@@ -320,7 +320,7 @@ for (const sc of WANT) {
   const took = rs.reduce((a, r) => a + r.taken, 0) / rs.length;
   const secs = rs.reduce((a, r) => a + r.secs, 0) / rs.length;
   // gave ground: took cover, ran, walled off, dug in or went up a pillar
-  const gave = rs.filter((r) => r.reflexes.some((x) => /cover|running|getting away|wall|dig|pillar|flee/.test(x))).length;
+  const gave = rs.filter((r) => r.reflexes.some((x) => /cover|running|getting away|wall|dig|pillar|flee|line of sight/.test(x))).length;
   const helps = rs.reduce((a, r) => a + (r.helps ?? 0), 0);
   const cleared = rs.filter((r) => r.killed >= r.mobs).length;
   console.log(`${sc}: lived ${lived}/${rs.length}, damage taken ${took.toFixed(1)}, avg hp left ${hp.toFixed(1)}, monsters killed per trial ${kills.toFixed(2)}, killed them all in ${cleared}/${rs.length}, gave ground in ${gave}/${rs.length}${helps ? `, helped ${helps} times` : ""}, ${secs.toFixed(0)}s`);

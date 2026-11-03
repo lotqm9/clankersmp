@@ -2640,7 +2640,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // hungry with food on it: eat (not more than every 10 s)
     // or hurt and not quite full: a full bar heals half a heart every half second, 18 or 19 only every 4 s (haiku sat
     // at 6 health with hunger 18 after a rattler, healing at a crawl)
-    const hurtHealing = b.stats.hp <= 12 && b.stats.food < 20 && !b.hostiles(8).length;
+    // (not in an archer's sight unless starving: a meal is a second and a half standing still, and an iron-clad trial
+    // dropped to 1 health eating between two rattlers)
+    const inSights = b.hostiles(20).some((m) => m.key === "rattler" && b.seenBy(m));
+    const hurtHealing = b.stats.hp <= 12 && b.stats.food < 20 && !b.hostiles(8).length && !inSights;
     if ((b.stats.food <= 8 || hurtHealing) && Date.now() - this.lastEat > 10000 && b.inv.some((s) => s && itemDef(s.id)?.food && !itemDef(s.id)?.food?.queasy)) {
       this.lastEat = Date.now();
       await this.reflex("eating", async () => (b.stats.food <= 8 ? `You were starving, so you ate: ${await b.eat()}.` : `You were hurt, and a full stomach heals fast, so you ate: ${await b.eat()}.`));
@@ -2796,7 +2799,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         // 11.6 health in 15 s, shot in the back). Armoured and not badly hurt: close in and kill it with whatever it
         // has. Otherwise break its line of sight with blocks
         if (!h && r && !outnumbered) {
-          if (armoured && !badlyHurt) {
+          if (armoured && !badlyHurt && !b.acrossWater(r.x, r.z, r.y)) {
             await this.reflex("charging the rattler", async () => {
               this.fighting(r);
               const res = await b.fight({ kind: "mob", id: r.id }, 25000, 5, 24);
@@ -2821,8 +2824,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       const crowd = hostile.filter((m) => m.d < 9).length;
       if (crowd >= 2 || hp < 12) this.callForHelp(crowd >= 2 ? `${crowd} monsters` : `a ${target.key}, and I'm hurt`, target);
       let res = "";
-      // an archer at range without armour, and a bow: shoot it; otherwise at it (armoured, arrows do half or less)
-      const shoot = archer && bow && !armoured && target.d >= 6;
+      // an archer at range without armour, and a bow: shoot it; otherwise at it (armoured, arrows do half or less). One
+      // across water is never charged (a swimmer is a sitting target): the bow, or out of its sight
+      const wet = archer && b.acrossWater(target.x, target.z, target.y);
+      if (wet && !bow) {
+        await this.reflex("breaking the rattler's line of sight", async () => `A rattler had you in its sights from across the water, so you got out of its sight rather than swim at it: ${await this.blockSight(target)}.`);
+        return true;
+      }
+      const shoot = archer && bow && (!armoured || wet) && target.d >= (wet ? 4 : 6);
       const label = archer ? (shoot ? "shooting back at a rattler" : "charging the rattler") : `fighting a ${target.key}`;
       await this.reflex(label, async () => {
         this.fighting(target);
@@ -2886,7 +2895,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // ---- the hunt: armed with a real weapon and fit, a walker or a crawler near it out in the open: go and kill it
     // (Laith: "they make swords but do not fight mobs"). Armoured, an archer too. Not underground, not into a crowd,
     // and never chased far from where it was
-    const prey = [...melee, ...(armoured ? archers : [])].filter((m) => m.d < 14 && !left(m) && reachable(m)).sort((p, q) => p.d - q.d)[0];
+    const prey = [...melee, ...(armoured ? archers.filter((m) => !b.acrossWater(m.x, m.z, m.y)) : [])].filter((m) => m.d < 14 && !left(m) && reachable(m)).sort((p, q) => p.d - q.d)[0];
     if (prey && ready && hp >= (armoured ? 12 : 16) && !b.covered() && !b.phys.inWater && hostile.filter((m) => m.d < 16).length <= (armoured ? 3 : 2) && now - this.lastHunt > 15000) {
       this.lastHunt = now;
       let res = "";

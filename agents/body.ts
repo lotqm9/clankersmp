@@ -1499,6 +1499,32 @@ export class Body {
     return true;
   }
 
+  /** Water between it and a spot, at the lie of the land (a river, a pond; a one-block stream is a step): a charge that
+   *  way is a swim in an archer's sights. In the water itself counts. */
+  acrossWater(x1: number, z1: number, y1: number): boolean {
+    if (this.phys.inWater) return true;
+    const x0 = this.phys.x;
+    const z0 = this.phys.z;
+    const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.7);
+    const top = Math.floor(Math.max(this.phys.y, y1)) + 1;
+    const bottom = Math.floor(Math.min(this.phys.y, y1)) - 5;
+    const wet = new Set<string>();
+    for (let k = 1; k < n; k++) {
+      const x = Math.floor(x0 + ((x1 - x0) * k) / n);
+      const z = Math.floor(z0 + ((z1 - z0) * k) / n);
+      for (let y = top; y >= bottom; y--) {
+        const id = this.get(x, y, z);
+        if (IS_WATER[id]) {
+          wet.add(`${x},${z}`);
+          break;
+        }
+        if (SOLID[id]) break;
+      }
+      if (wet.size >= 2) return true;
+    }
+    return false;
+  }
+
   /** Can this monster see it (eye to eye)? An archer only shoots what it sees. */
   seenBy(m: Seen): boolean {
     const h = MOB_SPECS[m.kind]?.h ?? 1.9;
@@ -1658,6 +1684,7 @@ export class Body {
     let closest = Infinity;
     let closedAt = Date.now();
     let jumpAt = -100;
+    let wet = 0;
     const seen = t.kind === "mob" ? this.mobs.get(t.id) : undefined;
     const spec = seen ? MOB_SPECS[seen.kind] : undefined;
     const archer = spec?.key === "rattler";
@@ -1699,6 +1726,13 @@ export class Body {
       } else if (d > HIT_REACH && Date.now() - closedAt > 6000) {
         this.halt();
         return hits ? `it got out of reach after ${what()}` : "couldn't get to it (water, a drop or a wall in the way): try another one";
+      }
+      // after an archer through water: a swimmer is slow and a sitting target (four iron trials stood a minute in a pond
+      // under its arrows): out of the charge, for a bow or cover instead (brain.ts)
+      wet = this.phys.inWater ? wet + 1 : 0;
+      if (archer && wet > 30) {
+        this.halt();
+        return `couldn't get to it across the water${hits ? ` (${what()})` : ""}`;
       }
       const cool = Math.ceil(cooldownTicks(this.heldId()));
       const since = this.tick - this.lastSwing;

@@ -19,7 +19,7 @@ const ago = (t) => {
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s || '');
 const FAIL = /couldn|can.t|^no |nothing|still|failed|got 0 |missing|isn.t|don.t|there is no|out of|stopped|interrupted/i;
 // progress isn't failure, even with "still needed" in it (a build goes up a few blocks a turn)
-const PROGRESS = /^placed [1-9]|^finished|^upgraded|^got [1-9]|^crafted|^smelted/i;
+const PROGRESS = /^placed [1-9]|^finished|^upgraded|^got [1-9]|^crafted|^smelted|something else came up/i; // (and a job cut short by a reflex isn't a failure either)
 
 const getJson = async (path) => (await fetch(RELAY + path, { signal: AbortSignal.timeout(10000) })).json();
 

@@ -5,7 +5,7 @@
 const RELAY = process.env.RELAY || 'https://engine-production-08c9.up.railway.app';
 const FAIL = /couldn|can.t|^no |nothing|still|failed|got 0 |missing|isn.t|don.t|there is no|out of|stopped|interrupted|hole isn.t/i;
 // progress isn't failure, even with "still needed" in it (a build goes up a few blocks a turn)
-const PROGRESS = /^placed [1-9]|^finished|^upgraded|^got [1-9]|^crafted|^smelted/i;
+const PROGRESS = /^placed [1-9]|^finished|^upgraded|^got [1-9]|^crafted|^smelted|something else came up/i; // (and a job cut short by a reflex isn't a failure either)
 const IDLE = /asleep|bed|sleep|home|smelt|stay|wait|idle/i;
 const seen = new Map(); // `${agent}:${kind}` -> last time it was reported
 const track = {}; // agent -> [{t, x, y, z}]

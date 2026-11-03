@@ -292,8 +292,9 @@ export function planJobs(s: TownState): Job[] {
   // the streets out to every door, lamp posts along them
   if (s.roads.doors > s.roads.joined) add({ id: "streets", kind: "streets", k: "road", n: s.roads.doors - s.roads.joined, text: `extend the streets to ${s.roads.doors - s.roads.joined} new door${s.roads.doors - s.roads.joined > 1 ? "s" : ""}`, role: "woodcutter", pri: 34 });
   if (s.lamps.have < s.lamps.want) add({ id: "light", kind: "light", k: "lamp", n: s.lamps.want - s.lamps.have, text: `light the streets: ${s.lamps.want - s.lamps.have} more lamp posts (one every seven blocks)`, role: "woodcutter", pri: 38 });
-  // upgrades the stages after this one will ask for
-  for (const nd of s.later) if (nd.tier > 1) for (const b of lowest(nd.k, nd.tier, nd.n)) add(upJob(b, 40 + nd.tier, ", for a later stage"));
+  // upgrades the stages after this one will ask for: expansion before polish (Laith's town grows: new buildings, the
+  // stage's and then the catalog's, come first), a tier 2 in among the new buildings, the finishing (tier 3) after them
+  for (const nd of s.later) if (nd.tier > 1) for (const b of lowest(nd.k, nd.tier, nd.n)) add(upJob(b, nd.tier > 2 ? 86 : 70, ", for a later stage"));
   // and the buildings they will ask for, a couple of each ahead of time (the list never runs short, even in a camp)
   const ahead = new Set<string>();
   s.later.forEach((nd, i) => {
@@ -310,8 +311,9 @@ export function planJobs(s: TownState): Job[] {
     if (s.furniture.bench < s.furniture.want) add({ id: "decorate:bench", kind: "decorate", k: "bench", n: s.furniture.want - s.furniture.bench, text: `put a bench beside the streets (${s.furniture.bench} of ${s.furniture.want})`, role: "builder", pri: 50 });
     if (s.furniture.flowerbed < s.furniture.want) add({ id: "decorate:flowerbed", kind: "decorate", k: "flowerbed", n: s.furniture.want - s.furniture.flowerbed, text: `plant a flower bed beside the streets (${s.furniture.flowerbed} of ${s.furniture.want})`, role: "farmer", pri: 51 });
   }
-  // every building up to its top tier, the lowest first; the last tier is the finishing and the furniture
-  for (const b of s.buildings) if (b.done && !b.fix && !b.up && b.tier >= 1 && b.tier < b.max) add(upJob(b, 54 + b.tier * 3));
+  // every building up to its top tier, the lowest first; the last tier is the finishing and the furniture (after the
+  // new buildings, the catalog's too: a growing town before a polished one)
+  for (const b of s.buildings) if (b.done && !b.fix && !b.up && b.tier >= 1 && b.tier < b.max) add(upJob(b, b.tier >= 2 ? 88 : 80));
   if (s.stage >= 3 && s.roads.paved < s.roads.joined) add({ id: "pave", kind: "pave", k: "road", text: `pave the streets in cobblestone (${s.roads.joined - s.roads.paved} buildings on dirt paths)`, role: "woodcutter", pri: 58 });
   // the catalog: what this stage and the next can have, the small quick ones first; the stages after, later on
   const wanted = new Set(s.needs.map((n) => n.k));

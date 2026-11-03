@@ -53,6 +53,8 @@ export interface Building extends Rect {
   joined?: [number, number];
   /** A cottage someone has moved into: whose home it is. */
   owner?: string;
+  /** Its lot is dug into a slope: the ground over its floor across the whole rectangle is cut away (a terrace). */
+  cut?: boolean;
 }
 
 /** How many tiers each kind has (roads and farms too). */
@@ -202,6 +204,7 @@ export interface Site extends Rect {
   y: number;
   face?: number;
   design?: string;
+  cut?: boolean;
 }
 
 /** The side of a rectangle that faces a point (the town's middle): 0 north, 1 east, 2 south, 3 west. */
@@ -1471,6 +1474,14 @@ export function planFor(s: Site, tier: number, ground: (x: number, z: number) =>
     const outer = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => !d.found.has(`${x + dx},${z + dz}`));
     for (let yy = Math.max(g + 1, s.y - 3); yy < s.y; yy++) if (!d.cells.has(`${x},${yy},${z}`)) d.cells.set(`${x},${yy},${z}`, { x, y: yy, z, k: outer ? exact(B.COBBLESTONE) : "d", late: false });
   }
+  // the cut: a lot dug into a slope has the ground over its floor taken away across the whole rectangle (the building
+  // and its eaves), a terrace, so the walls stand clear and the windows look out
+  if (s.cut)
+    for (let x = s.x0; x <= s.x1; x++)
+      for (let z = s.z0; z <= s.z1; z++) {
+        const g = ground(x, z);
+        for (let yy = s.y; yy <= Math.min(g, s.y + 3); yy++) if (!d.cells.has(`${x},${yy},${z}`)) d.cells.set(`${x},${yy},${z}`, { x, y: yy, z, k: "a", late: false });
+      }
   // steps down from each door when the ground falls away in front of it: the step outside a cottage on a slope stood
   // two blocks over the grass, and nobody could get in (sonnet walked round its own house for minutes)
   for (const du of bp.doors ?? []) {

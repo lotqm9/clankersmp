@@ -10,9 +10,10 @@ import { dirname, join } from "node:path";
 import { Body, NIGHT_END, NIGHT_START, inHub, type PlanCell, type Rect, type Seen, type Target } from "./body.ts";
 import { SPAWN_X, SPAWN_Z } from "../shared/constants.ts";
 import { HUB_R } from "../shared/hub12.ts";
-import { KINDS, ONCE, STAGES, UP_EXTRA, cellTarget, doorStep, faceToward, farmPlan, homeOf, itemOf, label as civLabel, materialsFor, maxTier, needText, planFor, progress, sizeFacing, wallPlan, type Building, type Kind, type Plain } from "./civ.ts";
-import { chooseLot, districtFar, districtOf, keptLots, lotRoom, plazaRect, streetPlan, streetsOf, wallRadius, STREET_HALF, WALL, type Point } from "./town.ts";
-import { ROLES, assignRoles, jobText, rawIn, rawOf, slotOf, slotText, type Raw, type Role, type Slot } from "./board.ts";
+import { DESIGNS, KINDS, ONCE, STAGES, UP_EXTRA, cellTarget, doorStep, faceToward, farmPlan, homeOf, itemOf, label as civLabel, materialsFor, maxTier, needText, planFor, progress, sizeFacing, wallPlan, type Building, type Kind, type Plain } from "./civ.ts";
+import { KIND_INFO, catalogSize } from "./catalog.ts";
+import { STREET_STYLES, chooseLot, designFor, districtFar, districtOf, keptLots, lotRoom, plazaRect, streetAt, streetPlan, streetSpots, streetsOf, styleOf, wallRadius, STREET_HALF, WALL, type Point } from "./town.ts";
+import { CLAIM_MS, ROLES, assignRoles, jobText, pickJob, planJobs, rawIn, rawOf, slotOf, slotText, type Job, type Raw, type Role, type Slot, type TownState } from "./board.ts";
 import { VILLAGE_SITES } from "../shared/villages.ts";
 import { JOBS } from "../shared/villagers.ts";
 import { B, BLOCKS, IS_WATER, SOLID, isStorage } from "../shared/blocks.ts";
@@ -40,6 +41,10 @@ interface TownBoard {
   short: Partial<Record<Raw, number>>;
   /** Kinds that found no spot, and when: the board takes the next need for a while. */
   skip?: Record<string, number>;
+  /** The job queue (agents/board.ts): every job the town has, the most urgent first, who is on each; and when it was
+   *  drawn up. */
+  queue?: Job[];
+  qat?: number;
 }
 
 /** The pack's shared plan and base: one list all three work from, one place they build up together. */
@@ -56,6 +61,8 @@ const PACK: {
   board?: TownBoard;
   /** What is in each of the storehouse's chests, by "x,y,z": item id -> count. */
   chests?: Record<string, Record<number, number>>;
+  /** Each main street's district style (north, east, south, west), chosen once: birch where the birch grows. */
+  styles?: string[];
 } = { plan: "", by: "", base: null, houses: {}, builds: [], trades: 0, stage: -1 };
 /** Everything in the storehouse's chests, as last counted. */
 function stock(): Map<number, number> {
@@ -81,7 +88,19 @@ const tierOf = (b: Building) => (isHome(b) ? 0 : b.tier ?? 1);
 /** A kind as the thing being built (the roads are one network: "the roads", not "a building joined by a path"). */
 const nameOf = (k: Kind) => (k === "road" ? "the roads" : civLabel(k));
 /** What a tier adds, in words. */
-const upText = (k: Kind, t: number) => (k === "farm" || k === "road" ? UP_EXTRA[k][t] : KINDS[k].up[t]) ?? "";
+/** A building's top tier, by its own design. */
+const topOf = (b: { kind: Kind; design?: string }) => maxTier(b.kind, b.design);
+/** What a tier adds to a building, by its own design. */
+const upOf = (b: { kind: Kind; design?: string }, t: number) => (b.kind === "farm" || b.kind === "road" ? UP_EXTRA[b.kind][t] : (DESIGNS[b.design ?? ""] ?? DESIGNS[b.kind])?.up[t] ?? KINDS[b.kind]?.up[t]) ?? "";
+/** A building in words, by its design: "an oak cottage (gable)", else its kind's word. */
+const designName = (b: { kind: Kind; design?: string }) => {
+  const d = b.design && b.design !== b.kind ? DESIGNS[b.design] : undefined;
+  return d ? `${/^[aeiou]/i.test(d.name) ? "an" : "a"} ${d.name}` : nameOf(b.kind);
+};
+/** The trees on a lot (they come down before it is built) and the natural ground under them. */
+const TREE_IDS = new Set<number>([B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG, B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES]);
+const GROUND_IDS = new Set<number>([B.GRASS, B.DIRT, B.SAND, B.GRAVEL, B.CLAY, B.STONE]);
+const FLOWER_IDS = new Set<number>([B.POPPY, B.DANDELION, B.BLUEBELL]);
 /** How many of a kind the pack has finished, at a tier or better. Houses at tier 0 are any shelter (the homes too);
  *  "road" counts the buildings the paths join to the plaza (paved ones at tier 2). */
 function civCount(k: Kind | "trade", tier = 1): number {
@@ -126,6 +145,7 @@ function loadPack(): void {
     if (j.centre && typeof j.centre.x === "number" && typeof j.centre.z === "number") PACK.centre = { x: j.centre.x, z: j.centre.z };
     if (j.board && typeof j.board === "object" && j.board.roles) PACK.board = j.board;
     if (j.chests && typeof j.chests === "object") PACK.chests = j.chests;
+    if (Array.isArray(j.styles) && j.styles.length === 4) PACK.styles = j.styles;
   } catch {
     // no pack yet
   }
@@ -157,23 +177,32 @@ const SURVIVAL_RECIPES = [
   "iron_pickaxe", "iron_axe", "iron_sword", "diamond_pickaxe", "diamond_sword", "leather_helmet", "leather_chestplate", "leather_leggings",
   "leather_boots", "iron_helmet", "iron_chestplate", "iron_leggings", "iron_boots", "bucket", "bread", "bow", "arrow", "door", "ladder", "fence",
   "fence_gate", "oak_stairs", "oak_slab", "cobblestone_stairs", "cobblestone_slab", "cobblestone_wall", "stone_bricks", "stone_brick_stairs",
-  "stone_brick_slab", "stone_brick_wall", "glass_pane", "lantern", "barrel", "trapdoor",
+  "stone_brick_slab", "stone_brick_wall", "glass_pane", "lantern", "barrel", "trapdoor", "birch_stairs", "birch_slab", "birch_fence", "lamp", "hay_bale",
   // v13: the way to enchanting, and the rest of the diamond kit
   "iron_shovel", "diamond_axe", "diamond_shovel", "diamond_helmet", "diamond_chestplate", "diamond_leggings", "diamond_boots", "paper", "book", "bookshelf", "enchanting_table",
 ];
 
-/** Everything the build tool can put up (the wall and the roads besides the buildings on lots). */
+/** Everything the build tool can put up (the wall and the roads besides the buildings on lots): the town's first
+ *  kinds and the whole catalog (agents/catalog.ts). */
 const BUILD_KINDS = [...(Object.keys(KINDS) as Kind[]).filter((k) => k !== "wall"), "wall", "road"] as Kind[];
+/** The kinds for the build tool, in words: the town's own with what they are, the catalog's by name. */
+const buildList = () => {
+  const first = ["house", "storehouse", "well", "lamp", "market", "plaza", "hall", "smithy", "bakery", "tavern", "tower", "library", "chapel", "barn", "keep", "fountain", "monument", "cathedral"];
+  const own = first.filter((k) => KINDS[k]).map((k) => `${k} (${KINDS[k].what}; ${KINDS[k].blocks[1]} blocks)`);
+  const more = Object.keys(KINDS).filter((k) => !first.includes(k) && k !== "wall" && KINDS[k].designs.length).map((k) => `${k} (${civLabel(k)}, ${KINDS[k].blocks[1]} blocks)`);
+  return `${own.join("; ")}; and from the catalog, ${more.join(", ")}`;
+};
 
 const SYSTEM = (name: string) => `You are ${name}, a Claude model with a body in a hardcore survival game that plays like Minecraft. You act through the tools. Three players share this world: opus, sonnet and haiku. All three of you are Claude models.
 Hardcore means one life. If you die you are out of this world for good, and the others carry on without you.
 What this world is about: you three build a civilization together, from nothing. Start with a camp and grow it, stage by stage, into a capital, and see how far you can take it before the world takes you. A real town takes many hours of work: count and quality both matter, and every building can be upgraded to better tiers. The stages, each on top of the one before, are tracked for you every turn:
 ${STAGES.map((st) => `- ${st.name}: ${st.needs.map((n) => needText(n)).join(", ")}`).join("\n")}
-Everything is built at the pack's base (the first house anyone builds becomes it), on a town plan: the plaza in the middle, main streets out of it north, east, south and west, ring roads further out, every building on a lot facing its street in its own district (the hall, the market, the tavern and the chapel on the square, the smithy and the bakery on the market street, houses along the streets, watchtowers at the town's corners, the cathedral at the head of the north avenue, the keep at the head of the west street), the wall round the old town with gates where the main streets go through. Build things with build (${BUILD_KINDS.join(", ")}), farms with farm, and make any of them better with upgrade. Houses count both ways: your own home with build_house (small, it holds your bed), or a cottage with build house that anyone can build or carry on. A building takes many blocks and can be built in turns: anyone can carry on with a building another one started. Every death makes the pack weaker. You still have full control: how you treat the other two is your call.
+Everything is built at the pack's base (the first house anyone builds becomes it), on a town plan: the plaza in the middle, main streets out of it north, east, south and west, ring roads further out, every building on a lot facing its street in its own district (the hall, the market, the tavern and the chapel on the square, the smithy and the bakery on the market street, houses along the streets, watchtowers at the town's corners, the cathedral at the head of the north avenue, the keep at the head of the west street), the wall round the old town with gates where the main streets go through. Each main street is one district in one style (the north avenue stone, the market streets timber-framed, the south street oak, birch where the birch woods are), so a street is of a piece: tall two-storey houses round the middle, cottages and lodges inside the wall, longhouses and farmhouses further out; across the street from a building stands its twin. The town has a catalog of ${catalogSize().designs} designs in ${catalogSize().kinds} kinds (homes in every style and size, workshops, farm buildings, silos and windmills, quarries, piers and a lighthouse, gatehouses and bastions, a school, an inn, a temple, clock towers, statues, gardens, a park, tree farms, benches and flower beds): the board lists what to build next and where. Build things with build (${BUILD_KINDS.join(", ")}), farms with farm, and make any of them better with upgrade. Houses count both ways: your own home with build_house (small, it holds your bed), or a cottage with build house that anyone can build or carry on. A building takes many blocks and can be built in turns: anyone can carry on with a building another one started. Every death makes the pack weaker. You still have full control: how you treat the other two is your call.
 
 You work as a team, on a day plan and a town board:
 - The day: dawn (wake, eat, take food and what your job needs from the storehouse, check the board), morning and midday (gather and build by your role), afternoon (farm, smelt, craft parts, upgrade, the streets and lamp posts), dusk (put the day's haul in the storehouse, then home before dark), night (sleep in your bed; with no bed, dig in and mine underground till morning).
-- The board gives each of you a role for the day by what the town needs and who is best placed: the builder builds the town's project, the mason gets stone and ore (and smelts in the afternoon), the woodcutter gets oak and sand (and makes the streets and lamp posts in the afternoon), the farmer keeps the town fed. Nobody does what another is already doing.
+- The board gives each of you a role for the day by what the town needs and who is best placed: the builder builds the town's project, the mason gets stone and ore (and smelts in the afternoon), the woodcutter gets oak, birch and sand, keeps the tree farm cut and planted (and makes the streets and lamp posts in the afternoon), the farmer keeps the town fed. Nobody does what another is already doing.
+- The board also keeps the job list: a long list of concrete jobs, the most urgent first (repairs, the next stage's buildings on their lots, the tree farm, stocking the storehouse with what the next builds are short of, streets and lamp posts, upgrades, benches and flower beds, the catalog's buildings, more houses). work takes the next job for your role when you finish one; with none of your own, you help with the next open one.
 - The storehouse is the pack's pool: whatever you gather for the town goes in its chests (storehouse put), and the builder takes what a build needs from it (build does that by itself). Before there is a storehouse, bring the builder what it is short of (give).
 - work does your job on the board for this part of the day, start to finish (gathering what the project is short of and putting it in the storehouse, building, farming, the dusk round). It is the usual thing to do. Do something else when you have a reason to (a fight, a trade, a friend in trouble, a better idea for the town: then say so, and pack_plan it).
 - When you hand something over or finish something, one short line in chat is enough; the board tells the others the rest.
@@ -220,9 +249,9 @@ const TOOLS: Anthropic.Tool[] = [
   { name: "pick_up", description: "Pick up the dropped items lying near you.", input_schema: { type: "object", properties: {} } },
   { name: "flee", description: "Run away from the nearest danger.", input_schema: { type: "object", properties: {} } },
   { name: "wait", description: "Stay where you are for a while (like sealed in at night). Not in daylight: there is always work for the town.", input_schema: { type: "object", properties: { seconds: { type: "integer", minimum: 2, maximum: 30 } }, required: ["seconds"] } },
-  { name: "build", description: `Build one of the town's buildings at the pack's base, or carry on with one that is half built, needs fixing, or is an old design to rebuild: ${(Object.keys(KINDS) as (keyof typeof KINDS)[]).map((k) => `${k} (${KINDS[k].what}; ${KINDS[k].blocks[1]} blocks)`).join("; ")}; road (the streets out of the plaza and a path from every door to them, dug with a shovel; build it again to reach new doors). It is one whole job: it takes what the plan needs from the storehouse, fetches the rest by itself (mines cobblestone, chops oak, crafts planks, stairs, slabs, doors and fences) and comes back to carry on, so just call build. Torches need coal. Each part is one material, the way the villages are built. A new building goes on a lot of the town plan, its front to the street. You need to be near the base.`, input_schema: { type: "object", properties: { what: { type: "string", enum: BUILD_KINDS } }, required: ["what"] } },
+  { name: "build", description: `Build one of the town's buildings at the pack's base, or carry on with one that is half built, needs fixing, or is an old design to rebuild: ${buildList()}; road (the streets out of the plaza and a path from every door to them, dug with a shovel; build it again to reach new doors). It is one whole job: it takes what the plan needs from the storehouse, fetches the rest by itself (mines cobblestone, chops oak, crafts planks, stairs, slabs, doors and fences) and comes back to carry on, so just call build. Torches need coal. Each part is one material, the way the villages are built. A new building goes on a lot of the town plan, its front to the street. You need to be near the base.`, input_schema: { type: "object", properties: { what: { type: "string", enum: BUILD_KINDS } }, required: ["what"] } },
   { name: "upgrade", description: "Upgrade one of the town's buildings to its next tier (the lowest of that kind first, or carry on with one already under way): it mines out the lower-grade blocks and puts the better ones in, and adds the new details and furniture. Tier 2 is better materials and details (stone bricks: cobblestone smelted to stone and crafted; glass panes: sand smelted to glass; a chimney, tables, chairs, beds), tier 3 the finishing touches (lanterns: 2 iron_ingot, 2 glass_pane and a torch make 2). It smelts and crafts what it can by itself from what you carry, gather and find in the storehouse; iron you bring. The town's later stages ask for buildings at tier 2 and 3. Farms (a fence, then lanterns) and roads (paved in cobblestone) upgrade too.", input_schema: { type: "object", properties: { what: { type: "string", enum: [...BUILD_KINDS, "farm"] } }, required: ["what"] } },
-  { name: "work", description: "Do your job on the town board for this part of the day, one whole step of it: the builder builds the project; the mason gets the stone, coal or iron it is short of (smelts in the afternoon); the woodcutter gets the oak or sand (the streets and lamp posts in the afternoon); the farmer farms, harvests, bakes and hunts for the town's food; whoever gathered puts it in the storehouse (or brings it to the builder before there is one). At dawn it gets you up and fed, at dusk it puts the day's haul away and takes you home, at night it puts you to bed.", input_schema: { type: "object", properties: {} } },
+  { name: "work", description: "Do your next job from the town board's job list, one whole step of it: your role's jobs first (the builder builds and upgrades; the mason stocks the storehouse with stone, coal and iron and smelts; the woodcutter cuts and replants the tree farm, brings oak, birch and sand, makes the streets and lamp posts; the farmer keeps the town fed, fences the fields, plants flower beds), then any open job. Whoever gathered puts it in the storehouse (or brings it to the builder before there is one). At dawn it gets you up and fed, at dusk it puts the day's haul away and takes you home, at night it puts you to bed.", input_schema: { type: "object", properties: {} } },
   { name: "storehouse", description: "The pack's pool in the storehouse's chests. put: put what you carry for the town in (with no item, everything a builder can use beyond what you need yourself: stone, wood, sand, glass, coal, iron, crafted parts, spare food). take: take an item out (count). look: what is in there.", input_schema: { type: "object", properties: { action: { type: "string", enum: ["put", "take", "look"] }, item: { type: "string" }, count: { type: "integer", minimum: 1, maximum: 256 } }, required: ["action"] } },
   { name: "farm", description: "Till a field beside water near the base with your hoe and plant your wheat_seeds in it: by a pond within 30 blocks of the base, or, with an empty bucket, it fills the bucket at any water and makes the field at the base. Wheat ripens in about a day.", input_schema: { type: "object", properties: {} } },
   { name: "harvest", description: "Cut the ripe wheat near you and plant the seeds straight back. 3 wheat make bread.", input_schema: { type: "object", properties: {} } },
@@ -247,8 +276,11 @@ function miningPlan(name: string): { blocks: number[]; gets: number[] } | null {
   const logs = [B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG];
   const table: Record<string, [number[], number[]]> = {
     oak_log: [logs, logs], log: [logs, logs], wood: [logs, logs], birch_log: [[B.BIRCH_LOG], [B.BIRCH_LOG]], palm_log: [[B.PALM_LOG], [B.PALM_LOG]],
-    // the town's timber: oak (palm makes oak planks too), never birch, so a building's wood is one colour
+    // the town's timber: oak (palm makes oak planks too), never birch, so a building's wood is one colour (the birch
+    // district's birch comes in as birch_log)
     town_log: [[B.OAK_LOG, B.PALM_LOG], [B.OAK_LOG, B.PALM_LOG]],
+    // saplings come from leaves (one in twenty)
+    sapling: [[B.OAK_LEAVES, B.BIRCH_LEAVES], [B.OAK_SAPLING, B.BIRCH_SAPLING]], oak_sapling: [[B.OAK_LEAVES], [B.OAK_SAPLING]], birch_sapling: [[B.BIRCH_LEAVES], [B.BIRCH_SAPLING]],
     cobblestone: [[B.STONE, B.COBBLESTONE], [B.COBBLESTONE]], stone: [[B.STONE, B.COBBLESTONE], [B.COBBLESTONE]], cobble: [[B.STONE, B.COBBLESTONE], [B.COBBLESTONE]],
     dirt: [[B.DIRT, B.GRASS], [B.DIRT]], grass: [[B.GRASS, B.DIRT], [B.DIRT]], sand: [[B.SAND], [B.SAND]], gravel: [[B.GRAVEL], [B.GRAVEL, id("flint")]],
     coal: [[B.COAL_ORE], [id("coal")]], coal_ore: [[B.COAL_ORE], [id("coal")]], iron_ore: [[B.IRON_ORE], [id("raw_iron")]], raw_iron: [[B.IRON_ORE], [id("raw_iron")]],
@@ -274,7 +306,11 @@ const LOGS = -1;
 const FUEL = -2;
 // what is made from what: [recipe, how many one craft makes, ingredients]; smelted: [from]
 const MAKE = new Map<number, { rid: string; out: number; ings: [number, number][] } | { from: number }>([
+  [B.LAMP, { rid: "lamp", out: 1, ings: [[B.GLASS, 8], [B.TORCH, 1]] }],
   [B.LANTERN, { rid: "lantern", out: 2, ings: [[I.IRON_INGOT, 2], [B.GLASS_PANE, 2], [B.TORCH, 1]] }],
+  [B.BIRCH_STAIRS, { rid: "birch_stairs", out: 4, ings: [[B.BIRCH_PLANKS, 6]] }],
+  [B.BIRCH_SLAB, { rid: "birch_slab", out: 6, ings: [[B.BIRCH_PLANKS, 3]] }],
+  [B.BIRCH_FENCE, { rid: "birch_fence", out: 3, ings: [[B.BIRCH_PLANKS, 4], [I.STICK, 2]] }],
   [B.BARREL, { rid: "barrel", out: 1, ings: [[B.OAK_PLANKS, 6], [B.OAK_SLAB, 2]] }],
   [B.OAK_STAIRS, { rid: "oak_stairs", out: 4, ings: [[B.OAK_PLANKS, 6]] }],
   [B.OAK_SLAB, { rid: "oak_slab", out: 6, ings: [[B.OAK_PLANKS, 3]] }],
@@ -300,9 +336,10 @@ const MAKE = new Map<number, { rid: string; out: number; ings: [number, number][
   [I.IRON_INGOT, { from: I.RAW_IRON }],
   [I.STICK, { rid: "sticks", out: 4, ings: [[B.OAK_PLANKS, 2]] }],
   [B.OAK_PLANKS, { rid: "oak_planks", out: 4, ings: [[LOGS, 1]] }],
+  [B.BIRCH_PLANKS, { rid: "birch_planks", out: 4, ings: [[B.BIRCH_LOG, 1]] }],
 ]);
 const ORDER = [...MAKE.keys()];
-const RAW = [B.COBBLESTONE, LOGS, B.OAK_LOG, B.SAND, I.RAW_IRON, FUEL];
+const RAW = [B.COBBLESTONE, LOGS, B.OAK_LOG, B.BIRCH_LOG, B.SAND, I.RAW_IRON, FUEL, B.DIRT, B.OAK_SAPLING, B.BIRCH_SAPLING, B.POPPY, B.DANDELION, B.BLUEBELL];
 
 export class Brain {
   readonly name: string;
@@ -436,6 +473,8 @@ export class Brain {
 
   /** Its job on the board right now, in a few words. */
   private jobNow(role: Role, slot: Slot): string {
+    const held = slot !== "night" && slot !== "dusk" ? PACK.board?.queue?.find((j) => j.by === this.name) : undefined;
+    if (held) return held.text;
     const p = PACK.board?.project;
     const what = p ? `${p.up ? "the upgrade of " : ""}${nameOf(p.kind)}` : "the next building";
     return jobText(role, slot, what, new Map(Object.entries(PACK.board?.short ?? {}) as [Raw, number][]));
@@ -1117,6 +1156,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     let trips = 0;
     let trip: { x: number; z: number; had: number } | null = null;
     const trees = plan.blocks.some((id) => BLOCKS[id]?.key?.endsWith("_log"));
+    // saplings come one in twenty leaves: many more tries than blocks
+    const leafy = plan.gets.some((g) => g === B.OAK_SAPLING || g === B.BIRCH_SAPLING);
+    // the trunks it cuts at their foot: a sapling goes back in each after (the woods round the town grow back)
+    const stumps: [number, number, number, boolean][] = [];
     // wood comes faster with an axe (Laith: "no one uses axes"; they chopped every tree by hand or with a pickaxe, and
     // wood is what the town runs short of): a stone one if there's cobblestone, else a wooden one
     if (trees) await this.ensureAxe();
@@ -1279,13 +1322,19 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (!canHarvest(id, tool)) return `${BLOCKS[id]?.key ?? item} drops nothing without the right tool (craft a pickaxe first)`;
       tried++;
       MINING.set(this.name, { x, z, at: Date.now() });
+      const under = b.get(x, y - 1, z);
+      if (trees && (under === B.GRASS || under === B.DIRT) && !theirs(x, z)) stumps.push([x, y, z, id === B.BIRCH_LOG]);
       const ok = await b.mine(x, y, z);
       if (!ok) skip.add(x + z * 512 + y * 262144);
       else await b.pickUp(5, 5000);
-      if (tried > count * 3 + 6) break;
+      if (tried > count * (leafy ? 30 : 3) + 6) break;
     }
     const got = have() - start;
     if (trip && have() <= trip.had) BAD_GROVES.push({ x: trip.x, z: trip.z, until: Date.now() + 600000 });
+    if (stumps.length && !b.isNight() && !b.abort && !b.dead) {
+      const n = await this.replant(stumps);
+      if (n) this.log.push(`planted ${n} sapling${n > 1 ? "s" : ""} where the trees were cut`);
+    }
     if (got >= count) return `got ${got} ${item}`;
     if (!tried) return `no ${item} within 32 blocks${plan.blocks.includes(B.STONE) ? " (dig_down to reach stone)" : " (explore to find some)"}`;
     return `got ${got} of ${count} ${item}`;
@@ -1346,7 +1395,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   }
 
   /** A building's plan at a tier, whatever its kind (the wall, the roads and the farms have their own). */
-  private planOf(site: Building, tier: number): { cells: PlanCell[]; of?: number[] } {
+  private planOf(site: Building, tier: number, building = false): { cells: PlanCell[]; of?: number[] } {
     const b = this.body;
     const base = PACK.base!;
     if (site.kind === "wall") {
@@ -1359,7 +1408,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     if (site.kind === "road") return streetPlan(this.hub(), PACK.builds.filter((x) => x.done || x === site), (x, z) => b.pathAt(x, z, base.y), tier);
     if (site.kind === "farm") return { cells: farmPlan(site, tier, this.hub(), (x, z) => b.landAt(x, z, base.y)) };
-    return { cells: planFor(site, tier, (x, z) => b.naturalGround(x, z, base.y)) };
+    const cells = planFor(site, tier, (x, z) => b.naturalGround(x, z, base.y));
+    if (!building || site.done) return { cells };
+    // building it: the trees on its lot come down first, the canopy and all (their saplings go in again in the tree
+    // farm, or where they stood when there is no farm)
+    const have = new Set(cells.map(([x, y, z]) => `${x},${y},${z}`));
+    const trees: PlanCell[] = [];
+    for (let x = site.x0; x <= site.x1; x++) for (let z = site.z0; z <= site.z1; z++) for (let y = site.y; y <= site.y + 14; y++) if (TREE_IDS.has(b.get(x, y, z)) && !have.has(`${x},${y},${z}`)) trees.push([x, y, z, "a"]);
+    return { cells: trees.length ? [...trees.sort((p, q) => q[1] - p[1]), ...cells] : cells };
   }
 
   /** How far a building is built up: the highest tier whose plan it meets (a few blocks short is fine: a torch
@@ -1370,7 +1426,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       const [, paved, all] = this.roadCount(site);
       return all > 0 && paved >= all ? 2 : 1;
     }
-    for (let t = maxTier(site.kind); t >= 1; t--) {
+    for (let t = topOf(site); t >= 1; t--) {
       if (site.kind === "farm" && t === 1) return 1; // a farm is a farm once its field is planted
       const req = this.planOf(site, t).cells.filter(([, , , k]) => !cellTarget(k)?.optional && k !== "?p");
       const bad = req.filter((c) => b.needsWork(c)).length;
@@ -1394,7 +1450,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   /** One of the town's buildings at the base: a new one, the next blocks of one that's half built or needs fixing,
    *  or (upgrade) the next tier of one that stands. One whole job: it fetches and makes what the plan needs. */
-  private async buildTown(kind: Kind, upgrade = false): Promise<string> {
+  private async buildTown(kind: Kind, upgrade = false, job?: Job): Promise<string> {
     const b = this.body;
     const all: Kind[] = [...BUILD_KINDS, "farm"];
     if (!all.includes(kind)) return `there is no "${kind}" to build: ${all.join(", ")}`;
@@ -1410,25 +1466,32 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const others = (s: Building) => !!s.busy && s.busy.by !== this.name && Date.now() - s.busy.at < 45000 && !!BOARD.get(s.busy.by);
     let site: Building | undefined;
     let tier = 1;
+    // the building a job names (by its middle)
+    const mid = (x: Rect) => [Math.round((x.x0 + x.x1) / 2), Math.round((x.z0 + x.z1) / 2)];
+    const named = job?.at ? PACK.builds.find((x) => x.kind === kind && !isHome(x) && mid(x)[0] === job.at![0] && mid(x)[1] === job.at![1]) : undefined;
     if (upgrade) {
-      // the lowest of that kind first (one already being upgraded before any other), the nearest of those
-      const can = PACK.builds.filter((x) => x.kind === kind && x.done && !isHome(x) && tierOf(x) >= 1 && tierOf(x) < maxTier(kind) && !others(x));
+      // the one the job names, else the lowest of that kind first (one already being upgraded before any other), the
+      // nearest of those
+      const can = named && named.done && tierOf(named) >= 1 && tierOf(named) < topOf(named) && !others(named) ? [named] : PACK.builds.filter((x) => x.kind === kind && x.done && !isHome(x) && tierOf(x) >= 1 && tierOf(x) < topOf(x) && !others(x));
       can.sort((p, q) => (q.up ? 1 : 0) - (p.up ? 1 : 0) || tierOf(p) - tierOf(q) || Math.hypot((p.x0 + p.x1) / 2 - b.phys.x, (p.z0 + p.z1) / 2 - b.phys.z) - Math.hypot((q.x0 + q.x1) / 2 - b.phys.x, (q.z0 + q.z1) / 2 - b.phys.z));
       site = can[0];
       if (!site) {
         const some = PACK.builds.filter((x) => x.kind === kind && !isHome(x));
         if (!some.length) return `there is no ${nameOf(kind)} to upgrade yet: build one first`;
-        if (some.every((x) => tierOf(x) >= maxTier(kind))) return `every ${nameOf(kind).replace(/^an? |^the /, "")} is at tier ${maxTier(kind)}, the top: ${this.nextWork()}`;
+        if (some.every((x) => tierOf(x) >= topOf(x))) return `every ${nameOf(kind).replace(/^an? |^the /, "")} is at its top tier: ${this.nextWork()}`;
         if (some.some((x) => !x.done || tierOf(x) < 1)) return `the ${civLabel(kind, 2)} there are aren't finished (or are old ones that don't meet the tier 1 design): build ${kind} first, then upgrade`;
         return `someone else is working on the ${civLabel(kind, 2)} right now: ${this.nextWork()}`;
       }
       tier = site.up ?? tierOf(site) + 1;
       site.up = tier;
     } else {
-      // (the roads are one network: building them again carries them on to every new door)
-      site = PACK.builds.find((x) => x.kind === kind && !isHome(x) && (!x.done || x.fix || tierOf(x) < 1 || kind === "road"));
+      // the one the job names (to finish, fix or plant again); else one of that kind half built that nobody else is
+      // on, needing fixing, or an old design to rebuild (the roads are one network: building them again carries them
+      // on to every new door); else a new one, on the job's lot when it has one
+      const again = named && (!named.done || named.fix || tierOf(named) < 1 || job?.kind === "plant" || job?.kind === "repair");
+      site = again ? named : PACK.builds.find((x) => x.kind === kind && !isHome(x) && (!x.done || x.fix || tierOf(x) < 1 || kind === "road") && (!others(x) || kind === "road"));
       if (!site) {
-        const most = Math.max(0, ...STAGES.flatMap((st) => st.needs.filter(([k]) => k === kind).map(([, n]) => n)));
+        const most = Math.max(0, KIND_INFO[kind]?.most ?? 0, ...STAGES.flatMap((st) => st.needs.filter(([k]) => k === kind).map(([, n]) => n)));
         const final = progress(civCount).next === null;
         const once = ONCE.has(kind);
         if (once && PACK.builds.some((x) => x.kind === kind)) return `${nameOf(kind)} is already built: upgrade ${kind} to make it better, or ${this.nextWork()}`;
@@ -1439,22 +1502,27 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         if (kind === "wall") site = { kind, x0: hub.x - r, z0: hub.z - r, x1: hub.x + r, z1: hub.z + r, y: base.y, by: [], done: false, at: Date.now(), face: 0 };
         else if (kind === "road") site = { kind, x0: hub.x, z0: hub.z, x1: hub.x, z1: hub.z, y: base.y, by: [], done: false, at: Date.now() };
         else {
-          const spot = this.townSite(kind as Exclude<Kind, "farm" | "road" | "wall">);
+          // the lot the board picked for the job (if it is still free and the ground still takes it), else the best now
+          const kept = job?.lot && this.lotFree(job.lot);
+          const spot = kept ? { ...job!.lot!, y: kept } : this.townSite(kind as Exclude<Kind, "farm" | "road" | "wall">);
           if (typeof spot === "string") return spot;
-          site = { kind, ...spot, by: [], done: false, at: Date.now() };
+          site = { kind, x0: spot.x0, z0: spot.z0, x1: spot.x1, z1: spot.z1, y: spot.y, face: spot.face, by: [], done: false, at: Date.now() };
+          if (spot.design && spot.design !== kind && DESIGNS[spot.design]?.kind === kind) site.design = spot.design;
+          if (this.needsCut(site, site.y)) site.cut = true;
         }
         PACK.builds.push(site);
         savePack();
       }
-      // a fix goes back to the best tier it had; a new one, or an old design rebuilt, to tier 1
-      tier = site.fix ? Math.max(1, site.best ?? 1) : site.done && tierOf(site) >= 1 ? tierOf(site) : 1;
+      // a fix (or planting a tree farm again) goes back to the best tier it had; a new one, or an old design rebuilt,
+      // to tier 1
+      tier = site.fix || (again && site.done) ? Math.max(1, site.best ?? tierOf(site) ?? 1) : site.done && tierOf(site) >= 1 ? tierOf(site) : 1;
     }
     const s = site;
     if (others(s)) return `${s.busy!.by} is working on ${nameOf(kind)} right now: help another way (bring them blocks with give, build something else, or gather what the next stage needs)`;
     s.busy = { by: this.name, at: Date.now() };
     if (!s.by.includes(this.name)) s.by.push(this.name);
-    const what = `${nameOf(kind)}${tier > 1 ? ` (tier ${tier})` : ""}`;
-    const cells = this.planOf(s, tier).cells;
+    const what = `${designName(s)}${tier > 1 ? ` (tier ${tier})` : ""}`;
+    const cells = this.planOf(s, tier, true).cells;
     if (kind === "road" && !cells.length) {
       s.busy = undefined;
       if (!s.done) PACK.builds = PACK.builds.filter((x) => x !== s);
@@ -1557,7 +1625,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // a short line for the others (the board moves on to the next project)
       if (kind !== "road" && kind !== "lamp") this.teamSay(upgrade ? `${nameOf(kind)} is up to tier ${tier}.` : `${nameOf(kind).replace(/^./, (ch) => ch.toUpperCase())} is done${s.by.length > 1 ? `, thanks ${s.by.filter((n) => n !== this.name).join(" and ")}` : ""}.`);
       if (PACK.board?.project?.kind === kind) PACK.board.at = 0;
-      return `${upgrade ? `upgraded ${nameOf(kind)} at ${where(s)} to tier ${tier}` : `finished ${what} at ${where(s)}`} (${placed} blocks placed). ${tier < maxTier(kind) ? `It can go to tier ${tier + 1}: ${upText(kind, tier + 1)} (upgrade ${kind}).` : ""}`;
+      if (PACK.board) PACK.board.qat = 0;
+      return `${upgrade ? `upgraded ${designName(s)} at ${where(s)} to tier ${tier}` : `finished ${what} at ${where(s)}`} (${placed} blocks placed). ${tier < topOf(s) ? `It can go to tier ${tier + 1}: ${upOf(s, tier + 1)} (upgrade ${kind}).` : ""}`;
     }
     // a spot where nothing will go in, turn after turn (on a roof, walled off, out of reach): give up on it, so the
     // next build picks a better one instead of everyone trying the same blocks forever
@@ -1579,7 +1648,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   /** A spot for a new building near the base: flat open ground clear of the rest of the town and the villages, its
    *  front turned to the middle of the town. A lamp post goes beside a road when there are roads to light. */
-  private townSite(kind: Exclude<Kind, "farm" | "road" | "wall">): { x0: number; z0: number; x1: number; z1: number; y: number; face: number } | string {
+  private townSite(kind: Exclude<Kind, "farm" | "road" | "wall">, avoid: Rect[] = []): { x0: number; z0: number; x1: number; z1: number; y: number; face: number; design?: string; where?: string } | string {
     const b = this.body;
     const base = PACK.base!;
     const hub = this.hub();
@@ -1606,7 +1675,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
             spots.push([px, g + 1, pz]);
           }
         spots.sort((p, q) => Math.hypot(p[0] - hub.x, p[2] - hub.z) - Math.hypot(q[0] - hub.x, q[2] - hub.z));
-        if (spots.length) return { x0: spots[0][0], z0: spots[0][2], x1: spots[0][0], z1: spots[0][2], y: spots[0][1], face: 0 };
+        // its post in the style of the street it lights (stone on the stone avenue, birch in the birch district)
+        if (spots.length) {
+          const si = streetAt(hub, spots[0][0], spots[0][2], 3);
+          const st = si >= 0 ? styleOf(si, this.townStyles()) : "oak";
+          return { x0: spots[0][0], z0: spots[0][2], x1: spots[0][0], z1: spots[0][2], y: spots[0][1], face: 0, design: st === "stone" ? "lamp/stone" : st === "birch" ? "lamp/birch" : "lamp" };
+        }
       }
       // (off the roads too: never two side by side, a lamp every seven blocks or so)
       const apart = lamps.map((l) => ({ x0: l.x0 - 5, z0: l.z0 - 5, x1: l.x1 + 5, z1: l.z1 + 5 }));
@@ -1619,7 +1693,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // district (agents/town.ts); open ground round the base when the plan has no lot that will do, or when its lot is
     // well out past the district and open ground is much nearer the plaza (on rough ground a compact town beats a
     // straight one: the builders walk less)
-    const plan = this.planSite(kind);
+    const plan = this.planSite(kind, avoid);
+    // street furniture, a pier, a gatehouse or an arch only go where the plan has a place for them
+    if (!plan && ["shore", "street", "gate", "span"].includes(KIND_INFO[kind]?.district ?? "")) return `no spot for ${nameOf(kind)} ${districtOf(kind)} yet: ${this.nextWork()}`;
     if (plan) {
       const c = this.hub();
       const out = (r: Rect) => Math.max(Math.max(0, r.x0 - c.x, c.x - r.x1), Math.max(0, r.z0 - c.z, c.z - r.z1));
@@ -1657,9 +1733,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     return `no flat open spot near the base for ${nameOf(kind)} (${w} by ${d}): clear some trees or level some ground near the base`;
   }
 
-  /** The ground check for a lot: the floor height for a rectangle, or -1 when the ground won't take it (more than three
-   *  of slope, which is as deep as the foundation fills; water, trees or anything standing on it; the spawn hub; far
-   *  above or below the base). */
+  /** The ground check for a lot: the floor height for a rectangle, or -1 when the ground won't take it. A lot is
+   *  levelled rather than passed over: up to three of slope is filled under the floor (as deep as the foundation
+   *  goes); more, up to six, and the floor goes in lower, the low side filled three deep and the high side cut away
+   *  (a terrace: the plan digs the ground over the floor out across the lot); trees on it come down first (their
+   *  saplings go in again in the tree farm). Never water, anything built, the spawn hub, or far above or below the
+   *  base. */
   private groundFits(): (r: Rect) => number {
     const b = this.body;
     const base = PACK.base!;
@@ -1669,23 +1748,159 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       for (let x = r.x0; x <= r.x1; x++)
         for (let z = r.z0; z <= r.z1; z++) {
           if (inHub(x, z)) return -1;
-          const g = b.naturalGround(x, z, base.y);
+          const g = this.soil(x, z, base.y);
           if (g < 0) return -1;
           lo = Math.min(lo, g);
           hi = Math.max(hi, g);
-          if (hi - lo > 3 || Math.abs(g - base.y) > 12) return -1;
+          if (hi - lo > 6 || Math.abs(g - base.y) > 12) return -1;
         }
-      for (let x = r.x0; x <= r.x1; x++) for (let z = r.z0; z <= r.z1; z++) for (let yy = hi + 1; yy <= hi + 4; yy++) if (SOLID[b.get(x, yy, z)]) return -1;
-      return hi + 1;
+      const y = hi - lo <= 3 ? hi + 1 : lo + 4;
+      // nothing built standing over it (the ground it cuts away and the trees it fells are fine)
+      for (let x = r.x0; x <= r.x1; x++)
+        for (let z = r.z0; z <= r.z1; z++)
+          for (let yy = y; yy <= y + 4; yy++) {
+            const id = b.get(x, yy, z);
+            if (SOLID[id] && !TREE_IDS.has(id) && !GROUND_IDS.has(id)) return -1;
+          }
+      return y;
     };
+  }
+
+  /** The natural ground under a column, looking through trees (a lot's trees get cut): its top, -1 over water or where
+   *  nothing is loaded, -3 where something is built there. */
+  private soil(x: number, z: number, near: number): number {
+    const b = this.body;
+    for (let y = Math.min(126, near + 14); y >= Math.max(2, near - 14); y--) {
+      const id = b.get(x, y, z);
+      if (IS_WATER[id]) return -1;
+      if (!SOLID[id] || TREE_IDS.has(id)) continue;
+      return GROUND_IDS.has(id) ? y : -3;
+    }
+    return -1;
+  }
+
+  /** Does a lot with its floor at y need the ground over the floor cut away (a terrace)? */
+  private needsCut(r: Rect, y: number): boolean {
+    if (!PACK.base) return false;
+    for (let x = r.x0; x <= r.x1; x++) for (let z = r.z0; z <= r.z1; z++) if (this.soil(x, z, PACK.base.y) >= y) return true;
+    return false;
+  }
+
+  /** A lot the board picked for a job, if it is still free and the ground still takes it: its floor, else 0. */
+  private lotFree(l: Rect): number {
+    if (PACK.builds.some((x) => x.kind !== "road" && x.kind !== "wall" && x.x0 <= l.x1 + 1 && x.x1 >= l.x0 - 1 && x.z0 <= l.z1 + 1 && x.z1 >= l.z0 - 1)) return 0;
+    const y = this.groundFits()(l);
+    return y > 0 ? y : 0;
+  }
+
+  /** The style of each main street's district (north, east, south, west), worked out once for the town: the plan's
+   *  (stone up the avenue, timber-framed market streets, oak to the south), with birch for the district on the side of
+   *  the town the most birch grows (its wood is near); with no birch near, the timber-framed streets go oak (their
+   *  walls are birch planks). */
+  private townStyles(): string[] {
+    if (PACK.styles) return PACK.styles;
+    if (!PACK.base) return STREET_STYLES;
+    const c = this.hub();
+    const by = [0, 0, 0, 0];
+    for (const [x, , z] of this.body.findBlocks([B.BIRCH_LOG], 80, 600)) {
+      const dx = x - c.x;
+      const dz = z - c.z;
+      by[Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? 1 : 3) : dz > 0 ? 2 : 0]++;
+    }
+    const styles = [...STREET_STYLES];
+    const most = by.indexOf(Math.max(...by));
+    if (by[most] >= 6) styles[most] = "birch";
+    else for (let i = 0; i < 4; i++) if (styles[i] === "timber") styles[i] = "oak";
+    PACK.styles = styles;
+    savePack();
+    this.emit("plan", { text: `the town's districts: ${["north", "east", "south", "west"].map((d, i) => `the ${d} street ${styles[i]}`).join(", ")}` });
+    return styles;
+  }
+
+  /** A spot beside a street for a bench or a flower bed: in the row by the street, off the paths to the doors, clear
+   *  of the lamp posts and a few blocks from the other pieces, on ground that takes it; its design in the street's
+   *  style. */
+  private streetSpot(kind: Kind, avoid: Rect[]): { x0: number; z0: number; x1: number; z1: number; y: number; face: number; design?: string; where?: string } | null {
+    const road = PACK.builds.find((x) => x.kind === "road");
+    if (!road || !PACK.base) return null;
+    const c = this.hub();
+    const taken = new Set<string>(this.planOf(road, 1).cells.map(([x, , z]) => `${x},${z}`));
+    for (const l of PACK.builds) {
+      if (l.kind === "lamp") for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) taken.add(`${l.x0 + dx},${l.z0 + dz}`);
+      if (l.kind === "bench" || l.kind === "flowerbed") for (let x = l.x0; x <= l.x1; x++) for (let z = l.z0; z <= l.z1; z++) taken.add(`furniture:${x},${z}`);
+    }
+    for (const r of avoid) for (let x = r.x0; x <= r.x1; x++) for (let z = r.z0; z <= r.z1; z++) taken.add(`${x},${z}`);
+    const fits = this.groundFits();
+    for (const spot of streetSpots(c, PACK.builds, KINDS[kind]?.designs[0] ?? kind, taken, 3).slice(0, 120)) {
+      const y = fits(spot);
+      if (y < 0) continue;
+      return { x0: spot.x0, z0: spot.z0, x1: spot.x1, z1: spot.z1, y, face: spot.face, design: designFor(kind, c, spot.street, spot.t, this.townStyles()), where: spot.where };
+    }
+    return null;
+  }
+
+  /** A spot by the water near the town for a pier, a dock or a lighthouse: a pier's front on the shore and its deck
+   *  out over the water; a lighthouse on the shore itself, the water right in front. Nearest the town first. */
+  private shoreSite(kind: Kind, avoid: Rect[]): { x0: number; z0: number; x1: number; z1: number; y: number; face: number; design?: string; where?: string } | null {
+    if (!PACK.base) return null;
+    const b = this.body;
+    const c = this.hub();
+    const base = PACK.base;
+    const design = KINDS[kind]?.designs[0] ?? kind;
+    const W = DESIGNS[design]?.size[0] ?? 3;
+    const out = (face: number) => [[0, 1], [-1, 0], [0, -1], [1, 0]][face];
+    const taken = [...footprints(), ...this.villageRects(), ...this.planRects(), ...avoid];
+    const wet = (x: number, z: number, g: number) => {
+      for (let y = g + 1; y >= g - 3; y--) {
+        const id = b.get(x, y, z);
+        if (IS_WATER[id]) return true;
+        if (SOLID[id]) return false;
+      }
+      return false;
+    };
+    const pier = DESIGNS[design]?.kind === "pier";
+    for (let r = 14; r <= 96; r += 2)
+      for (let k = 0; k < 64; k++) {
+        const a = (k / 64) * Math.PI * 2;
+        const px = Math.round(c.x + Math.cos(a) * r);
+        const pz = Math.round(c.z + Math.sin(a) * r);
+        const g = this.soil(px, pz, base.y);
+        if (g < 0 || Math.abs(g - base.y) > 8 || inHub(px, pz)) continue;
+        for (let face = 0; face < 4; face++) {
+          const [ox, oz] = out(face);
+          if (!wet(px + ox * 2, pz + oz * 2, g)) continue;
+          const [sw, sd] = sizeFacing(design, face);
+          const h = Math.floor(W / 2);
+          const x0 = face === 1 ? px - sw + 1 : face === 3 ? px : px - h;
+          const z0 = face === 0 ? pz : face === 2 ? pz - sd + 1 : pz - h;
+          const rect = { x0, z0, x1: x0 + sw - 1, z1: z0 + sd - 1 };
+          if (taken.some((t) => rect.x0 <= t.x1 + 1 && rect.x1 >= t.x0 - 1 && rect.z0 <= t.z1 + 1 && rect.z1 >= t.z0 - 1)) continue;
+          let ok = true;
+          for (let x = rect.x0; x <= rect.x1 && ok; x++)
+            for (let z = rect.z0; z <= rect.z1 && ok; z++) {
+              const v = (x - px) * ox + (z - pz) * oz; // how far out from the shore
+              const land = this.soil(x, z, base.y);
+              if (pier) ok = v <= 1 ? land >= 0 && Math.abs(land - g) <= 1 : wet(x, z, g);
+              else ok = land >= 0 && Math.abs(land - g) <= 2;
+            }
+          if (!ok) continue;
+          if (!pier && !wet(px + ox * (sd + 1), pz + oz * (sd + 1), g) && !wet(px + ox * (sd + 2), pz + oz * (sd + 2), g)) continue;
+          return { ...rect, y: g + 1, face, design, where: `on the shore ${Math.round(r)} blocks ${dirWord(px - c.x, pz - c.z)} of the plaza` };
+        }
+      }
+    return null;
   }
 
   /** A site on the town plan: the plaza's square at the centre, or the best lot along the streets for the kind, on
    *  ground that will take it (level within 2, or 3 for a big one, dry, nothing growing or standing over it, not the
    *  spawn hub or a village). Null when the plan has nothing that fits. */
-  private planSite(kind: Exclude<Kind, "farm" | "road" | "wall" | "lamp">): { x0: number; z0: number; x1: number; z1: number; y: number; face: number } | null {
+  private planSite(kind: Exclude<Kind, "farm" | "road" | "wall" | "lamp">, avoid: Rect[] = []): { x0: number; z0: number; x1: number; z1: number; y: number; face: number; design?: string; where?: string } | null {
     const c = this.hub();
     const [w, d] = KINDS[kind].size;
+    // street furniture beside the streets; piers and the lighthouse by the water
+    const district = KIND_INFO[kind]?.district;
+    if (district === "street") return this.streetSpot(kind, avoid);
+    if (district === "shore") return this.shoreSite(kind, avoid);
     const fits = this.groundFits();
     const homes = houseRects().filter((h) => isHome(h));
     if (kind === "plaza") {
@@ -1698,10 +1913,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const wall = PACK.builds.find((x) => x.kind === "wall");
     const wallSides: Rect[] = wall ? [{ ...wall, z1: wall.z0 + 1 }, { ...wall, z0: wall.z1 - 1 }, { ...wall, x1: wall.x0 + 1 }, { ...wall, x0: wall.x1 - 1 }].map((r) => ({ x0: r.x0 - 1, z0: r.z0 - 1, x1: r.x1 + 1, z1: r.z1 + 1 })) : [];
     const why: Record<string, number> = {};
-    const lot = chooseLot(kind as Exclude<Plain, "plaza" | "lamp">, c, PACK.builds, [...homes, ...this.villageRects(), ...wallSides], fits, wall ? 0 : WALL, why);
-    if (process.env.PLAN_DEBUG) console.log(`[${this.name}] lot for ${kind}: ${lot ? `${lot.where}, ${lot.out} out` : "none"} (passed over: ${Object.entries(why).map(([k, n]) => `${k} ${n}`).join(", ")})`);
+    // the town's first tree farm is the small one: four saplings, planted in a few minutes
+    const only = kind === "treefarm" && !PACK.builds.some((x) => x.kind === "treefarm") ? "treefarm/small" : undefined;
+    const lot = chooseLot(kind as Exclude<Plain, "plaza" | "lamp">, c, PACK.builds, [...homes, ...this.villageRects(), ...wallSides, ...avoid], fits, wall ? 0 : WALL, why, this.townStyles(), only);
+    if (process.env.PLAN_DEBUG) console.log(`[${this.name}] lot for ${kind}: ${lot ? `${lot.where} (${lot.design}), ${lot.out} out` : "none"} (passed over: ${Object.entries(why).map(([k, n]) => `${k} ${n}`).join(", ")})`);
     if (!lot || w <= 0 || d <= 0) return null;
-    return { x0: lot.x0, z0: lot.z0, x1: lot.x1, z1: lot.z1, y: lot.y, face: lot.face };
+    return { x0: lot.x0, z0: lot.z0, x1: lot.x1, z1: lot.z1, y: lot.y, face: lot.face, design: lot.design, where: lot.where };
   }
 
   /** The items a plan still needs, for the cells that still need work (what it carries already taken off). */
@@ -1778,6 +1995,20 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         b.action = `getting oak for ${nameOf(kind)}`;
         await this.collect("town_log", Math.min(24, short + 2));
         if (count(id) <= before) missing.push("oak logs (no oak trees near: the town is built of oak)");
+      } else if (id === B.BIRCH_LOG) {
+        b.action = `getting birch for ${nameOf(kind)}`;
+        await this.collect("birch_log", Math.min(24, short + 2));
+        if (count(id) <= before) missing.push("birch logs (no birch trees near: the birch district is built of birch)");
+      } else if (id === B.DIRT) {
+        await this.collect("dirt", Math.min(32, short + 2));
+      } else if (id === B.OAK_SAPLING || id === B.BIRCH_SAPLING) {
+        b.action = `gathering saplings for ${nameOf(kind)}`;
+        await this.collect(id === B.OAK_SAPLING ? "oak_sapling" : "birch_sapling", Math.min(9, short));
+        if (count(id) <= before) missing.push(`${key(id)}s (one leaf in twenty drops one: break the leaves of a ${id === B.OAK_SAPLING ? "oak" : "birch"} tree)`);
+      } else if (FLOWER_IDS.has(id)) {
+        b.action = `picking ${key(id)}s for ${nameOf(kind)}`;
+        await this.collect(key(id), Math.min(16, short));
+        if (count(id) <= before) missing.push(`${key(id)}s (they grow on the grass)`);
       } else if (id === B.SAND && first) {
         b.action = `getting sand for glass`;
         await this.collect("sand", Math.min(24, short));
@@ -1850,12 +2081,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   private upgrades(): { kind: Kind; text: string }[] {
     const out: { kind: Kind; text: string; t: number }[] = [];
     const seen = new Set<Kind>();
-    const list = PACK.builds.filter((x) => x.done && !isHome(x) && tierOf(x) >= 1 && tierOf(x) < maxTier(x.kind)).sort((p, q) => tierOf(p) - tierOf(q));
+    const list = PACK.builds.filter((x) => x.done && !isHome(x) && x.kind !== "lamp" && tierOf(x) >= 1 && tierOf(x) < topOf(x)).sort((p, q) => tierOf(p) - tierOf(q));
     for (const x of list) {
       if (seen.has(x.kind)) continue;
       seen.add(x.kind);
       const t = tierOf(x);
-      out.push({ kind: x.kind, t, text: `${nameOf(x.kind)} at x=${Math.round((x.x0 + x.x1) / 2)} z=${Math.round((x.z0 + x.z1) / 2)}, tier ${t} to ${t + 1}: ${upText(x.kind, t + 1)}` });
+      out.push({ kind: x.kind, t, text: `${designName(x)} at x=${Math.round((x.x0 + x.x1) / 2)} z=${Math.round((x.z0 + x.z1) / 2)}, tier ${t} to ${t + 1}: ${upOf(x, t + 1)}` });
     }
     return out.sort((p, q) => p.t - q.t);
   }
@@ -1966,6 +2197,11 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       board: bd ? { day: bd.day, roles: bd.roles, project: bd.project ? { kind: bd.project.kind, up: bd.project.up, label: nameOf(bd.project.kind) } : null, short: bd.short } : null,
       centre: PACK.centre ?? null,
       stock: Object.fromEntries([...stock()].filter(([, n]) => n > 0).map(([id, n]) => [key(id), n])),
+      // (added for the catalog: the job queue's top and how long it is, the catalog's size, the districts' styles)
+      queue: (bd?.queue ?? []).slice(0, 12).map((j) => ({ text: j.text, kind: j.kind, k: j.k, role: j.role, by: j.by ?? null })),
+      jobs: bd?.queue?.length ?? 0,
+      catalog: catalogSize(),
+      styles: PACK.styles ?? null,
     });
   }
 
@@ -2077,7 +2313,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   /** What the project still needs, item by item: its plan's missing cells, or (not started) the whole of its tier. */
   private projectBill(p: { kind: Kind; up: boolean }): Map<number, number> {
-    const site = PACK.builds.find((x) => x.kind === p.kind && !isHome(x) && (p.up ? x.done && (x.up || tierOf(x) < maxTier(x.kind)) : !x.done || x.fix));
+    const site = PACK.builds.find((x) => x.kind === p.kind && !isHome(x) && (p.up ? x.done && (x.up || tierOf(x) < topOf(x)) : !x.done || x.fix));
     const b = this.body;
     if (site && PACK.base && Math.hypot((site.x0 + site.x1) / 2 - b.phys.x, (site.z0 + site.z1) / 2 - b.phys.z) < 80) {
       const tier = p.up ? site.up ?? tierOf(site) + 1 : Math.max(1, site.best ?? 1);
@@ -2102,6 +2338,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const now = Date.now();
     const bd: TownBoard = PACK.board ?? { day: -1, at: 0, roles: {}, project: null, short: {} };
     PACK.board = bd;
+    this.refreshQueue();
     const project = this.nextProject();
     const alive = [...BOARD.entries()].filter(([n, e]) => n === this.name || ((e.at ?? 0) > now - 30000 && [...this.body.others.values()].some((o) => o.name === n && !(o.flags & FLAG.DEAD)))).map(([n]) => n);
     if (!alive.includes(this.name)) alive.push(this.name);
@@ -2159,7 +2396,259 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     lines.push(s ? `The storehouse (the pack's pool) holds ${st || "nothing yet"}: put what you gather for the town in it (storehouse put), take what you need (storehouse take).` : "There is no storehouse yet: whoever gathers brings the builder what it is short of (give); building the storehouse makes it the pack's pool.");
     const role = bd.roles[this.name];
     if (role) lines.push(`Your job: ${role} (${ROLES[role]}). Right now: ${this.jobNow(role, slot)}. work does it.`);
+    const q = bd.queue ?? [];
+    if (q.length) lines.push(`The job list (${q.length} jobs, the most urgent first): ${q.slice(0, 8).map((j, i) => `${i + 1}. ${j.text}${j.by ? ` [${j.by === this.name ? "you" : j.by}]` : ""}`).join("; ")}. work takes the next one for you when you finish yours.`);
     return lines.join("\n");
+  }
+
+  // ---------------------------------------------------------------- the job queue
+
+  /** The job queue drawn up again (every three minutes, or as soon as a job is done): every job the town has from
+   *  where it stands now (agents/board.ts), the claims carried over, and a lot picked for each of the first new
+   *  buildings, so the list says where each goes and no two get the same lot. */
+  private refreshQueue(): void {
+    const bd = PACK.board;
+    if (!bd || !PACK.base) return;
+    const now = Date.now();
+    if (bd.queue && now - (bd.qat ?? 0) < 180000) return;
+    const old = new Map((bd.queue ?? []).map((j) => [j.id, j]));
+    let jobs: Job[];
+    try {
+      jobs = planJobs(this.townState());
+    } catch (e) {
+      console.error(`[${this.name}] the job queue: ${(e as Error).message}`);
+      return;
+    }
+    for (const j of jobs) {
+      const o = old.get(j.id);
+      if (o?.by && now - (o.since ?? 0) < CLAIM_MS) {
+        j.by = o.by;
+        j.since = o.since;
+      }
+      if (o?.lot) {
+        j.lot = o.lot;
+        j.design = o.design;
+      }
+    }
+    const avoid: Rect[] = [];
+    let n = 0;
+    for (const j of jobs) {
+      if (j.kind !== "build" || j.k === "wall" || j.k === "road" || n >= 5) continue;
+      n++;
+      if (j.lot && this.lotFree(j.lot)) {
+        avoid.push(j.lot);
+        j.text += ` (${j.design && DESIGNS[j.design] && j.design !== j.k ? `${DESIGNS[j.design].name}, ` : ""}${j.lot.where})`;
+        continue;
+      }
+      j.lot = undefined;
+      const spot = this.townSite(j.k as Exclude<Kind, "farm" | "road" | "wall">, avoid);
+      if (typeof spot === "string") continue;
+      j.lot = { x0: spot.x0, z0: spot.z0, x1: spot.x1, z1: spot.z1, y: spot.y, face: spot.face, where: spot.where ?? districtOf(j.k), design: spot.design };
+      j.design = spot.design;
+      j.text += ` (${spot.design && DESIGNS[spot.design] && spot.design !== j.k ? `${DESIGNS[spot.design].name}, ` : ""}${j.lot.where})`;
+      avoid.push(spot);
+    }
+    bd.queue = jobs;
+    bd.qat = now;
+  }
+
+  /** Where the town stands, for the queue: the stage and its needs, every building, the pool, the roads and lamps,
+   *  the street furniture, the tree farm, the fields, the food, the catalog's kinds. */
+  private townState(): TownState {
+    const b = this.body;
+    const pr = progress(civCount);
+    const mid = (x: Rect): [number, number] => [Math.round((x.x0 + x.x1) / 2), Math.round((x.z0 + x.z1) / 2)];
+    const st = stock();
+    const raws: Raw[] = ["stone", "wood", "birch", "sand", "coal", "iron", "food"];
+    const road = PACK.builds.find((x) => x.kind === "road");
+    const rc = road ? this.roadCount(road) : [0, 0, PACK.builds.filter((x) => !!doorStep(x)).length];
+    const streetCells = road ? this.planOf(road, 1).cells.length : 0;
+    const count = (k: Kind) => PACK.builds.filter((x) => x.kind === k).length;
+    let grown = 0;
+    let farmAt: [number, number] | undefined;
+    for (const f of PACK.builds.filter((x) => x.kind === "treefarm" && x.done)) {
+      if (Math.hypot((f.x0 + f.x1) / 2 - b.phys.x, (f.z0 + f.z1) / 2 - b.phys.z) > 96) continue;
+      let g = 0;
+      for (const [x, y, z, k] of this.planOf(f, 1).cells) {
+        const t = cellTarget(k.split("|")[0]);
+        if (t && (t.id === B.OAK_SAPLING || t.id === B.BIRCH_SAPLING) && (b.get(x, y, z) === B.OAK_LOG || b.get(x, y, z) === B.BIRCH_LOG)) g++;
+      }
+      if (g > grown) {
+        grown = g;
+        farmAt = mid(f);
+      }
+    }
+    const alive = Math.max(1, BOARD.size);
+    const food = [...BOARD.values()].reduce((n, e) => n + (e.food ?? 0), 0) + rawIn(st, "food");
+    const fieldsWanted = (pr.next?.needs ?? []).some((n) => n.need[0] === "farm" && n.have < n.need[1]);
+    return {
+      stage: pr.stage,
+      needs: (pr.next?.needs ?? []).map((n) => ({ k: n.need[0], n: n.need[1], tier: n.need[2] ?? 1, have: n.have })),
+      later: STAGES.slice(pr.stage + 2).flatMap((s) => s.needs.map(([k, n, t]) => ({ k, n, tier: t ?? 1 }))),
+      buildings: PACK.builds.filter((x) => !isHome(x) && x.kind !== "road" && x.kind !== "farm" && x.kind !== "lamp").map((x) => ({ kind: x.kind, design: x.design, name: designName(x), at: mid(x), tier: tierOf(x), max: topOf(x), done: x.done, fix: !!x.fix, up: x.up, next: upOf(x, (x.up ?? tierOf(x)) + 1) || undefined })),
+      short: PACK.board?.short ?? {},
+      stock: Object.fromEntries(raws.map((r) => [r, rawIn(st, r)])),
+      roads: { doors: rc[2] ?? 0, joined: rc[0] ?? 0, paved: rc[1] ?? 0 },
+      lamps: { have: count("lamp"), want: Math.min(64, Math.floor(streetCells / 21)) },
+      furniture: { bench: count("bench"), flowerbed: count("flowerbed"), want: Math.min(24, Math.floor(streetCells / 60)) },
+      trees: { farms: count("treefarm"), grown, at: farmAt },
+      fields: PACK.builds.filter((x) => x.kind === "farm" && x.done && tierOf(x) < 2).map((x) => ({ at: mid(x) })),
+      food: { have: food, want: 10 * alive, fields: fieldsWanted },
+      kinds: Object.entries(KIND_INFO).filter(([k]) => !["house", "lamp", "plaza", "wall", "road", "farm"].includes(k) && KINDS[k]).map(([k, i]) => ({ k, one: i.one, from: i.from, most: ONCE.has(k) ? 1 : i.most, have: count(k), small: DESIGNS[KINDS[k].designs[0] ?? k]?.scale === "small", district: districtOf(k) })),
+      smelt: (rawIn(st, "stone") >= 16 || rawIn(st, "sand") >= 8) && PACK.builds.some((x) => x.done && tierOf(x) === 1 && topOf(x) >= 2 && x.kind !== "lamp"),
+      birch: this.townStyles().some((s) => s === "birch" || s === "timber"),
+    };
+  }
+
+  /** Jobs it gave up on a short while ago (no spot, nothing to be had): left to someone else for ten minutes. */
+  private skipJobs = new Map<string, number>();
+
+  /** Its next job from the queue (the one it holds, else the most urgent open one, its own role's first), claimed. */
+  private takeJob(role: Role): Job | null {
+    const bd = PACK.board;
+    if (!bd?.queue?.length) return null;
+    const now = Date.now();
+    const j = pickJob(bd.queue, role, this.name, now, (x) => (this.skipJobs.get(x.id) ?? 0) < now);
+    if (!j) return null;
+    for (const o of bd.queue)
+      if (o !== j && o.by === this.name) {
+        o.by = undefined;
+        o.since = undefined;
+      }
+    j.by = this.name;
+    j.since = now;
+    savePack();
+    this.emitCiv();
+    return j;
+  }
+
+  /** One step of a job: building, upgrading, fixing and planting through build; the streets, lamp posts and street
+   *  furniture; cutting the tree farm; stocking the storehouse; farming; smelting. A job that is done comes off the
+   *  queue (it is drawn up again); one that can't go on is left to the others for a while. */
+  private async runJob(job: Job, role: Role, slot: Slot): Promise<string> {
+    let r: string;
+    switch (job.kind) {
+      case "build":
+      case "finish":
+      case "repair":
+      case "plant":
+      case "decorate":
+        r = await this.buildTown(job.k as Kind, false, job);
+        break;
+      case "upgrade":
+      case "furnish":
+        r = await this.buildTown(job.k as Kind, true, job);
+        break;
+      case "fence":
+        r = await this.buildTown("farm", true, job);
+        break;
+      case "streets":
+        r = await this.buildTown("road");
+        break;
+      case "pave":
+        r = await this.buildTown("road", true);
+        break;
+      case "light":
+        r = await this.buildTown("lamp");
+        break;
+      case "harvest":
+        r = await this.harvestTreeFarm(job);
+        break;
+      case "stock":
+        r = await this.stockJob(job);
+        break;
+      case "farm":
+        r = await this.farmJob();
+        break;
+      case "smelt":
+        r = (await this.smeltForTown()) || "nothing to smelt for the upgrades right now";
+        break;
+      default:
+        r = role === "builder" ? await this.buildJob() : await this.masonJob(slot);
+    }
+    const bd = PACK.board;
+    if (!bd?.queue) return r;
+    const building = ["build", "finish", "repair", "plant", "upgrade", "furnish", "fence", "decorate"].includes(job.kind);
+    const failed = /^(couldn't|no flat open spot|no open spot|no spot|gave up on|there is no|every |the town already|.* is already built|you're \d+ blocks|someone else|\w+ is working on|the .* there are aren't|farms are made|nothing has grown|nothing to smelt|no paths to make)/.test(r);
+    const done = !failed && (!building || /^(finished|upgraded)/.test(r));
+    if (failed) {
+      this.skipJobs.set(job.id, Date.now() + 10 * 60000);
+      job.by = undefined;
+      job.since = undefined;
+    } else if (done) {
+      bd.queue = bd.queue.filter((x) => x !== job);
+      bd.qat = 0;
+    } else job.since = Date.now();
+    savePack();
+    return r;
+  }
+
+  /** A stock job: the raw material gathered (a staircase mine for stone, coal and iron; a logging trip for oak or
+   *  birch; sand by the water) and put in the storehouse. */
+  private async stockJob(job: Job): Promise<string> {
+    const raw = job.k as Raw;
+    if (raw === "food") return await this.farmJob();
+    const what = raw === "stone" ? "cobblestone" : raw === "wood" ? "town_log" : raw === "birch" ? "birch_log" : raw === "sand" ? "sand" : raw === "coal" ? "coal_ore" : raw === "iron" ? "iron_ore" : "";
+    if (!what) return "nothing to stock";
+    this.body.action = job.text;
+    const got = await this.collect(what, Math.max(8, Math.min(32, job.n ?? 24)));
+    if (this.body.dead || this.body.abort) return got;
+    return [got, await this.deliver()].filter(Boolean).join("; ");
+  }
+
+  /** The tree farm's grown trees cut down (every log and leaf over the field and hanging out over its fence, the way a
+   *  lot is cleared), the saplings picked up and planted again in their places, the logs into the storehouse. */
+  private async harvestTreeFarm(job: Job): Promise<string> {
+    const b = this.body;
+    const mid = (x: Rect) => [Math.round((x.x0 + x.x1) / 2), Math.round((x.z0 + x.z1) / 2)];
+    const farm = PACK.builds.find((x) => x.kind === "treefarm" && !!job.at && mid(x)[0] === job.at[0] && mid(x)[1] === job.at[1]) ?? PACK.builds.find((x) => x.kind === "treefarm" && x.done);
+    if (!farm) return "there is no tree farm yet: build treefarm";
+    const [mx, mz] = mid(farm);
+    if (Math.hypot(mx + 0.5 - b.phys.x, mz + 0.5 - b.phys.z) > 10) {
+      b.action = "walking over to the tree farm";
+      await b.goto(mx + 0.5, farm.y, mz + 0.5, 5, { maxMs: 90000, done: () => Math.hypot(mx + 0.5 - b.phys.x, mz + 0.5 - b.phys.z) < 8 });
+    }
+    const cells: PlanCell[] = [];
+    for (let x = farm.x0 - 2; x <= farm.x1 + 2; x++) for (let z = farm.z0 - 2; z <= farm.z1 + 2; z++) for (let y = farm.y; y <= farm.y + 11; y++) if (TREE_IDS.has(b.get(x, y, z))) cells.push([x, y, z, "a"]);
+    if (!cells.length) return "nothing has grown in the tree farm yet";
+    await this.ensureAxe();
+    const logs = () => b.count(B.OAK_LOG) + b.count(B.BIRCH_LOG);
+    const before = logs();
+    farm.busy = { by: this.name, at: Date.now() };
+    b.action = "cutting the tree farm's trees";
+    const r = await b.buildCells(cells, 400, "cutting the tree farm's trees", farm.y);
+    farm.busy = undefined;
+    await b.pickUp(9, 8000);
+    const got = logs() - before;
+    if (b.dead || b.abort) return `cut ${got} logs in the tree farm before stopping`;
+    // the saplings back in their places: the tree farm's own plan, at its best tier
+    const again = await this.buildTown("treefarm", false, { ...job, kind: "plant", at: [mx, mz] });
+    const dl = this.storehouse() ? await this.toStore() : "";
+    return `cut the tree farm's trees: ${got} logs${r.left ? ` (${r.left} blocks of them out of reach)` : ""}; ${again}${dl ? `; ${dl}` : ""}`;
+  }
+
+  /** Saplings back in where it cut trees down: the leaves hanging over each stump broken (one in twenty drops a
+   *  sapling, and it tidies the canopy away), a sapling planted on the stump. How many went in. */
+  private async replant(stumps: [number, number, number, boolean][]): Promise<number> {
+    const b = this.body;
+    let planted = 0;
+    for (const [x, y, z, birch] of stumps.slice(0, 6)) {
+      if (b.abort || b.dead || b.isNight()) break;
+      const below = b.get(x, y - 1, z);
+      if (b.get(x, y, z) !== B.AIR || (below !== B.GRASS && below !== B.DIRT) || SOLID[b.get(x, y + 1, z)]) continue;
+      const sap = birch ? B.BIRCH_SAPLING : B.OAK_SAPLING;
+      if (!b.has(sap)) {
+        const leaves = b.findBlocks([B.OAK_LEAVES, B.BIRCH_LEAVES], 7, 40).filter(([lx, ly, lz]) => Math.abs(lx - x) <= 3 && Math.abs(lz - z) <= 3 && ly >= y && b.reachTo(lx, ly, lz) <= 4.3);
+        for (const [lx, ly, lz] of leaves.slice(0, 16)) {
+          if (b.abort || b.dead || b.has(sap)) break;
+          await b.mine(lx, ly, lz, false);
+        }
+        await b.pickUp(5, 3000);
+      }
+      if (!b.has(sap)) continue;
+      if (await b.place(sap, x, y, z, 8000)) planted++;
+    }
+    return planted;
   }
 
   /** Do its job on the board for this part of the day, one whole step of it. */
@@ -2174,14 +2663,17 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (slot === "dusk") return await this.duskRound(role);
     const pre = slot === "dawn" ? await this.dawnRound() : "";
     if (b.dead || b.abort) return pre || "stopped";
-    // a long way from the town: back to it first (the jobs are all round the town)
+    // the next job off the board's queue: its own role's first, then any open one
+    const job = this.takeJob(role);
+    if (job) b.action = job.text;
+    // a long way from the town: back to it first (the jobs are all round the town; gathering goes out from there)
     const far = Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z);
-    if (far > 40 && role === "builder") {
-      b.action = "heading back to the town to build";
+    if (far > 40 && (role === "builder" || (job && job.kind !== "stock" && job.kind !== "farm"))) {
+      b.action = `heading back to the town: ${job ? job.text : "to build"}`;
       const base = PACK.base;
       await b.goto(base.x + 0.5, base.y, base.z + 0.5, 7, { maxMs: 90000, done: () => Math.hypot(base.x + 0.5 - b.phys.x, base.z + 0.5 - b.phys.z) <= 7 });
     }
-    const r = role === "builder" ? await this.buildJob() : role === "mason" ? await this.masonJob(slot) : role === "woodcutter" ? await this.woodJob(slot) : await this.farmJob();
+    const r = job ? await this.runJob(job, role, slot) : role === "builder" ? await this.buildJob() : role === "mason" ? await this.masonJob(slot) : role === "woodcutter" ? await this.woodJob(slot) : await this.farmJob();
     return [pre, r].filter(Boolean).join("; ");
   }
 
@@ -2418,7 +2910,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       B.STONE, B.STONE_BRICKS, B.MOSSY_COBBLE, B.MOSSY_STONE_BRICKS, B.SAND, B.GRAVEL, B.GLASS, B.GLASS_PANE, B.OAK_STAIRS, B.COBBLE_STAIRS, B.STONE_BRICK_STAIRS,
       B.OAK_SLAB, B.COBBLE_SLAB, B.STONE_BRICK_SLAB, B.STONE_SLAB, B.COBBLE_WALL, B.STONE_BRICK_WALL, B.OAK_FENCE, B.OAK_GATE, B.OAK_DOOR, B.LADDER, B.TRAPDOOR,
       B.CHEST, B.BARREL, B.LANTERN, B.BOOKSHELF, B.HAY_BALE, B.FLOWER_POT, B.SUGAR_CANE, I.PAPER, I.RAW_IRON, I.IRON_INGOT, I.WHEAT, I.FLINT, I.CLAY_BALL, I.BRICK,
+      B.BIRCH_STAIRS, B.BIRCH_SLAB, B.BIRCH_FENCE, B.LAMP, B.POPPY, B.DANDELION, B.BLUEBELL,
     ]);
+    // saplings: a few for planting on the way, the rest for the tree farm
+    if (id === B.OAK_SAPLING || id === B.BIRCH_SAPLING) return 4;
     return town.has(id) ? 0 : Infinity;
   }
 
@@ -2435,7 +2930,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (!s) return [];
     const b = this.body;
     const out: [number, number, number][] = [];
-    for (const [x, y, z, k] of this.planOf(s, maxTier("storehouse")).cells) {
+    for (const [x, y, z, k] of this.planOf(s, topOf(s)).cells) {
       const t = cellTarget(k.split("|")[0]);
       if (t && isStorage(t.id) && isStorage(b.get(x, y, z))) out.push([x, y, z]);
     }

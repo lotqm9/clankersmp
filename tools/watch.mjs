@@ -62,6 +62,12 @@ if (civ?.board) {
   const short = Object.entries(bd.short ?? {}).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ');
   out.push(`BOARD day ${bd.day}: ${Object.entries(bd.roles ?? {}).map(([n, r]) => `${n} ${r}`).join(', ')}; project ${bd.project ? `${bd.project.up ? 'upgrade ' : ''}${bd.project.label ?? bd.project.kind}` : 'none'}${short ? `, short of ${short}` : ''}`);
 }
+// the job queue (agents/board.ts): the most urgent first, who is on each
+if (civ?.queue?.length) {
+  const st = civ.styles ? `; districts: north ${civ.styles[0]}, east ${civ.styles[1]}, south ${civ.styles[2]}, west ${civ.styles[3]}` : '';
+  out.push(`QUEUE ${civ.jobs ?? civ.queue.length} jobs${civ.catalog ? ` (catalog: ${civ.catalog.designs} designs in ${civ.catalog.kinds} kinds)` : ''}${st}:`);
+  civ.queue.slice(0, 10).forEach((j, i) => out.push(`  ${String(i + 1).padStart(2)}. ${clip(j.text, 150)}${j.by ? `  [${j.by}]` : ''}`));
+}
 if (civ) {
   const built = Object.entries(civ.built || {}).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(', ') || 'nothing';
   out.push(`CIV ${civ.name} (stage ${civ.stage + 1}/${civ.stages?.length ?? 5}). built: ${built}; trades ${civ.trades}. next ${civ.next ? `${civ.next.name}: ${civ.next.needs.map((n) => `${n.k} ${n.have}/${n.need}`).join(', ')}` : 'none (a city)'}${civ.open?.length ? `; half built: ${civ.open.map((o) => o.kind).join(', ')}` : ''}; last: ${civ.last || '-'} (${ago(civ.t)} ago)`);

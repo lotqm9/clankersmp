@@ -143,7 +143,7 @@ How to play well:
 - Food for a growing town comes from farms: a hoe (wooden_hoe or stone_hoe) and wheat_seeds (from breaking tall grass, or a village farm), then farm beside water. Harvest the wheat when it is ripe (harvest) and craft bread.
 - Set yourself a goal (set_goal) and keep notes (note): you only see your last few actions, so write down what matters (where your house is, where the iron was, what the others said or did).
 - You can stay with another player for a while (follow_player), hand them things (give), or talk to them (say).
-- Nights: sleep in your bed (sleep). The night is skipped once half of the living players are asleep at the same time, so it is over in seconds. Only without a bed: when night falls (time 12500), dig_in, and use the night to mine around you underground (collect cobblestone, coal_ore, iron_ore) with your roof kept closed.
+- Nights: sleep in your bed (sleep). The night is skipped once half of the living players are asleep at the same time, so it is over in seconds. Only without a bed: when night falls (time 12500), dig_in, and use the night to mine around you underground (collect cobblestone, coal_ore, iron_ore) with your roof kept closed. At night you stay shut in: exploring, long walks, hunting, dig_out and gathering in the open all wait for dawn, and collect mines a staircase down from inside your sealed hole and shuts it again after.
 - In the morning, or any time you are in a hole by day, dig_out right away. Never wait around in the daytime.
 - If something failed, don't do the same thing again: change what you ask for, move somewhere else, or do something else first.
 - With a weapon, kill what attacks you, Rattlers too (charge them: they are weak up close). Back off only when you are badly hurt. Without a weapon, keep away from monsters at night.
@@ -653,6 +653,22 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   // ---------------------------------------------------------------- skills
 
+  /** At night, mining from inside its sealed hole: a staircase down from it (the roof stays shut, and a cave it breaks
+   *  into gets closed), then the hole sealed again at the top. The first step opens the hole, and an open hole at night
+   *  with a house set the home reflex off: it cut the staircase short and opus paced its hole for a minute trying to
+   *  walk home through the rock (season 12's first night). Sealed again, the next one digs a new staircase another way. */
+  private async nightMine(gets: number[], count: number): Promise<string> {
+    const b = this.body;
+    this.holeMining = true;
+    try {
+      const r = await b.stairMine(gets, count);
+      if (!b.sealed() && !b.dead) await b.sealIn();
+      return r;
+    } finally {
+      this.holeMining = false;
+    }
+  }
+
   /** Why a tool would take it out across open ground at night, or "" if it's fine. Archers come out in the dark and
    *  shoot from range, and the shamblers come in numbers: sonnet left its hole on season 12's first night to look
    *  for sheep, walked a ravine in the dark and was shot. Nights are for the house or the hole. */
@@ -662,6 +678,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const far = (x: number, z: number) => Math.hypot(x - b.phys.x, z - b.phys.z) > 16;
     switch (name) {
       case "explore": return `${why}; explore by day`;
+      case "dig_out": return `${why}; dig_out at dawn`;
+      case "go_to_base": return PACK.base && far(PACK.base.x, PACK.base.z) ? `${why}; go to the base by day` : "";
+      case "go_home": {
+        // home through the rock in the dark, from a hole it's safe in: no (out in the open, home is the place to go)
+        if (!b.home || !b.covered()) return "";
+        const [mx, mz] = b.homeMiddle();
+        return far(mx, mz) ? `${why}; you're under cover: stay there and go home by day` : "";
+      }
       case "go_to": return Number.isFinite(Number(i.x)) && Number.isFinite(Number(i.z)) && far(Number(i.x), Number(i.z)) ? `${why}; go there by day` : "";
       case "go_to_player":
       case "follow_player":
@@ -862,6 +886,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         }
         case "wait": {
           b.halt();
+          // out at night and not shut in anywhere: shut in first. Standing there "waiting" is how opus died on season
+          // 12's third night (a rattler shot it from across a ravine while it waited near the top)
+          if (b.isNight() && !b.sealed() && !b.atHome()) {
+            const d = await b.digIn();
+            if (!b.sealed()) return `it's night and you weren't shut in anywhere, so you tried to dig in: ${d}`;
+          }
           // a night without a bed, sealed in underground: mine round it instead of standing in the hole for nine
           // minutes (the prompt says so, but on season 9's first night haiku and opus just waited: "hiding"). A
           // staircase down from the hole, so the roof stays shut; not when hurt, and not under the town's buildings
@@ -870,18 +900,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
             const plan = miningPlan("cobblestone")!;
             const before = plan.gets.reduce((n, id) => n + b.count(id), 0);
             b.action = "mining round its hole for the night";
-            // the first step opens the hole, and an open hole at night with a house set the home reflex off: it cut
-            // the staircase short and opus paced its hole for a minute trying to walk home through the rock (season
-            // 12's first night). Back at the top it shuts the staircase off again, so the hole is sealed for the
-            // night and the next wait digs a new staircase another way
-            this.holeMining = true;
-            let r = "";
-            try {
-              r = await b.stairMine(plan.gets, 12);
-              if (!b.sealed()) await b.sealIn();
-            } finally {
-              this.holeMining = false;
-            }
+            const r = await this.nightMine(plan.gets, 12);
             const got = plan.gets.reduce((n, id) => n + b.count(id), 0) - before;
             return `it's night and you're sealed in underground, so instead of waiting you mined round you: ${got ? `got ${got} cobblestone` : r}`;
           }
@@ -949,6 +968,17 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // wood comes faster with an axe (Laith: "no one uses axes"; they chopped every tree by hand or with a pickaxe, and
     // wood is what the town runs short of): a stone one if there's cobblestone, else a wooden one
     if (trees) await this.ensureAxe();
+    // at night rock comes out from inside its sealed hole only, down a staircase it shuts behind it: walking to ore it
+    // could see across a cave or a ravine is how opus died on season 12's third night (shot near the top by a rattler)
+    const rock = plan.blocks.includes(B.STONE) || plan.blocks.every((id) => BLOCKS[id]?.key?.endsWith("_ore"));
+    if (b.isNight() && rock) {
+      if (!b.sealed()) return `it's night: dig_in first (shut yourself in), then collect ${item} from inside the hole`;
+      if (PACK.base && b.phys.y > PACK.base.y - 3) return "it's night and you're shut in right under the town: wait or craft till dawn (no mining under the buildings)";
+      if (!b.bestToolFor(B.STONE) || !canHarvest(B.STONE, b.bestToolFor(B.STONE))) return "stone needs a pickaxe: craft a wooden_pickaxe first";
+      b.action = `mining down from its hole for ${item}`;
+      const r = await this.nightMine(plan.gets, count);
+      return have() > start ? `got ${have() - start} ${item} down a staircase from your hole (sealed in again after)` : r;
+    }
     // stone comes out of the ground away from the town: never the town's own walls (the nearest "cobblestone" was
     // the town hall's, so they took its lower walls apart for a house), and never a village's houses
     const stone = plan.blocks.includes(B.STONE);

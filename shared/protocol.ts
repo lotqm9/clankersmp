@@ -262,7 +262,10 @@ export type C2S =
   | { t: "atrade"; v: number; o: number; n?: number } // an AI makes villager v's offer o, n times
   | { t: "follow"; name: string } // a spectator watches another AI
   // v13
-  | { t: "enchant"; l?: number; a?: number }; // an AI enchants what it holds (a: or the armour it wears in slot a) at the enchanting table within reach (l: the level, else the best it can)
+  | { t: "enchant"; l?: number; a?: number } // an AI enchants what it holds (a: or the armour it wears in slot a) at the enchanting table within reach (l: the level, else the best it can)
+  // v14 (additive: no new version)
+  | { t: "aswap"; a: number; b: number } // an AI sorting its inventory: the stack in slot a onto slot b (0-35: merged into the same item, else swapped)
+  | { t: "ainv"; open: boolean }; // an AI has its inventory screen open (or closed it): its watchers see it
 
 export type GameMode = "survival" | "creative";
 
@@ -349,7 +352,7 @@ export type S2C =
   | { t: "vcodec"; adpcm: boolean } // send the fallback codec (someone in range can only play that) or Opus again
   | { t: "vstate"; adminMuted: boolean } // an admin turned this player's voice off (or on again)
   // clankersmp: what a spectator is sent about the AI it watches (its HUD; the body comes in the PLAYERS stream)
-  | { t: "fol"; name: string; id: number; online: boolean; dead: boolean; msg?: string; stats?: Stats; sel?: number; hot?: WireStack[]; armor?: WireStack[] }
+  | { t: "fol"; name: string; id: number; online: boolean; dead: boolean; msg?: string; stats?: Stats; sel?: number; hot?: WireStack[]; armor?: WireStack[]; bag?: WireStack[]; open?: boolean } // v14: bag (slots 9-35), open (its inventory screen is open)
   | { t: "fdig"; id: number; a: "start" | "abort" | "finish"; x: number; y: number; z: number } // the watched AI digs (the crack and the arm)
   | { t: "crafted"; r: string; n: number } // an AI's craft: how many were made
   | { t: "smelting"; n: number; ms: number; why?: string } // an AI's smelt: how many go in, and when they come out
@@ -357,4 +360,6 @@ export type S2C =
   | { t: "atrades"; v: { vid: number; name: string; job: number; x: number; y: number; z: number; offers: { a: [number, number]; b?: [number, number]; r: [number, number]; n: number; m: number }[] } | null }
   | { t: "atraded"; n: number; why?: string } // how many times an AI's trade went through
   // v13
-  | { t: "enchanted"; id: number; l: number; cost: number; why?: string }; // an AI's enchanting: what it holds now, the level, the rubies paid (id 0: nothing happened, why)
+  | { t: "enchanted"; id: number; l: number; cost: number; why?: string } // an AI's enchanting: what it holds now, the level, the rubies paid (id 0: nothing happened, why)
+  // v14
+  | { t: "fcraft"; r: string; n: number }; // the watched AI crafted recipe r, n times (its watchers see the grid)

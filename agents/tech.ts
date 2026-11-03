@@ -10,6 +10,7 @@ import { B, BLOCKS, IS_WATER, SOLID } from "../shared/blocks.ts";
 import { ENCH_COST, ENCH_SHELVES, levelForShelves, planEnchant, shelvesAround } from "../shared/enchanting.ts";
 import { ENCH_MAX, I, enchKindOf, itemDef, plainOf, type Stack } from "../shared/items.ts";
 import { canHarvest } from "../shared/mining.ts";
+import { LAST_START, tripNeeds } from "./mine.ts";
 
 /** Where the pack's enchanting table stands (one for all three), kept with the agents' state. */
 const TECH: { table: [number, number, number] | null } = { table: null };
@@ -61,17 +62,30 @@ export function tableAt(b: Body): [number, number, number] | null {
   return null;
 }
 
+/** What its next gear wants from the deep ("" if nothing): iron for the armour, diamonds, rubies for enchanting. */
+export function deepGoal(b: Body): string {
+  if (!hasTool(b, "pickaxe", 3)) return "";
+  if (goodArmour(b) < 4) return "iron for your armour";
+  const table = tableAt(b);
+  if (!diamondPick(b) && !table) return "diamonds";
+  if (table && b.count(I.RUBY) < ENCH_COST[levelForShelves(shelvesAround(b.get, ...table))]) return "rubies for enchanting";
+  return "";
+}
+
 /** One line for the turn: what it has along the way to enchanted gear, and the next step. */
 export function techText(b: Body): string {
   const armour = goodArmour(b);
   const obsidian = b.count(B.OBSIDIAN);
   const table = tableAt(b);
   const rubies = b.count(I.RUBY);
+  // v14: the deep trip (agents/mine.ts) is how diamonds, rubies and iron by the stack come: is it ready for one?
+  const needs = tripNeeds(b);
+  const trip = `a mine_trip in the morning (dawn to time ${LAST_START})${needs.length ? ` once you have ${needs.join(", ")}` : ": you're ready for one"}`;
   let next = "";
   if (!hasTool(b, "pickaxe", 3)) next = "an iron_pickaxe (iron_ore with a stone pickaxe, smelted)";
   else if (!hasTool(b, "sword", 3) && !hasTool(b, "axe", 3)) next = "an iron_sword";
-  else if (armour < 4) next = `iron armour, ${armour}/4 pieces (24 iron for all four): it takes more than half off every hit`;
-  else if (!diamondPick(b) && !table) next = "diamonds, deep (y 4 to 16, iron pickaxe): 3 for a diamond_pickaxe, 2 for the enchanting table";
+  else if (armour < 4) next = `iron armour, ${armour}/4 pieces (24 iron for all four: it takes more than half off every hit): iron_ore near the surface with collect, or by the stack on ${trip}`;
+  else if (!diamondPick(b) && !table) next = `diamonds, deep (y 4 to 16): 3 for a diamond_pickaxe, 2 for the enchanting table. They come from ${trip} (it digs down to them, mines every ore on the way and is back up before dusk)`;
   else if (!table && !b.has(B.ENCHANTING_TABLE) && obsidian < 4) next = `obsidian ${obsidian}/4: a smith sells a lava_bucket for 2 rubies and your empty bucket, then collect obsidian pours it onto water and mines it with the diamond pickaxe`;
   else if (!table && !b.has(B.ENCHANTING_TABLE) && !b.has(I.BOOK)) next = "a book (3 paper from sugar_cane, 1 leather from a cow; or a librarian binds one for a ruby and 3 paper)";
   else if (!table && !b.has(B.ENCHANTING_TABLE)) next = "craft the enchanting_table (a book on 2 diamonds and 4 obsidian, at a crafting table)";
@@ -79,7 +93,7 @@ export function techText(b: Body): string {
   else {
     const shelves = shelvesAround(b.get, ...table);
     const top = levelForShelves(shelves);
-    next = `enchant your gear (sword, armour, pickaxe) at the table: level ${top} now, ${ENCH_COST[top]} rubies each (you have ${rubies})${top < ENCH_MAX ? `; ${ENCH_SHELVES[top + 1]} bookshelves round it make level ${top + 1} (${shelves} now: enchant puts any you carry in)` : ""}`;
+    next = `enchant your gear (sword, armour, pickaxe) at the table: level ${top} now, ${ENCH_COST[top]} rubies each (you have ${rubies}${rubies < ENCH_COST[top] ? `: ruby_ore is deep, ${trip}, or trade` : ""})${top < ENCH_MAX ? `; ${ENCH_SHELVES[top + 1]} bookshelves round it make level ${top + 1} (${shelves} now: enchant puts any you carry in)` : ""}`;
   }
   const have: string[] = [];
   if (armour) have.push(`iron+ armour ${armour}/4`);

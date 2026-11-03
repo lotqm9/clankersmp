@@ -17,7 +17,7 @@ import { ANIMAL } from "../../shared/animals.ts";
 import { hydrated } from "./farm.ts";
 import { EYE_HEIGHT, SNEAK_EYE_HEIGHT, WORLD_SIZE, cellX, cellY, cellZ, idx, inWorld } from "../../shared/constants.ts";
 import { Menu, addToInventory, newPlayerInv, type Click, type Items, type PlayerInv } from "../../shared/inventory.ts";
-import { I, SMELT, SMELT_TICKS, fromWire, fuelTicks, isHoe, itemDef, maxDurability, toWire, type Stack, type WireStack } from "../../shared/items.ts";
+import { I, SMELT, SMELT_TICKS, fromWire, fuelTicks, isHoe, itemDef, maxDurability, maxStack, sameItem, toWire, type Stack, type WireStack } from "../../shared/items.ts";
 import { hash2 } from "../../shared/noise.ts";
 import { blockDrops, breakTicks, toolWearForBlock } from "../../shared/mining.ts";
 import { eyeInWater } from "../../shared/physics.ts";
@@ -1179,6 +1179,30 @@ export class Survival {
     }
     if (n) this.updateArmor(p, true);
     return n;
+  }
+
+  /** v14: an AI sorting its inventory: the stack in slot `a` goes onto slot `b` (0-35): merged into a stack of the same
+   *  item there (as much as fits), else the two swap. The same moves a player makes with the mouse; nothing is made
+   *  or lost. */
+  agentSwap(p: Player, a: number, b: number): boolean {
+    const s = p.sv;
+    if (s.dead || s.win || a === b || a < 0 || b < 0 || a > 35 || b > 35) return false;
+    const inv = s.inv.inv;
+    const A = inv[a];
+    const B = inv[b];
+    if (!A) return false;
+    if (B && sameItem(A, B) && maxStack(A.id) > 1) {
+      const k = Math.min(maxStack(A.id) - B.n, A.n);
+      if (k <= 0) return false;
+      inv[b] = { ...B, n: B.n + k };
+      inv[a] = A.n - k > 0 ? { ...A, n: A.n - k } : null;
+    } else {
+      inv[a] = B ?? null;
+      inv[b] = A;
+    }
+    this.markSlot(p, a);
+    this.markSlot(p, b);
+    return true;
   }
 
   /** An AI takes an item in hand: selected if it is on the hotbar, else swapped into the selected slot. */

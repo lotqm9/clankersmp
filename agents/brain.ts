@@ -2934,24 +2934,27 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const stump: [number, number, number, boolean] | null = (under === B.GRASS || under === B.DIRT) && !theirs(foot[0], foot[2]) ? [foot[0], foot[1], foot[2], kind === B.BIRCH_LOG] : null;
     const left = () => logs.filter((c) => LOG_IDS.has(b.get(...c)));
     b.action = `cutting down a tree at x=${foot[0]} z=${foot[2]} (${logs.length} logs)`;
-    // from the ground: the logs it can walk up to, lowest first
+    // over to its foot first, on the ground beside it (from twenty blocks off and lower down every log looked out of
+    // reach, and it climbed the canopy instead: season 16 test, "climbing up the trunk" from 91,48,121 for 88,101)
+    if (b.reachTo(...foot) > 4.3) await b.goto(foot[0] + 0.5, foot[1], foot[2] + 0.5, 2, { maxMs: 25000, done: () => b.reachTo(...foot) <= 4 });
+    // from the ground: the logs in reach from beside it, lowest first (the foot among them)
     for (const c of [...logs].sort((p, q) => p[1] - q[1])) {
       if (b.abort || b.dead) break;
       if (!LOG_IDS.has(b.get(...c))) continue;
-      const far = b.reachTo(...c) > 4.3;
-      if (far && c[1] > b.phys.y + 2) continue;
-      await b.mine(c[0], c[1], c[2], far);
+      if (b.reachTo(...c) > 4.3) continue;
+      await b.mine(c[0], c[1], c[2], false);
     }
-    // the rest from a pillar up the trunk's own column, where its lowest log left was standing (the foot's column for
-    // a straight trunk)
+    // the rest from a pillar up the trunk's own column, once its foot is cut (the column under the lowest log left
+    // clear down to the ground): never up through the canopy
     const rest = left();
-    if (rest.length && !b.abort && !b.dead) {
-      const low = rest.reduce((a, c) => (c[1] < a[1] ? c : a));
-      let [cx, cy, cz] = [low[0], low[1], low[2]];
-      while (cy > foot[1] - 1 && !SOLID[b.get(cx, cy - 1, cz)]) cy--;
+    const low = rest.length ? rest.reduce((a, c) => (c[1] < a[1] ? c : a)) : null;
+    let [cx, cy, cz] = low ? [low[0], low[1] - 1, low[2]] : [0, 0, 0];
+    while (low && cy > foot[1] - 1 && b.get(cx, cy, cz) === B.AIR && !SOLID[b.get(cx, cy - 1, cz)]) cy--;
+    const column = !!low && b.get(cx, cy, cz) === B.AIR && b.get(cx, cy + 1, cz) === B.AIR && !!SOLID[b.get(cx, cy - 1, cz)] && cy <= foot[1] + 1;
+    if (low && column && !b.abort && !b.dead) {
       b.action = `climbing up the trunk at x=${cx} z=${cz} for the logs out of reach`;
       await b.goto(cx + 0.5, cy, cz + 0.5, 0.35, { maxMs: 12000 });
-      const there = Math.hypot(b.phys.x - cx - 0.5, b.phys.z - cz - 0.5) < 0.7;
+      const there = Math.hypot(b.phys.x - cx - 0.5, b.phys.z - cz - 0.5) < 0.7 && Math.abs(b.phys.y - cy) < 1.2;
       // a pillar wants blocks to stand on: planks from a log it just cut, when it carries nothing else
       if (there && !b.fillerBlock() && held() > 0) {
         const planks = b.count(B.BIRCH_LOG) ? "birch_planks" : b.count(B.OAK_LOG) ? "oak_planks" : "palm_planks";
@@ -2978,6 +2981,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         }
       }
     }
+    // back on the ground by the stump whatever happened up there (a walk out on a logging trip from up on a canopy
+    // dug through the hill for two minutes and got nothing)
+    if (b.phys.y > foot[1] + 1.5 && !b.dead) await b.goto(foot[0] + 0.5, foot[1], foot[2] + 0.5, 2, { maxMs: 15000 });
     await b.pickUp(6, 6000);
     return { got: held() - had, left: left(), stump };
   }

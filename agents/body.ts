@@ -16,7 +16,7 @@ import { generateWorld, hashBlocks, type GenInfo } from "../shared/worldgen.ts";
 import { newPhysState, tickPlayer, type MoveInput, type PhysState } from "../shared/physics.ts";
 import { PathFinder, type PathPoint } from "../server/src/pathfind.ts";
 import { breakTicks } from "../shared/mining.ts";
-import { B, BLOCKS, IS_WATER, OPAQUE, SOLID, isFarmland, isFurnace, isStorage as isStorageId } from "../shared/blocks.ts";
+import { B, BLOCKS, IS_WATER, OPAQUE, SOLID, isFarmland, isFurnace, isGate, isStorage as isStorageId, isWall } from "../shared/blocks.ts";
 import { I, fromWire, isHoe as isHoeId, itemDef, type Stack } from "../shared/items.ts";
 import { canHarvest } from "../shared/mining.ts";
 import { BOW_SPEED, cooldownTicks } from "../shared/combat.ts";
@@ -59,6 +59,8 @@ const CLUTTER = new Set<number>([B.COBBLESTONE, B.STONE, B.OAK_PLANKS, B.BIRCH_P
 /** Never dug out of the way of a plan: somebody's chest, bed or furnace (and what's in it). */
 const KEEP = (id: number) => isStorageId(id) || isBed(id) || isFurnace(id);
 const TREE = new Set<number>([B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES, B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG]);
+/** Blocks a block and a half high (a fence, a gate, a wall): nothing to jump onto. */
+const TALL = (id: number) => id === B.OAK_FENCE || id === B.BIRCH_FENCE || isWall(id) || isGate(id);
 const itemName = (id: number) => itemDef(id)?.key ?? BLOCKS[id]?.key ?? `item ${id}`;
 
 export const NIGHT_START = 12542;
@@ -671,17 +673,21 @@ export class Body {
 
   // ---------------------------------------------------------------- walking
 
-  /** Steer the legs toward (x, z): turn first, then walk; jump up steps, sprint on long straight runs. Within half a
-   *  block of the point it only steps over to it, the eyes held where they are: the way to a point that close swings
-   *  right round with every step, and aimed at the spot under its own feet it walked in circles round it (900 degrees
-   *  in under three seconds, live, season 13). */
-  private steer(x: number, z: number, floorY: number, far: number, lookX = x, lookZ = z): void {
+  /** Steer the legs toward (x, z): turn first, then walk; jump up steps, sprint on long straight runs. Walking a path
+   *  (`look`: a spot a few nodes on, where the path is going) it walks the way a player does: the feet straight at the
+   *  next spot while that is within 60 degrees of where it's looking (further round, it turns first and walks on
+   *  through the turn), the eyes on the way ahead, never more than 45 degrees off where the feet are going, so up a
+   *  step or round a zigzag they don't swing from block to block; and within half a block of the spot it only steps
+   *  over to it, the eyes held where they are: the way to a point that close swings right round with every step, and
+   *  aimed at the node under its own feet it walked in circles round it (900 degrees in under 3 s, live, season 13).
+   *  Without `look` (a fight, a run, a swim) the legs follow the eyes, as the fighting was tuned for. */
+  private steer(x: number, z: number, floorY: number, far: number, look?: [number, number]): void {
     const dx = x - this.phys.x;
     const dz = z - this.phys.z;
     const yaw = (deg(Math.atan2(-dx, dz)) + 360) % 360;
     const d = Math.hypot(dx, dz);
     this.wantPitch = clamp(this.wantPitch * 0.9 + 12 * 0.1, -30, 40); // eyes a little down, at the ground ahead
-    if (d < 0.5) {
+    if (look && d < 0.5) {
       this.input.yaw = yaw;
       this.input.forward = Math.min(1, d * 2.5);
       this.input.strafe = 0;
@@ -690,15 +696,11 @@ export class Body {
       if (!this.phys.inWater && (this.waterAhead() || this.dropAhead() > (this.stats.hp <= 6 ? 1 : 3))) this.input.forward = 0;
       return;
     }
-    // the eyes on the way ahead (`look`, a few nodes on), never more than 45 degrees off where the feet are going: up
-    // a step or round a zigzag they don't swing from block to block. The feet go straight at the spot while that is
-    // within 60 degrees of where it's looking; further round, it turns first and walks on through the turn
-    const ld = Math.hypot(lookX - this.phys.x, lookZ - this.phys.z);
-    const lyaw = ld > 1 ? (deg(Math.atan2(-(lookX - this.phys.x), lookZ - this.phys.z)) + 360) % 360 : yaw;
-    const lead = clamp(angleDiff(lyaw, yaw), -45, 45);
+    let lead = 0;
+    if (look && Math.hypot(look[0] - this.phys.x, look[1] - this.phys.z) > 1) lead = clamp(angleDiff((deg(Math.atan2(-(look[0] - this.phys.x), look[1] - this.phys.z)) + 360) % 360, yaw), -45, 45);
     this.wantYaw = (yaw + lead + 360) % 360;
     const off = Math.abs(angleDiff(yaw, this.yaw));
-    if (off < 60) {
+    if (look && off < 60) {
       this.input.yaw = yaw;
       this.input.forward = 1;
     } else {
@@ -753,7 +755,9 @@ export class Body {
     for (const reach of [0.5, 0.9]) {
       const x = Math.floor(this.phys.x - Math.sin(a) * reach);
       const z = Math.floor(this.phys.z + Math.cos(a) * reach);
-      if (SOLID[this.get(x, y, z)] && !SOLID[this.get(x, y + 1, z)] && !SOLID[this.get(x, y + 2, z)]) return true;
+      // (a fence, a gate or a wall stands a block and a half high: no step. It jumped at a pen's fence again and again)
+      const id = this.get(x, y, z);
+      if (SOLID[id] && !TALL(id) && !SOLID[this.get(x, y + 1, z)] && !SOLID[this.get(x, y + 2, z)]) return true;
     }
     return false;
   }
@@ -836,7 +840,10 @@ export class Body {
         await this.unstick(x, z);
         continue;
       }
-      // the path search only starts from somewhere it can stand: out of the water first
+      // the path search only starts from somewhere it can stand: out of the water first, and down from a jump (planned
+      // at the top of a jump against a fence, it started from on top of the fence and got a path over it it could
+      // never walk)
+      for (let k = 0; k < 12 && !this.phys.onGround && !this.phys.inWater && !this.abort && !this.dead; k++) await this.nextTick();
       if (this.phys.inWater && !this.plan(x, y, z)?.path.length) await this.escapeWater(200);
       const p = this.plan(x, y, z);
       if (!p) {
@@ -915,7 +922,7 @@ export class Body {
       const end = j === path.length - 1 && Math.floor(gx) === t.x && Math.floor(gz) === t.z;
       // and the eyes a few nodes on, where the path is going
       const ahead = path[Math.min(path.length - 1, Math.max(j, i + 3))];
-      this.steer(end ? gx : t.x + 0.5, end ? gz : t.z + 0.5, path[i].f, Math.hypot(gx - this.phys.x, gz - this.phys.z), ahead.x + 0.5, ahead.z + 0.5);
+      this.steer(end ? gx : t.x + 0.5, end ? gz : t.z + 0.5, path[i].f, Math.hypot(gx - this.phys.x, gz - this.phys.z), [ahead.x + 0.5, ahead.z + 0.5]);
       // stuck: no nearer the end of the path for over a second
       const togo = Math.hypot(path[i].x + 0.5 - this.phys.x, path[i].z + 0.5 - this.phys.z) + rest[i];
       if (togo < best - 0.05) {
@@ -1751,6 +1758,7 @@ export class Body {
     let closest = Infinity;
     let closedAt = Date.now();
     let jumpAt = -100;
+    let detours = 0;
     const seen = t.kind === "mob" ? this.mobs.get(t.id) : undefined;
     const spec = seen ? MOB_SPECS[seen.kind] : undefined;
     const archer = spec?.key === "rattler";
@@ -1800,6 +1808,21 @@ export class Body {
       // the feet first (steering turns the eyes to the ground ahead), then the eyes back on it
       if (d > 16) {
         await this.goto(p.x, p.y, p.z, 2.2, { maxMs: 4000, done: () => this.boxDist(this.targetPos(t)) <= HIT_REACH });
+        continue;
+      }
+      // an animal it isn't closing in on with a straight run at it (a fence, a step, a bank between): the path search's
+      // way round, until it's in reach (up to three times), before giving it up. Steered straight at a sheep round the
+      // end of a fence it ran into the fence for six seconds and gave up (sonnet, season 13: "couldn't get to it" for a
+      // sheep and two pigs in two minutes, near the town). Not a monster: a walk with no swing at something that hits
+      // back cost two lives in ten in the tunnel fight test
+      if (t.kind === "animal" && d > HIT_REACH + 0.3 && Date.now() - closedAt > 1500 && detours < 3) {
+        detours++;
+        await this.goto(p.x, p.y, p.z, 2.2, { maxMs: 8000, done: () => this.boxDist(this.targetPos(t)) <= HIT_REACH });
+        const now = this.boxDist(this.targetPos(t));
+        if (now < closest - 0.7) {
+          closest = now;
+          closedAt = Date.now();
+        }
         continue;
       }
       // is it coming at it? (a walker comes to you: wait for it rather than chase it about)

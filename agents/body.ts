@@ -2280,6 +2280,15 @@ export class Body {
     return true;
   }
 
+  /** Open sky over a cell: nothing solid above it but a tree's leaves and trunk. */
+  underSky(x: number, y: number, z: number): boolean {
+    for (let yy = y + 1; yy < 128; yy++) {
+      const id = this.get(x, yy, z);
+      if (SOLID[id] && !TREE.has(id)) return false;
+    }
+    return true;
+  }
+
   /** Room over its head and a way out sideways: it can walk off. */
   free(): boolean {
     const x = Math.floor(this.phys.x);
@@ -2530,10 +2539,15 @@ export class Body {
       if (!ok) break;
       // broke into a cave: open air round the new step that this staircase didn't dig. Monsters spawn in the dark
       // there even by day (haiku dug into one on season 10's first day, met a rattler and a shambler and died):
-      // close the openings with spare blocks and stop going this way
+      // close the openings with spare blocks and stop going this way. By day, air under the open sky is no cave:
+      // from flat ground the first step's head is level with the grass round it, so every staircase dug from the
+      // surface "broke into a cave" at its first step, filled the grass round it with dirt and stopped (haiku, season
+      // 13: "dug a staircase 0 steps down, got 0 of 32, broke into a cave", five times running). At night all of it
+      // counts: the open ground is where the monsters are.
+      const night = this.isNight();
       const open: [number, number, number][] = [];
       for (const [a, b, c] of [[nx + 1, ny, nz], [nx - 1, ny, nz], [nx, ny, nz + 1], [nx, ny, nz - 1], [nx + 1, ny + 1, nz], [nx - 1, ny + 1, nz], [nx, ny + 1, nz + 1], [nx, ny + 1, nz - 1], [nx, ny + 2, nz], [nx + sx, ny, nz + sz]] as [number, number, number][])
-        if (!dug.has(`${a},${b},${c}`) && this.get(a, b, c) === B.AIR) open.push([a, b, c]);
+        if (!dug.has(`${a},${b},${c}`) && this.get(a, b, c) === B.AIR && (night || !this.underSky(a, b, c))) open.push([a, b, c]);
       if (open.length >= 2) {
         for (const [a, b, c] of open) {
           const f = this.fillerBlock();

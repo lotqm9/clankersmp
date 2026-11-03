@@ -102,6 +102,12 @@ export interface Other {
 export type Target = { kind: "mob" | "animal" | "player"; id: number };
 
 const deg = (r: number) => (r * 180) / Math.PI;
+/** Stacks counted up: item -> how many. */
+const tally = (stacks: (Stack | null)[]) => {
+  const m = new Map<number, number>();
+  for (const st of stacks) if (st) m.set(st.id, (m.get(st.id) ?? 0) + st.n);
+  return m;
+};
 /** Smallest signed difference a - b in degrees. */
 const angleDiff = (a: number, b: number) => ((((a - b) % 360) + 540) % 360) - 180;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -272,8 +278,18 @@ export class Body {
           else this.inv[k] = fromWire(w);
         }
         break;
+      case "open":
+        // a chest or barrel it opened (withChest): its contents, and its own inventory as the server has it
+        if (m.kind === "chest") this.onWindow(m.w, m.items.map((w) => fromWire(w)));
+        else this.send({ t: "close", w: m.w });
+        break;
       case "win":
-        // the player window (w 0) carries the whole inventory after a click; we never open one, but keep it right
+        // the player window (w 0) carries the whole inventory after a click; we never open one. A chest's window
+        // carries the chest and the inventory after each click
+        if (this.win && m.w === this.win.w) this.onWindow(m.w, m.items.map((w) => fromWire(w)));
+        break;
+      case "close":
+        if (this.win && m.w === this.win.w) this.win = null;
         break;
       case "looted":
       case "atrades":
@@ -2360,6 +2376,128 @@ export class Body {
     this.send({ t: "wear" });
   }
 
+  // ---------------------------------------------------------------- chests: the town's pooled supplies
+
+  /** The chest (or barrel) window it has open: the server's window id and its 63 slots (0-26 the chest, 27-53 its
+   *  inventory 9-35, 54-62 its hotbar 0-8), the same window a player's client opens with a right click. */
+  private win: { w: number; items: (Stack | null)[] } | null = null;
+  private winSeq = 0;
+  private winWait: (() => void) | null = null;
+
+  /** A window's contents from the server: the chest's slots, and its own inventory as the server has it. */
+  private onWindow(w: number, items: (Stack | null)[]): void {
+    this.win = { w, items };
+    if (items.length >= 63) for (let k = 0; k < 36; k++) this.inv[k] = items[k < 9 ? 54 + k : 27 + (k - 9)] ?? null;
+    const f = this.winWait;
+    this.winWait = null;
+    f?.();
+  }
+
+  private winAnswer(ticks = 30): Promise<boolean> {
+    return new Promise<boolean>((res) => {
+      let done = false;
+      this.winWait = () => {
+        done = true;
+        res(true);
+      };
+      void this.wait(ticks).then(() => {
+        if (!done) {
+          this.winWait = null;
+          res(false);
+        }
+      });
+    });
+  }
+
+  /** Open the chest or barrel at (x, y, z) (walking over to it), run `fn` while it's open, close it. Null if it
+   *  couldn't be opened. `fn` gets the chest's 27 slots as they are now. */
+  async withChest<T>(x: number, y: number, z: number, fn: (chest: () => (Stack | null)[], click: (slot: number) => Promise<boolean>) => Promise<T>): Promise<T | null> {
+    const id = this.get(x, y, z);
+    if (!isStorageId(id)) return null;
+    const inReach = () => this.reachTo(x, y, z) <= REACH - 0.3;
+    if (!inReach()) {
+      const spot = this.standFor(x, y, z);
+      if (spot) await this.goto(spot[0] + 0.5, spot[1], spot[2] + 0.5, 0.5, { maxMs: 30000, done: inReach });
+      if (!inReach()) await this.goto(x + 0.5, y, z + 0.5, 1.8, { maxMs: 15000, done: inReach });
+      if (!inReach()) return null;
+    }
+    this.halt();
+    await this.lookAt(x + 0.5, y + 0.5, z + 0.5, 10);
+    this.win = null;
+    const opened = this.winAnswer(40);
+    this.send({ t: "use", x, y, z });
+    if (!(await opened) || !this.win) return null;
+    const w = (this.win as { w: number }).w;
+    const chest = () => (this.win?.w === w ? this.win.items.slice(0, 27) : []);
+    const click = async (slot: number) => {
+      if (this.win?.w !== w || this.abort || this.dead) return false;
+      const got = this.winAnswer(20);
+      this.send({ t: "click", w, n: ++this.winSeq, c: { m: "shift", s: slot } });
+      return got;
+    };
+    try {
+      return await fn(chest, click);
+    } finally {
+      this.send({ t: "close", w });
+      this.win = null;
+      await this.wait(3);
+    }
+  }
+
+  /** What is in the chest at (x, y, z): item -> count (null if it couldn't be opened). */
+  async chestContents(x: number, y: number, z: number): Promise<Map<number, number> | null> {
+    return this.withChest(x, y, z, async (chest) => tally(chest()));
+  }
+
+  /** Put whole stacks into the chest at (x, y, z): `howMany(id, have)` says how many of an item to put in (it goes in
+   *  whole stacks, the smallest first, up to that). What went in, item -> count, and what the chest holds now; null if
+   *  it couldn't be opened. */
+  async chestPut(x: number, y: number, z: number, howMany: (id: number, have: number) => number): Promise<{ put: Map<number, number>; inside: Map<number, number> } | null> {
+    return this.withChest(x, y, z, async (chest, click) => {
+      const done = (put: Map<number, number>) => ({ put, inside: tally(chest()) });
+      const put = new Map<number, number>();
+      const want = new Map<number, number>();
+      for (const st of this.inv) if (st && !want.has(st.id)) want.set(st.id, Math.max(0, howMany(st.id, this.count(st.id))));
+      for (const [id, n] of want) {
+        let left = n;
+        // the smallest stacks first, so what it keeps is a full one
+        const slots = this.inv.map((st, k) => ({ st, k })).filter((e) => e.st?.id === id).sort((a, b) => a.st!.n - b.st!.n);
+        for (const { st, k } of slots) {
+          if (left <= 0 || st!.n > left + 16) break;
+          if (!chest().some((c) => !c || (c.id === id && c.n < (itemDef(id)?.stack ?? 64)))) return done(put);
+          const before = this.count(id);
+          if (!(await click(k < 9 ? 54 + k : 27 + (k - 9)))) continue;
+          const went = before - this.count(id);
+          if (went > 0) {
+            put.set(id, (put.get(id) ?? 0) + went);
+            left -= went;
+          }
+        }
+      }
+      return done(put);
+    });
+  }
+
+  /** Take items out of the chest at (x, y, z), whole stacks until it has what `want` asks (item -> count). What came
+   *  out, item -> count, and what the chest holds now; null if it couldn't be opened. */
+  async chestTake(x: number, y: number, z: number, want: Map<number, number>): Promise<{ got: Map<number, number>; inside: Map<number, number> } | null> {
+    return this.withChest(x, y, z, async (chest, click) => {
+      const got = new Map<number, number>();
+      const done = () => ({ got, inside: tally(chest()) });
+      for (const [id, n] of want) {
+        for (let k = 0; k < 27 && (got.get(id) ?? 0) < n; k++) {
+          const st = chest()[k];
+          if (!st || st.id !== id) continue;
+          if (this.inv.every((s) => s && (s.id !== id || s.n >= (itemDef(id)?.stack ?? 64)))) return done();
+          const before = this.count(id);
+          if (!(await click(k))) continue;
+          if (this.count(id) > before) got.set(id, (got.get(id) ?? 0) + this.count(id) - before);
+        }
+      }
+      return done();
+    });
+  }
+
   // ---------------------------------------------------------------- a home
 
   /** Its house, once it has one: its north-west corner, its floor height and its doorway; `room` for a town cottage it
@@ -2802,6 +2940,23 @@ export class Body {
       again.add(c);
       todo.push(c);
     };
+    // up a pillar beside a cell out of reach (or on the room's floor), then every missing block in reach from up there
+    // (what's in the way coming out first: an upgrade's old roof), and back down the pillar. True if it got up
+    const fromPillar = async (i: number): Promise<boolean> => {
+      const [x, y, z] = todo[i];
+      const up = await this.scaffoldTo(x, y, z, footprint, inside, todo.slice(i).filter(missing));
+      if (up < 0) return false;
+      for (const c of todo.slice(i)) {
+        if (this.abort || this.dead || placed >= max) break;
+        const w = this.wantFor(c[3]);
+        if (!w || !missing(c) || this.reachTo(c[0], c[1], c[2]) > REACH) continue;
+        const here = this.get(c[0], c[1], c[2]);
+        if (here !== B.AIR && !IS_WATER[here] && !BLOCKS[here]?.replaceable && (KEEP(here) || !(await this.mine(c[0], c[1], c[2], false)))) continue;
+        if (await this.place(w.item, c[0], c[1], c[2], 20000, w.state)) placed++;
+      }
+      if (up > 0) await this.climbDown(up, { x: this.lastPillar.x, z: this.lastPillar.z, top: this.lastPillar.top, keep: blocks });
+      return true;
+    };
     for (let i = 0; i < todo.length; i++) {
       // eight blocks in a row that wouldn't go in: something's wrong here (walled off, someone in the way), so stop
       // and say so rather than walk about trying every cell
@@ -2834,6 +2989,22 @@ export class Body {
       // something else where this block goes: out with it first (a flower, dirt in a wall, the lower-grade block an
       // upgrade replaces), but never a chest, a bed or a furnace (someone's things), never another building's door
       if (cur !== B.AIR && !IS_WATER[cur] && !BLOCKS[cur]?.replaceable) {
+        // the floor under its own feet (a rug going into the floor, a stone floor turned to planks): step off it first,
+        // or it digs itself into the hole and can't put the new block in where it stands
+        if (Math.floor(this.phys.x) === x && Math.floor(this.phys.z) === z && y === Math.floor(this.phys.y + 0.1) - 1) {
+          for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+            const sx = x + dx;
+            const sz = z + dz;
+            if (blocks.has(`${sx},${y + 1},${sz}`) || SOLID[this.get(sx, y + 1, sz)] || SOLID[this.get(sx, y + 2, sz)] || !SOLID[this.get(sx, y, sz)]) continue;
+            await this.goto(sx + 0.5, y + 1, sz + 0.5, 0.4, { maxMs: 3000, done: () => Math.floor(this.phys.x) === sx && Math.floor(this.phys.z) === sz });
+            break;
+          }
+          if (Math.floor(this.phys.x) === x && Math.floor(this.phys.z) === z) {
+            later(todo[i]);
+            misses++;
+            continue;
+          }
+        }
         // a furnace someone put down where a wall goes comes up (it drops, with what's in it): opus set one on the
         // second cottage's spot to smelt iron and then couldn't build there ("something is in the way"). Chests and
         // beds stay: those are someone's things
@@ -2843,6 +3014,16 @@ export class Body {
           continue;
         }
         if (!(await this.mine(x, y, z))) {
+          // out of reach from the ground (the roof an upgrade swaps, high over the street): up a pillar to it, the
+          // same as for putting a block in up there (the tavern's oak roof stalled on its top row for 16 rounds)
+          if (this.reachTo(x, y, z) > REACH && lifts < 12 && !this.abort && !this.dead) {
+            lifts++;
+            if ((await fromPillar(i)) && !missing(todo[i])) {
+              misses = 0;
+              continue;
+            }
+            later(todo[i]);
+          }
           misses++;
           continue;
         }
@@ -2879,21 +3060,9 @@ export class Body {
       // room, on the floor), every block in reach from up there, then back down the pillar
       if (this.reachTo(x, y, z) > REACH && lifts < 12) {
         lifts++;
-        const up = await this.scaffoldTo(x, y, z, footprint, inside, todo.slice(i).filter(missing));
-        if (up >= 0) {
-          for (const c of todo.slice(i)) {
-            if (this.abort || this.dead || placed >= max) break;
-            const w = this.wantFor(c[3]);
-            if (!w || !missing(c) || this.reachTo(c[0], c[1], c[2]) > REACH) continue;
-            const here = this.get(c[0], c[1], c[2]);
-            if (here !== B.AIR && !IS_WATER[here] && !BLOCKS[here]?.replaceable && (KEEP(here) || !(await this.mine(c[0], c[1], c[2], false)))) continue;
-            if (await this.place(w.item, c[0], c[1], c[2], 20000, w.state)) placed++;
-          }
-          if (up > 0) await this.climbDown(up, { x: this.lastPillar.x, z: this.lastPillar.z, top: this.lastPillar.top, keep: blocks });
-          if (!missing(todo[i])) {
-            misses = 0;
-            continue;
-          }
+        if ((await fromPillar(i)) && !missing(todo[i])) {
+          misses = 0;
+          continue;
         }
       }
       misses++;

@@ -18,6 +18,8 @@ const ago = (t) => {
 };
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s || '');
 const FAIL = /couldn|can.t|^no |nothing|still|failed|got 0 |missing|isn.t|don.t|there is no|out of|stopped|interrupted/i;
+// progress isn't failure, even with "still needed" in it (a build goes up a few blocks a turn)
+const PROGRESS = /^placed [1-9]|^finished|^upgraded|^got [1-9]|^crafted|^smelted|something else came up/i; // (and a job cut short by a reflex isn't a failure either)
 
 const getJson = async (path) => (await fetch(RELAY + path, { signal: AbortSignal.timeout(10000) })).json();
 
@@ -55,9 +57,14 @@ const alive = clanker.agents.filter((a) => !a.dead);
 out.push(`WORLD day ${clanker.day}, time ${clanker.time} (${clanker.time >= 12500 && clanker.time < 23500 ? 'night' : clanker.time >= 11000 ? 'dusk' : 'day'}), world ${ago(clanker.started)} old, ${alive.length}/3 alive, ${clanker.watching} watching`);
 
 const civ = state.civ;
+if (civ?.board) {
+  const bd = civ.board;
+  const short = Object.entries(bd.short ?? {}).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ');
+  out.push(`BOARD day ${bd.day}: ${Object.entries(bd.roles ?? {}).map(([n, r]) => `${n} ${r}`).join(', ')}; project ${bd.project ? `${bd.project.up ? 'upgrade ' : ''}${bd.project.label ?? bd.project.kind}` : 'none'}${short ? `, short of ${short}` : ''}`);
+}
 if (civ) {
   const built = Object.entries(civ.built || {}).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(', ') || 'nothing';
-  out.push(`CIV ${civ.name} (stage ${civ.stage + 1}/5). built: ${built}; trades ${civ.trades}. next ${civ.next ? `${civ.next.name}: ${civ.next.needs.map((n) => `${n.k} ${n.have}/${n.need}`).join(', ')}` : 'none (a city)'}${civ.open?.length ? `; half built: ${civ.open.map((o) => o.kind).join(', ')}` : ''}; last: ${civ.last || '-'} (${ago(civ.t)} ago)`);
+  out.push(`CIV ${civ.name} (stage ${civ.stage + 1}/${civ.stages?.length ?? 5}). built: ${built}; trades ${civ.trades}. next ${civ.next ? `${civ.next.name}: ${civ.next.needs.map((n) => `${n.k} ${n.have}/${n.need}`).join(', ')}` : 'none (a city)'}${civ.open?.length ? `; half built: ${civ.open.map((o) => o.kind).join(', ')}` : ''}; last: ${civ.last || '-'} (${ago(civ.t)} ago)`);
 }
 
 // where each one stood on earlier runs: the same spot for a long time while "busy" = stuck
@@ -69,7 +76,7 @@ for (const a of clanker.agents) {
   const s = state.agents?.[a.name]?.status;
   const mine = events.filter((e) => e.agent === a.name);
   const results = mine.filter((e) => e.type === 'result').slice(-24);
-  const fails = results.filter((e) => FAIL.test(e.text));
+  const fails = results.filter((e) => (FAIL.test(e.text) && !PROGRESS.test(e.text)));
   out.push('');
   if (a.dead) {
     out.push(`${a.name.toUpperCase()} DEAD ${ago(a.diedAt)} ago: ${a.death}`);
@@ -80,12 +87,14 @@ for (const a of clanker.agents) {
   const pos = s?.pos ?? [a.x, a.y, a.z].map((v) => Math.round(v ?? 0));
   out.push(`${a.name.toUpperCase()} hp ${a.hp ?? s?.health} food ${a.food ?? s?.food} at ${pos.join(' ')} holding ${s?.held ?? '?'}${s?.armor?.length ? `, wearing ${s.armor.join(' ')}` : ''}; doing: ${s?.action ?? '?'}`);
   out.push(`  goal: ${clip(state.agents?.[a.name]?.goal, 160)}`);
+  // the day plan and the town board (agents/board.ts): its slot of the day, its role, its job
+  if (s?.role || s?.slot) out.push(`  ${s.slot ?? '?'}, ${s.role ?? 'no role'}: ${clip(s.job, 160)}`);
   const hist = (track[a.name] ?? []).filter((p) => now - p.t < 30 * 60000);
   const still = hist.filter((p) => Math.hypot(p.pos[0] - pos[0], p.pos[2] - pos[2]) < 3 && Math.abs(p.pos[1] - pos[1]) < 3);
   if (still.length && now - Math.min(...still.map((p) => p.t)) > 4 * 60000 && !/asleep|bed|home/.test(s?.action ?? '')) out.push(`  !! in the same spot for ${ago(Math.min(...still.map((p) => p.t)))}`);
   track[a.name] = [...hist, { t: now, pos, action: s?.action ?? '' }].slice(-40);
   out.push(`  results: ${results.length} recent, ${fails.length} failed${results.length ? ` (${Math.round((fails.length / results.length) * 100)}%)` : ''}`);
-  for (const e of results.slice(-7)) out.push(`  ${FAIL.test(e.text) ? 'x' : '-'} ${ago(e.t)} ${clip(e.text, 170)}`);
+  for (const e of results.slice(-7)) out.push(`  ${(FAIL.test(e.text) && !PROGRESS.test(e.text)) ? 'x' : '-'} ${ago(e.t)} ${clip(e.text, 170)}`);
   const reflexes = mine.filter((e) => e.type === 'reflex' && now - e.t < 20 * 60000);
   if (reflexes.length) {
     const by = {};

@@ -150,7 +150,7 @@ How to play well:
 - Food for a growing town comes from farms: a hoe (wooden_hoe or stone_hoe) and wheat_seeds (from breaking tall grass, or a village farm), then farm beside water. Harvest the wheat when it is ripe (harvest) and craft bread.
 - Set yourself a goal (set_goal) and keep notes (note): you only see your last few actions, so write down what matters (where your house is, where the iron was, what the others said or did).
 - You can stay with another player for a while (follow_player), hand them things (give), or talk to them (say).
-- Nights: sleep in your bed (sleep). The night is skipped once half of the living players are asleep at the same time, so it is over in seconds. Only without a bed: when night falls (time 12500), dig_in, and use the night to mine around you underground (collect cobblestone, coal_ore, iron_ore) with your roof kept closed.
+- Nights: sleep in your bed (sleep). The night is skipped once half of the living players are asleep at the same time, so it is over in seconds. Only without a bed: when night falls (time 12500), dig_in, and use the night to mine around you underground (collect cobblestone, coal_ore, iron_ore) with your roof kept closed. At night you stay shut in: exploring, long walks, hunting, dig_out and gathering in the open all wait for dawn, and collect mines a staircase down from inside your sealed hole and shuts it again after.
 - In the morning, or any time you are in a hole by day, dig_out right away. Never wait around in the daytime.
 - If something failed, don't do the same thing again: change what you ask for, move somewhere else, or do something else first.
 - With a weapon, kill what attacks you, Rattlers too (charge them: they are weak up close). Back off only when you are badly hurt. Without a weapon, keep away from monsters at night.
@@ -245,10 +245,14 @@ export class Brain {
   private nightOutSince = 0;
   /** Monsters it fought without getting anywhere (behind a wall, across a gap): left alone for a minute. */
   private leftAlone = new Map<number, number>();
+  /** Animals it couldn't get to (across water, up a drop), and till when it leaves them be. */
+  private unreachable = new Map<number, number>();
   private lastTidy = 0;
   private lastHunt = 0;
   private lastHelpCall = 0;
   private lastFailedCharge = 0;
+  /** Mining a staircase out of its hole at night (the wait tool): the hole isn't sealed while it does. */
+  private holeMining = false;
   /** What the running reflex is, so being shot can cut a walk short. */
   private reflexLabel = "";
   private lastEat = 0;
@@ -665,9 +669,63 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   // ---------------------------------------------------------------- skills
 
+  /** At night, mining from inside its sealed hole: a staircase down from it (the roof stays shut, and a cave it breaks
+   *  into gets closed), then the hole sealed again at the top. The first step opens the hole, and an open hole at night
+   *  with a house set the home reflex off: it cut the staircase short and opus paced its hole for a minute trying to
+   *  walk home through the rock (season 12's first night). Sealed again, the next one digs a new staircase another way. */
+  private async nightMine(gets: number[], count: number): Promise<string> {
+    const b = this.body;
+    this.holeMining = true;
+    try {
+      const r = await b.stairMine(gets, count);
+      if (!b.sealed() && !b.dead) await b.sealIn();
+      return r;
+    } finally {
+      this.holeMining = false;
+    }
+  }
+
+  /** Why a tool would take it out across open ground at night, or "" if it's fine. Archers come out in the dark and
+   *  shoot from range, and the shamblers come in numbers: sonnet left its hole on season 12's first night to look
+   *  for sheep, walked a ravine in the dark and was shot. Nights are for the house or the hole. */
+  private outInTheDark(name: string, i: Record<string, unknown>): string {
+    const b = this.body;
+    const why = "it's night: archers come out in the dark and shoot from range. Stay in till dawn: sleep, wait (sealed in a hole it mines round you), craft or smelt";
+    const far = (x: number, z: number) => Math.hypot(x - b.phys.x, z - b.phys.z) > 16;
+    switch (name) {
+      case "explore": return `${why}; explore by day`;
+      case "dig_out": return `${why}; dig_out at dawn`;
+      case "go_to_base": return PACK.base && far(PACK.base.x, PACK.base.z) ? `${why}; go to the base by day` : "";
+      case "go_home": {
+        // home through the rock in the dark, from a hole it's safe in: no (out in the open, home is the place to go)
+        if (!b.home || !b.covered()) return "";
+        const [mx, mz] = b.homeMiddle();
+        return far(mx, mz) ? `${why}; you're under cover: stay there and go home by day` : "";
+      }
+      case "go_to": return Number.isFinite(Number(i.x)) && Number.isFinite(Number(i.z)) && far(Number(i.x), Number(i.z)) ? `${why}; go there by day` : "";
+      case "go_to_player":
+      case "follow_player":
+      case "give": {
+        const o = [...b.others.values()].find((p) => p.name === String(i.name ?? i.player ?? "").toLowerCase());
+        return o && far(o.x, o.z) ? `${why}; meet up by day` : "";
+      }
+      case "attack": return ANIMAL_SPECS.some((a) => a.key === String(i.target ?? "").toLowerCase()) ? `${why}; hunt by day` : "";
+      case "collect": {
+        const plan = miningPlan(String(i.item ?? ""));
+        if (!plan) return "";
+        // stone and ore come out of the rock from under cover; trees, sand, dirt and the rest are out in the open
+        const rock = plan.blocks.includes(B.STONE) || plan.blocks.every((id) => BLOCKS[id]?.key?.endsWith("_ore"));
+        return rock && b.covered() ? "" : `${why}; ${rock ? "mine from under cover" : "trees and open ground by day"}`;
+      }
+    }
+    return "";
+  }
+
   private async exec(name: string, i: Record<string, unknown>): Promise<string> {
     const b = this.body;
     try {
+      const dark = b.isNight() ? this.outInTheDark(name, i) : "";
+      if (dark) return dark;
       switch (name) {
         case "collect": return await this.collect(String(i.item ?? ""), Math.max(1, Math.min(32, Number(i.count) || 1)));
         case "craft": {
@@ -846,6 +904,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         }
         case "wait": {
           b.halt();
+          // out at night and not shut in anywhere: shut in first. Standing there "waiting" is how opus died on season
+          // 12's third night (a rattler shot it from across a ravine while it waited near the top)
+          if (b.isNight() && !b.sealed() && !b.atHome()) {
+            const d = await b.digIn();
+            if (!b.sealed()) return `it's night and you weren't shut in anywhere, so you tried to dig in: ${d}`;
+          }
           // a night without a bed, sealed in underground: mine round it instead of standing in the hole for nine
           // minutes (the prompt says so, but on season 9's first night haiku and opus just waited: "hiding"). A
           // staircase down from the hole, so the roof stays shut; not when hurt, and not under the town's buildings
@@ -854,7 +918,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
             const plan = miningPlan("cobblestone")!;
             const before = plan.gets.reduce((n, id) => n + b.count(id), 0);
             b.action = "mining round its hole for the night";
-            const r = await b.stairMine(plan.gets, 12);
+            const r = await this.nightMine(plan.gets, 12);
             const got = plan.gets.reduce((n, id) => n + b.count(id), 0) - before;
             return `it's night and you're sealed in underground, so instead of waiting you mined round you: ${got ? `got ${got} cobblestone` : r}`;
           }
@@ -924,6 +988,17 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // wood comes faster with an axe (Laith: "no one uses axes"; they chopped every tree by hand or with a pickaxe, and
     // wood is what the town runs short of): a stone one if there's cobblestone, else a wooden one
     if (trees) await this.ensureAxe();
+    // at night rock comes out from inside its sealed hole only, down a staircase it shuts behind it: walking to ore it
+    // could see across a cave or a ravine is how opus died on season 12's third night (shot near the top by a rattler)
+    const rock = plan.blocks.includes(B.STONE) || plan.blocks.every((id) => BLOCKS[id]?.key?.endsWith("_ore"));
+    if (b.isNight() && rock) {
+      if (!b.sealed()) return `it's night: dig_in first (shut yourself in), then collect ${item} from inside the hole`;
+      if (PACK.base && b.phys.y > PACK.base.y - 3) return "it's night and you're shut in right under the town: wait or craft till dawn (no mining under the buildings)";
+      if (!b.bestToolFor(B.STONE) || !canHarvest(B.STONE, b.bestToolFor(B.STONE))) return "stone needs a pickaxe: craft a wooden_pickaxe first";
+      b.action = `mining down from its hole for ${item}`;
+      const r = await this.nightMine(plan.gets, count);
+      return have() > start ? `got ${have() - start} ${item} down a staircase from your hole (sealed in again after)` : r;
+    }
     // stone comes out of the ground away from the town: never the town's own walls (the nearest "cobblestone" was
     // the town hall's, so they took its lower walls apart for a house), and never a village's houses
     const stone = plan.blocks.includes(B.STONE);
@@ -1011,18 +1086,22 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // over and over and got "0 of 8": the coal was deeper in the rock than it could walk to)
       const ore = !plan.blocks.includes(B.STONE) && plan.blocks.every((id) => BLOCKS[id]?.key?.endsWith("_ore"));
       if (ore && (!found.length || found[0][1] < b.phys.y - 2 || skip.size >= 1) && b.bestToolFor(B.STONE) && canHarvest(B.STONE, b.bestToolFor(B.STONE)) && !offLimits(b.phys.x, b.phys.z)) {
+        const had = have();
         const r = await b.stairMine(plan.gets, count - (have() - start));
         tried++;
         if (have() - start >= count) return r;
+        // nothing came of it: another staircase from the same spot goes the same way and gets nothing again
+        if (have() <= had) return r;
         skip.add(-2);
         if (skip.size > 3) return r;
         continue;
       }
       if (plan.blocks.includes(B.STONE) && (!found.length || found[0][1] < b.phys.y - 2 || skip.size >= 2)) {
         if (!b.bestToolFor(B.STONE) || !canHarvest(B.STONE, b.bestToolFor(B.STONE))) return "stone needs a pickaxe: craft a wooden_pickaxe first";
+        const had = have();
         const r = await b.stairMine(plan.gets, count - (have() - start));
         tried++;
-        if (have() - start >= count || /water/.test(r)) return r;
+        if (have() - start >= count || /water/.test(r) || have() <= had) return r;
         skip.add(-1);
         if (skip.size > 3) return r;
         continue;
@@ -1225,6 +1304,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const lacking = new Set<string>();
     let first = true;
     let dirtTried = false;
+    let tried = false; // the blocks went to the site at least once without being cut short
     for (let round = 0; round < 8 && !b.abort && !b.dead && Date.now() < deadline && left() > 0; round++) {
       s.busy = { by: this.name, at: Date.now() };
       const need = this.billOf(cells);
@@ -1244,6 +1324,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       await toMiddle();
       r = await b.buildCells(cells, kind === "wall" || kind === "road" ? 64 : 120, `${upgrade ? "upgrading" : "building"} ${what}`, s.y);
       placed += r.placed;
+      if (!b.abort && !b.dead) tried = true;
       // out of reach for want of a few spare blocks to stand on (the pillar it climbs is built of them): dig some dirt
       // and go again (sonnet tried a cottage's last six roof blocks turn after turn with none)
       if (!r.placed && !r.outOf && b.scaffoldNeed > 0 && !dirtTried) {
@@ -1276,7 +1357,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     // a spot where nothing will go in, turn after turn (on a roof, walled off, out of reach): give up on it, so the
     // next build picks a better one instead of everyone trying the same blocks forever
-    s.stuck = placed ? 0 : (s.stuck ?? 0) + 1;
+    // (only a real try counts: a build cut short by a reflex isn't the spot's fault. Season 12's first cottage was
+    // given up as "a bad spot" after dusk sent opus home three times on its way back with the oak, and the same
+    // ground was picked again straight after)
+    s.stuck = placed ? 0 : tried ? (s.stuck ?? 0) + 1 : s.stuck ?? 0;
     if (!upgrade && s.stuck >= 3 && !r.outOf && !s.done && kind !== "wall" && kind !== "road") {
       PACK.builds = PACK.builds.filter((x) => x !== s);
       savePack();
@@ -1284,6 +1368,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     savePack();
     const still = short.length ? ` Still needed: ${short.join(", ")}${lacking.size ? ` (${[...lacking].join("; ")})` : ""}.` : "";
+    if (!placed && !tried) return `stopped work on ${what} at ${where(s)} before a block went in (${b.dead ? "you died" : "something else came up"}); ${missing} blocks to go.${still}`;
     if (!placed) return `couldn't ${upgrade ? "upgrade" : "build"} ${what} at ${where(s)}: ${r.outOf ? "out of materials" : r.why || "in the way, or out of reach"}; ${missing} blocks to go.${still}`;
     return `placed ${placed} blocks on ${what} at ${where(s)}: ${missing} to go.${still}`;
   }
@@ -1676,7 +1761,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (d < bd) [bd, best] = [d, { kind: "mob", id: m.id }];
     }
     for (const a of b.animals.values()) {
-      if (ANIMAL_SPECS[a.kind]?.key !== n) continue;
+      if (ANIMAL_SPECS[a.kind]?.key !== n || (this.unreachable.get(a.id) ?? 0) > Date.now()) continue;
       const d = b.distTo(a.x, a.y, a.z);
       if (d < bd) [bd, best] = [d, { kind: "animal", id: a.id }];
     }
@@ -1684,9 +1769,20 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   }
 
   private async attack(name: string): Promise<string> {
+    const b = this.body;
     const t = this.findTarget(name);
     if (!t) return `no ${name} nearby`;
-    const res = await this.body.fight(t, 30000);
+    // one too far off to fight from here: walk over to it first (the fight gives up on anything past 24 blocks with
+    // "it got away" before taking a step: haiku asked for a sheep 24 blocks off seven times in 16 seconds)
+    const p = b.targetPos(t);
+    if (p && Math.hypot(p.x - b.phys.x, p.z - b.phys.z) > 16) {
+      b.action = `walking over to the ${name}`;
+      await b.goto(p.x, p.y, p.z, 6, { maxMs: 30000, done: () => { const q = b.targetPos(t); return !q || Math.hypot(q.x - b.phys.x, q.z - b.phys.z) < 10; } });
+    }
+    const res = await b.fight(t, 30000);
+    // one it couldn't get to is left be for two minutes, so the next attack picks another (haiku asked for the same
+    // cow and chicken across the water four times running: "couldn't get to it")
+    if (t.kind === "animal" && /couldn't get to it|got away|out of reach/.test(res)) this.unreachable.set(t.id, Date.now() + 120000);
     await this.body.pickUp(5, 4000);
     return `${name}: ${res}`;
   }
@@ -1773,7 +1869,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return;
     }
     if (b.home && !b.atHome() && tod >= 11600 && tod < 23000 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
-      && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill) && (!b.isNight() || homeFar < 40)
+      && !b.sealed() && !this.holeMining && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill) && (!b.isNight() || homeFar < 40)
+      // once it's dark, only from out in the open: under cover it stays and works (underground at night, opus set off
+      // for a house 19 blocks away through the rock and paced its tunnel for a minute and a half, twice)
+      && !(b.isNight() && b.covered())
       && Date.now() - b.homeFailAt > 5 * 60000) {
       this.lastHomeTrip = Date.now();
       await this.reflex("heading home for the night", async () => `It was getting dark, so you went home: ${await b.goHome()}.`);
@@ -1893,7 +1992,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         const mx = meleeNear.reduce((a, m) => a + m.x, 0) / meleeNear.length;
         const mz = meleeNear.reduce((a, m) => a + m.z, 0) / meleeNear.length;
         await this.reflex(`running from a rattler and a ${meleeNear[0].key}`, async () => {
-          if (b.home && !b.atHome() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40) return `A rattler was shooting at you with a ${meleeNear[0].key} close by, so you ran home: ${await b.goHome()}.`;
+          if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40) return `A rattler was shooting at you with a ${meleeNear[0].key} close by, so you ran home: ${await b.goHome()}.`;
           await b.flee(mx, mz, 140);
           return `A rattler was shooting at you with a ${meleeNear[0].key} close by, so you ran instead of digging in.`;
         });
@@ -1946,7 +2045,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       FIGHTS.delete(this.name);
       if (/ran out of time|couldn't get to it|out of reach/.test(res)) this.leftAlone.set(h.id, Date.now() + 60000);
       if (/backed off/.test(res) && !b.dead) {
-        const homeNear = b.home && !b.atHome() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40;
+        const homeNear = b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40;
         if (below && !homeNear) {
           await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${h.key} underground, so you walled it off to heal: ${await b.wallOff()}.`);
           if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
@@ -2011,7 +2110,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   /** Out of a fight it can't win: home if it's near (a door between), else away from it. */
   private async runFrom(h: Seen, why: string): Promise<string> {
     const b = this.body;
-    if (b.home && !b.atHome() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40) return `${why}, so you ran home: ${await b.goHome()}.`;
+    if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40) return `${why}, so you ran home: ${await b.goHome()}.`;
     await b.flee(h.x, h.z, 140);
     return `${why}, so you broke off and ran.`;
   }
@@ -2021,7 +2120,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   private async takeCover(r: Seen): Promise<string> {
     const b = this.body;
     // home close by: indoors is the best cover there is (and no dirt walls left standing about the town)
-    if (b.home && !b.atHome() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 30) return `ran home: ${await b.goHome()}`;
+    if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 30) return `ran home: ${await b.goHome()}`;
     if (b.fillerCount() >= 2 && (await b.coverFrom(r.x, r.z))) {
       if (b.stats.hp < 8 && b.canWallOff()) return `walled itself off from the rattler: ${await b.wallOff()}`;
       return "put a wall up between you and the rattler (it has to come round it, into reach, to shoot)";

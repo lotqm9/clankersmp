@@ -69,6 +69,7 @@ import { packArmor } from "../../shared/combat.ts";
 import { LightIndex } from "./light.ts";
 import { MobManager, type MobTarget } from "./mobs.ts";
 import { FarmManager } from "./farm.ts";
+import { LeafDecay } from "./leaves.ts";
 import { ItemManager } from "./items.ts";
 import { Containers } from "./containers.ts";
 import { Survival, newSurvival, type SurvivalData, type SurvivalState } from "./survival.ts";
@@ -207,6 +208,8 @@ export class Shard {
   readonly mobs: MobManager;
   /** v7: crops, sugar cane and farmland (server/src/farm.ts). */
   readonly farm: FarmManager;
+  /** Leaves wither once their tree is cut down (server/src/leaves.ts). */
+  readonly leaves: LeafDecay;
   /** v8: boats (server/src/boats.ts) and the treasure chests filled once per world (server/src/loot.ts). */
   readonly boats: BoatManager;
   readonly loot: LootLedger;
@@ -263,6 +266,16 @@ export class Shard {
     this.water.load(0);
     this.items = new ItemManager(this.getBlock, this.store.dir);
     this.items.load();
+    // leaves wither once no log is near them (a felled tree's canopy goes); the ones players put down stay. A world
+    // from before this has no leaves.json yet: the leaves players put down come from the edit log
+    this.leaves = new LeafDecay(this.getBlock, {
+      set: (i, id) => {
+        this.setBlock(i, id, null, false, true);
+        this.water.touched(i, this.tickCount);
+      },
+      drop: (st, x, y, z) => this.items.dropAt(st, x, y, z),
+    }, this.store.dir);
+    if (!this.leaves.load()) this.leaves.seed(this.log, this.world);
     this.containers = new Containers(this.store.dir);
     this.containers.load((c) => this.world[c]);
     // v8: the islands' treasure chests, filled once per world
@@ -1417,6 +1430,7 @@ export class Shard {
     if (isSapling(old)) this.saplings.delete(i);
     if (isSapling(id)) this.saplings.add(i);
     this.farm?.changed(i, old, id);
+    this.leaves?.changed(i, old, id, !!by);
     if (id === this.base[i]) this.edits.delete(i);
     else this.edits.set(i, id);
     this.editsVersion++;
@@ -1704,6 +1718,7 @@ export class Shard {
     this.tickDelayedDigs();
     t = this.lap("survival", t);
     if (this.tickCount % 20 === 7) this.growSaplings();
+    if (this.tickCount % 20 === 17) this.leaves.tick();
     if (this.tickCount % 20 === 13) {
       this.farm.tick();
       t = this.lap("farm", t);
@@ -2016,6 +2031,7 @@ export class Shard {
       this.store.savePlayers(this.positions);
       if (all || this.tickCount % 1200 === 0 || !this.players.size) this.animals.save();
       this.water.save();
+      this.leaves.save();
       this.containers.save();
       this.boats.save();
       this.villagers.save();

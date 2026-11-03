@@ -34,6 +34,7 @@ interface Scenario {
   team?: boolean; // two agents side by side
   apart?: number; // ... or this far apart (the second behind the first): only the first is attacked
   tunnel?: boolean; // in a one-wide corridor four blocks down
+  pit?: number; // at the bottom of a pit this deep (five across, a ravine's floor); the monsters up on the rim
   secs?: number;
 }
 const SCEN: Record<string, Scenario> = {
@@ -66,6 +67,13 @@ const SCEN: Record<string, Scenario> = {
   sh3: { kit: [...BASE, ...STONE], hp: 20, mobs: [["shambler", 3, 8]] },
   tunnelra: { kit: [...BASE, ...STONE], hp: 14, mobs: [["rattler", 1, 4]], tunnel: true },
   ra1nobow: { kit: [...BASE, ...STONE], hp: 20, mobs: [["rattler", 1, 12]] },
+  // opus's death (season 14): an iron helmet and chestplate, just dug out of a mine into a ravine, a rattler up on the
+  // edge, out of reach from the floor; it charged twice, then put up blocks, and was shot dead
+  pit_ra1: { kit: [...BASE, ...STONE, "iron_helmet 1", "iron_chestplate 1"], hp: 20, mobs: [["rattler", 1, 4]], pit: 3 },
+  pit_ra2: { kit: [...BASE, ...STONE, "iron_helmet 1", "iron_chestplate 1"], hp: 20, mobs: [["rattler", 2, 4]], pit: 3 },
+  // the same five deep: a rattler on the edge is out of a sword's reach from the floor
+  pit5_ra1: { kit: [...BASE, ...STONE, "iron_helmet 1", "iron_chestplate 1"], hp: 20, mobs: [["rattler", 1, 4]], pit: 5 },
+  pit5_ra2: { kit: [...BASE, ...STONE, "iron_helmet 1", "iron_chestplate 1"], hp: 20, mobs: [["rattler", 2, 4]], pit: 5 },
 };
 
 interface Result {
@@ -198,6 +206,23 @@ async function trial(scen: string, k: number, names: string[], at: { x: number; 
     await lead.wait(10);
     if (Math.hypot(lead.phys.x - x - 0.5, lead.phys.z - z - 0.5) > 0.4) console.log(`  (tunnel setup: not back at the shaft, at ${lead.phys.x.toFixed(1)} ${lead.phys.z.toFixed(1)})`);
   }
+  if (s.pit) {
+    // dug out a layer at a time, the eight round it then its own column (it drops with it), then faced one way
+    const x = Math.floor(lead.phys.x), z = Math.floor(lead.phys.z), y = Math.floor(lead.phys.y + 0.1);
+    for (let d = 1; d <= s.pit; d++) {
+      const ring: [number, number][] = [];
+      for (let a = -2; a <= 2; a++) for (let c = -2; c <= 2; c++) if (a || c) ring.push([a, c]);
+      for (const [dx, dz] of [...ring.sort((p, q) => Math.hypot(...q) - Math.hypot(...p)), [0, 0]]) {
+        if (SOLID[lead.get(x + dx, y - d, z + dz)]) await lead.mine(x + dx, y - d, z + dz, false);
+        if (dx === 0 && dz === 0) await lead.wait(8);
+      }
+    }
+    await lead.center(x, z, 30);
+    lead.wantYaw = 0;
+    await lead.wait(10);
+    const fy = Math.floor(lead.phys.y + 0.1);
+    if (fy !== y - s.pit) console.log(`  (pit setup: at y ${fy}, the pit's floor is ${y - s.pit})`);
+  }
   for (const b of team) {
     await cmd(b, `/hunger 20`, 1);
     if (s.hp < 20) await cmd(b, `/hurt ${20 - s.hp}`, 1);
@@ -205,6 +230,10 @@ async function trial(scen: string, k: number, names: string[], at: { x: number; 
   await lead.wait(4);
   for (const [kind, n, d] of s.mobs) await cmd(lead, `/summon ${kind} ${n} ${d}`, 2);
   await lead.wait(10);
+  if (s.pit) {
+    const up = lead.hostiles(16).filter((m) => m.y > lead.phys.y + 2);
+    if (!up.length) console.log(`  (pit setup: no monster up on the rim: ${lead.hostiles(16).map((m) => `${m.key} ${m.y.toFixed(1)}`).join(", ") || "none"})`);
+  }
   if (s.tunnel) {
     // the monster must be down here in the chamber (one that ended up in the rock is pushed up to the surface)
     const m = lead.hostiles(12)[0];

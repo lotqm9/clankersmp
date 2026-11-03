@@ -413,8 +413,13 @@ export class Brain {
   private nightOutSince = 0;
   /** Monsters it fought without getting anywhere (behind a wall, across a gap): left alone for a minute. */
   private leftAlone = new Map<number, number>();
+  /** Archers a charge couldn't close on lately (up on a rim, across a gap): out of their sight instead, not again. */
+  private noCharge = new Map<number, number>();
   /** Animals it couldn't get to (across water, up a drop), and till when it leaves them be. */
   private unreachable = new Map<number, number>();
+  /** Monsters a fight couldn't get to (across water, up a drop, behind a wall), and till when: dig_in doesn't fight
+   *  them again first (haiku, season 16's first night: three dig_ins in 30 s each fought a skitter it couldn't reach). */
+  private unreachableMob = new Map<number, number>();
   /** Players it couldn't get to just now, and why: not walked to again till then (a gatherer walked to the builder
    *  over and over while it mined at y=25: "couldn't get to opus", six of its last eight actions, season 14). */
   private outOfReach = new Map<string, { until: number; why: string }>();
@@ -1073,16 +1078,26 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           // not with a monster on it: digging in is seconds of standing still, and it hits (or shoots) you out of the
           // hole halfway through. It deals with the monster first, armed it fights, unarmed it runs, and digs in once
           // it's clear (only refusing, sonnet asked to dig in again and again with a shambler 5 blocks off)
-          const m = b.hostiles(8)[0];
+          // One it couldn't get to is no reason to stop: on into the ground (or away first, if something that can get at
+          // it is right there), in this same call, and it isn't fought again next time
+          const can = (m: { id: number }) => (this.unreachableMob.get(m.id) ?? 0) <= Date.now();
+          const m = b.hostiles(8).filter(can)[0];
           if (m) {
             const weapon = b.bestWeapon();
             const armed = !!weapon && (itemDef(weapon)?.tool?.damage ?? 0) >= 4 && b.stats.hp >= 8;
-            const res = armed ? await b.fight({ kind: "mob", id: m.id }, 15000, 6) : (await b.flee(m.x, m.z, 100), "ran from it");
-            const still = b.hostiles(8)[0];
+            // (one up a drop it can see from here is neither a fight nor a run: it can't get down here either, straight on)
+            if (!b.canReach(m)) this.unreachableMob.set(m.id, Date.now() + 120000);
+            const res = !can(m) ? "it couldn't be got at from here" : armed ? await b.fight({ kind: "mob", id: m.id }, 15000, 6) : (await b.flee(m.x, m.z, 100), "ran from it");
+            if (armed && /couldn't get to it|out of reach|let it go|got away/.test(res)) this.unreachableMob.set(m.id, Date.now() + 120000);
+            if (b.dead) return `died fighting a ${m.key}`;
+            // something that can get at it right beside it still: away from it first
+            const close = b.hostiles(5).filter(can).find((q) => q.key !== "rattler");
+            if (close) await b.flee(close.x, close.z, 60);
+            const still = b.hostiles(4).filter(can).find((q) => q.key !== "rattler");
             if (still) return `a ${m.key} was ${Math.round(m.d)} blocks away, so before digging in you ${armed ? `fought it (${res})` : "ran from it"}; a ${still.key} is still ${Math.round(still.d)} blocks off: ${armed ? "finish it (attack)" : "keep away (flee)"}, then dig_in`;
-            return `a ${m.key} was on you, so you ${armed ? `fought it first (${res})` : "ran from it first"}, then dug in: ${await b.digIn()}`;
+            return `a ${m.key} was near, so you ${armed ? `fought it first (${res})` : "ran from it first"}, then dug in: ${await b.digIn((id) => !can({ id }))}`;
           }
-          return await b.digIn();
+          return await b.digIn((id) => !can({ id }));
         }
         case "dig_out": return await b.digOut();
         case "mine_trip": return await this.mineTrip();
@@ -3697,10 +3712,11 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         // 11.6 health in 15 s, shot in the back). Armoured and not badly hurt: close in and kill it with whatever it
         // has. Otherwise break its line of sight with blocks
         if (!h && r && !outnumbered) {
-          if (armoured && !badlyHurt && !b.acrossWater(r.x, r.z, r.y)) {
+          if (armoured && !badlyHurt && this.canCharge(r)) {
             await this.reflex("charging the rattler", async () => {
               this.fighting(r);
               const res = await b.fight({ kind: "mob", id: r.id }, 25000, 5, 24);
+              if (/couldn't get to it|out of reach|let it go/.test(res) && b.inPit()) this.noCharge.set(r.id, Date.now() + 20000);
               if (/dead or gone/.test(res) && !b.hostiles(8).length) await b.pickUp(5, 3000);
               return `A rattler had you in its sights; you had no real weapon but you were armoured, so you went at it with what you had (${res}).`;
             });
@@ -3724,12 +3740,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       let res = "";
       // an archer at range without armour, and a bow: shoot it; otherwise at it (armoured, arrows do half or less). One
       // across water is never charged (a swimmer is a sitting target): the bow, or out of its sight
-      const wet = archer && b.acrossWater(target.x, target.z, target.y);
+      // Up on a rim over it, or a gap between that a charge can't cross quickly, the same: a charge there is standing in
+      // the open under its arrows (opus, season 14, from a ravine's floor: two charges, then blocks, then dead)
+      const wet = archer && !this.canCharge(target);
       if (wet && !bow) {
-        await this.reflex("breaking the rattler's line of sight", async () => `A rattler had you in its sights from across the water, so you got out of its sight rather than swim at it: ${await this.blockSight(target)}.`);
+        const why = b.acrossWater(target.x, target.z, target.y) ? "from across the water, so you got out of its sight rather than swim at it" : "from up where you couldn't get at it, so you got out of its sight rather than charge";
+        await this.reflex("breaking the rattler's line of sight", async () => `A rattler had you in its sights ${why}: ${await this.blockSight(target)}.`);
         return true;
       }
-      const shoot = archer && bow && (!armoured || wet) && target.d >= (wet ? 4 : 6);
+      const shoot = archer && bow && (!armoured || wet) && target.d >= (wet ? 3 : 6);
       const label = archer ? (shoot ? "shooting back at a rattler" : "charging the rattler") : `fighting a ${target.key}`;
       await this.reflex(label, async () => {
         this.fighting(target);
@@ -3741,6 +3760,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       });
       FIGHTS.delete(this.name);
       if (/ran out of time|couldn't get to it|out of reach|let it go|lost sight|got away/.test(res)) this.leftAlone.set(target.id, Date.now() + 30000);
+      if (archer && /couldn't get to it|out of reach|let it go/.test(res) && b.inPit()) this.noCharge.set(target.id, Date.now() + 20000);
       if (/backed off/.test(res) && !b.dead && !b.sealed()) {
         // badly hurt mid-fight: give ground the way it does when it starts badly hurt
         const homeNear = b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40;
@@ -3771,7 +3791,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         if (!m || m.flags & MF.DEAD) continue;
         const d = Math.hypot(m.x - b.phys.x, m.z - b.phys.z);
         if (d > (f.call ? 40 : 16) || (!f.call && now - this.lastHelp < 60000)) continue;
-        if (f.key === "rattler" && !armoured && !bow) continue;
+        if (f.key === "rattler" && ((!armoured && !bow) || (!bow && !this.canCharge(m)))) continue;
         this.answered.set(f.id, now + 300000);
         this.lastHelp = now;
         if (f.call && now - this.lastHelpReply > 60000) {
@@ -3793,7 +3813,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // ---- the hunt: armed with a real weapon and fit, a walker or a crawler near it out in the open: go and kill it
     // (Laith: "they make swords but do not fight mobs"). Armoured, an archer too. Not underground, not into a crowd,
     // and never chased far from where it was
-    const prey = [...melee, ...(armoured ? archers.filter((m) => !b.acrossWater(m.x, m.z, m.y)) : [])].filter((m) => m.d < 14 && !left(m) && reachable(m)).sort((p, q) => p.d - q.d)[0];
+    const prey = [...melee, ...(armoured ? archers.filter((m) => this.canCharge(m)) : [])].filter((m) => m.d < 14 && !left(m) && reachable(m)).sort((p, q) => p.d - q.d)[0];
     if (prey && ready && hp >= (armoured ? 12 : 16) && !b.covered() && !b.phys.inWater && hostile.filter((m) => m.d < 16).length <= (armoured ? 3 : 2) && now - this.lastHunt > 15000) {
       this.lastHunt = now;
       let res = "";
@@ -3830,13 +3850,30 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
    *  fire (body.runAway). Never a hole. */
   private async blockSight(r: Seen): Promise<string> {
     const b = this.body;
-    if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 25) return `ran home: ${await b.goHome()}`;
     const archers = b.hostiles(20).filter((m) => m.key === "rattler");
+    // up on a rim over it (a ravine, a pit): a wall beside it doesn't stop a shot from above. A roof does: walled in
+    // where it stands when the blocks go round (a pit's walls are most of it), else a nook dug into the wall on the
+    // archer's side, under the rim
+    if (r.y - b.phys.y >= 2 && b.inPit()) {
+      if (b.openGaps() <= 3 && b.openGaps() <= b.fillerCount() && !b.mobInGap()) {
+        await b.sealIn(true);
+        if (b.sealed()) return "walled itself in, roof and all (the rattler was up on the edge over it)";
+      }
+      if (await b.nookFrom(r)) return "stepped into a nook dug in the wall under it, out of its sight";
+    }
+    if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 25) return `ran home: ${await b.goHome()}`;
     if (b.fillerCount() >= 2 && (await b.coverFrom(r.x, r.z))) {
       if ((b.stats.hp < 8 || archers.length >= 2) && b.fillerCount() >= b.openGaps()) return `walled itself in: ${await b.wallOff()}`;
       return "put a wall up between you and it (it has to come round it, into reach)";
     }
     return await b.runAway(b.hostiles(16));
+  }
+
+  /** An archer worth charging: dry ground between, a quick way to it on foot about level with it, and no charge at it
+   *  that couldn't close lately. */
+  private canCharge(m: Seen): boolean {
+    const b = this.body;
+    return (this.noCharge.get(m.id) ?? 0) <= Date.now() && !b.acrossWater(m.x, m.z, m.y) && b.canReach(m);
   }
 
   private async escape(from: (Seen & { d: number })[], why: string): Promise<string> {

@@ -235,6 +235,8 @@ export class Brain {
   private nightOutSince = 0;
   /** Monsters it fought without getting anywhere (behind a wall, across a gap): left alone for a minute. */
   private leftAlone = new Map<number, number>();
+  /** Animals it couldn't get to (across water, up a drop), and till when it leaves them be. */
+  private unreachable = new Map<number, number>();
   private lastTidy = 0;
   private lastHunt = 0;
   /** Mining a staircase out of its hole at night (the wait tool): the hole isn't sealed while it does. */
@@ -1741,7 +1743,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (d < bd) [bd, best] = [d, { kind: "mob", id: m.id }];
     }
     for (const a of b.animals.values()) {
-      if (ANIMAL_SPECS[a.kind]?.key !== n) continue;
+      if (ANIMAL_SPECS[a.kind]?.key !== n || (this.unreachable.get(a.id) ?? 0) > Date.now()) continue;
       const d = b.distTo(a.x, a.y, a.z);
       if (d < bd) [bd, best] = [d, { kind: "animal", id: a.id }];
     }
@@ -1760,6 +1762,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       await b.goto(p.x, p.y, p.z, 6, { maxMs: 30000, done: () => { const q = b.targetPos(t); return !q || Math.hypot(q.x - b.phys.x, q.z - b.phys.z) < 10; } });
     }
     const res = await b.fight(t, 30000);
+    // one it couldn't get to is left be for two minutes, so the next attack picks another (haiku asked for the same
+    // cow and chicken across the water four times running: "couldn't get to it")
+    if (t.kind === "animal" && /couldn't get to it|got away|out of reach/.test(res)) this.unreachable.set(t.id, Date.now() + 120000);
     await this.body.pickUp(5, 4000);
     return `${name}: ${res}`;
   }

@@ -89,6 +89,37 @@ function isHome(b: Rect & { kind?: Kind }): boolean {
 const tierOf = (b: Building) => (isHome(b) ? 0 : b.tier ?? 1);
 /** Trees: a lot's trees come down before it is built, the canopy and all. */
 const TREE_IDS = new Set<number>([B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG, B.OAK_LEAVES, B.BIRCH_LEAVES, B.PALM_LEAVES]);
+const LOG_IDS = new Set<number>([B.OAK_LOG, B.BIRCH_LOG, B.PALM_LOG]);
+/** A crafted block: one against a log means the log is somebody's build (a cabin's corner, a fence post), not a tree. */
+const BUILT = /plank|glass|cobble|brick|fence|door|slab|stair|torch|lantern|chest|table|furnace|bed|ladder|wall|carpet|wool|barrel|bookshelf|gate|pane|lamp|sign|bars|hay|rail/;
+/** The tree a log belongs to: every log joined to it (corners too, for a palm's lean), close round it; its foot (the
+ *  lowest log). Null when they look like somebody's build (a crafted block against one) or there are too many. */
+export function treeOf(get: (x: number, y: number, z: number) => number, x: number, y: number, z: number): { logs: [number, number, number][]; foot: [number, number, number] } | null {
+  if (!LOG_IDS.has(get(x, y, z))) return null;
+  const seen = new Set<string>([`${x},${y},${z}`]);
+  const logs: [number, number, number][] = [];
+  const todo: [number, number, number][] = [[x, y, z]];
+  while (todo.length) {
+    const c = todo.pop()!;
+    logs.push(c);
+    if (logs.length > 40) return null;
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dz = -1; dz <= 1; dz++) {
+          const n: [number, number, number] = [c[0] + dx, c[1] + dy, c[2] + dz];
+          if (Math.abs(n[0] - x) > 4 || Math.abs(n[2] - z) > 4 || n[1] < y - 12 || n[1] > y + 16) continue;
+          const k = `${n[0]},${n[1]},${n[2]}`;
+          if (seen.has(k) || !LOG_IDS.has(get(...n))) continue;
+          seen.add(k);
+          todo.push(n);
+        }
+  }
+  for (const [cx, cy, cz] of logs)
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]])
+      if (BUILT.test(BLOCKS[get(cx + dx, cy + dy, cz + dz)]?.key ?? "")) return null;
+  const foot = logs.reduce((a, c) => (c[1] < a[1] ? c : a));
+  return { logs, foot };
+}
 /** Buildings with a spot of their own in the town plan (the plaza in the middle, the landmarks at the heads of the
  *  avenues): never given up as "a bad spot" (the same spot comes round again), what's in the way gets said instead. */
 const FIXED: ReadonlySet<Kind> = new Set<Kind>(["plaza", ...(Object.keys(HEADS) as Kind[])]);
@@ -1479,6 +1510,19 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (!canHarvest(id, tool)) return `${BLOCKS[id]?.key ?? item} drops nothing without the right tool (craft a pickaxe first)`;
       tried++;
       MINING.set(this.name, { x, z, at: Date.now() });
+      // a tree comes down whole: every log of it, the high ones from a pillar up its trunk, even past the count (a
+      // trunk left hanging in the air, or a top it couldn't reach, is what Laith saw: "they also do not finish
+      // mining it entirely when they cut down the tree")
+      if (trees && LOG_IDS.has(id)) {
+        const fell = await this.fell(x, y, z, theirs);
+        if (fell) {
+          if (fell.stump) stumps.push(fell.stump);
+          for (const [lx, ly, lz] of fell.left) skip.add(lx + lz * 512 + ly * 262144);
+          if (!fell.got) skip.add(x + z * 512 + y * 262144);
+          if (tried > count * (leafy ? 30 : 3) + 6) break;
+          continue;
+        }
+      }
       const under = b.get(x, y - 1, z);
       if (trees && (under === B.GRASS || under === B.DIRT) && !theirs(x, z)) stumps.push([x, y, z, id === B.BIRCH_LOG]);
       const ok = await b.mine(x, y, z);
@@ -2860,23 +2904,101 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     return `cut the tree farm's trees: ${got} logs${r.left ? ` (${r.left} blocks of them out of reach)` : ""}; ${again}${dl ? `; ${dl}` : ""}`;
   }
 
+  /** A tree cut down whole from the log it found: every log of it, lowest first from the ground, then the ones out
+   *  of reach from a pillar it builds up the trunk's own column (each step digs the log over its head, and it cuts
+   *  whatever else is in reach), and back down its pillar, the blocks taken back; the logs picked up. Its stump (for
+   *  a sapling) when it stood on the ground. Null when the log isn't a tree's (somebody's build). */
+  private async fell(x: number, y: number, z: number, theirs: (x: number, z: number) => boolean): Promise<{ got: number; left: [number, number, number][]; stump: [number, number, number, boolean] | null } | null> {
+    const b = this.body;
+    const tree = treeOf((tx, ty, tz) => b.get(tx, ty, tz), x, y, z);
+    if (!tree || tree.logs.some(([lx, , lz]) => theirs(lx, lz))) return null;
+    const { logs, foot } = tree;
+    const held = () => b.count(B.OAK_LOG) + b.count(B.BIRCH_LOG) + b.count(B.PALM_LOG);
+    const had = held();
+    const kind = b.get(...foot);
+    const under = b.get(foot[0], foot[1] - 1, foot[2]);
+    const stump: [number, number, number, boolean] | null = (under === B.GRASS || under === B.DIRT) && !theirs(foot[0], foot[2]) ? [foot[0], foot[1], foot[2], kind === B.BIRCH_LOG] : null;
+    const left = () => logs.filter((c) => LOG_IDS.has(b.get(...c)));
+    b.action = `cutting down a tree at x=${foot[0]} z=${foot[2]} (${logs.length} logs)`;
+    // from the ground: the logs it can walk up to, lowest first
+    for (const c of [...logs].sort((p, q) => p[1] - q[1])) {
+      if (b.abort || b.dead) break;
+      if (!LOG_IDS.has(b.get(...c))) continue;
+      const far = b.reachTo(...c) > 4.3;
+      if (far && c[1] > b.phys.y + 2) continue;
+      await b.mine(c[0], c[1], c[2], far);
+    }
+    // the rest from a pillar up the trunk's own column, where its lowest log left was standing (the foot's column for
+    // a straight trunk)
+    const rest = left();
+    if (rest.length && !b.abort && !b.dead) {
+      const low = rest.reduce((a, c) => (c[1] < a[1] ? c : a));
+      let [cx, cy, cz] = [low[0], low[1], low[2]];
+      while (cy > foot[1] - 1 && !SOLID[b.get(cx, cy - 1, cz)]) cy--;
+      b.action = `climbing up the trunk at x=${cx} z=${cz} for the logs out of reach`;
+      await b.goto(cx + 0.5, cy, cz + 0.5, 0.35, { maxMs: 12000 });
+      const there = Math.hypot(b.phys.x - cx - 0.5, b.phys.z - cz - 0.5) < 0.7;
+      // a pillar wants blocks to stand on: planks from a log it just cut, when it carries nothing else
+      if (there && !b.fillerBlock() && held() > 0) {
+        const planks = b.count(B.BIRCH_LOG) ? "birch_planks" : b.count(B.OAK_LOG) ? "oak_planks" : "palm_planks";
+        await b.craft(planks, 1);
+      }
+      if (there && b.fillerBlock()) {
+        const pillar: [number, number, number][] = [];
+        const top = Math.max(...logs.map((c) => c[1]));
+        for (let k = 0; k < 14 && left().length && !b.abort && !b.dead; k++) {
+          for (const c of left()) if (b.reachTo(...c) <= 4.3) await b.mine(c[0], c[1], c[2], false);
+          if (!left().length) break;
+          const px = Math.floor(b.phys.x);
+          const py = Math.floor(b.phys.y + 0.1);
+          const pz = Math.floor(b.phys.z);
+          if (py > top || !b.fillerBlock()) break;
+          if ((await b.pillarUp(1)) < 1) break;
+          pillar.push([px, py, pz]);
+        }
+        // back down its own pillar, taking its blocks back
+        for (let k = pillar.length - 1; k >= 0 && !b.dead; k--) {
+          const [px, py, pz] = pillar[k];
+          if (!SOLID[b.get(px, py, pz)] || !(await b.mine(px, py, pz, false))) break;
+          await b.dropInto(px, py, pz);
+        }
+      }
+    }
+    await b.pickUp(6, 6000);
+    return { got: held() - had, left: left(), stump };
+  }
+
   /** Saplings back in where it cut trees down: the leaves hanging over each stump broken (one in twenty drops a
    *  sapling, and it tidies the canopy away), a sapling planted on the stump. How many went in. */
   private async replant(stumps: [number, number, number, boolean][]): Promise<number> {
     const b = this.body;
     let planted = 0;
+    // what it waits, all told, for a canopy to drop a sapling as it withers
+    let patience = 20000;
     for (const [x, y, z, birch] of stumps.slice(0, 6)) {
       if (b.abort || b.dead || b.isNight()) break;
       const below = b.get(x, y - 1, z);
       if (b.get(x, y, z) !== B.AIR || (below !== B.GRASS && below !== B.DIRT) || SOLID[b.get(x, y + 1, z)]) continue;
       const sap = birch ? B.BIRCH_SAPLING : B.OAK_SAPLING;
+      // over to the stump: the saplings its canopy drops as the leaves wither fall round it, and its leaves are in
+      // reach from there (from the last tree it cut, the first ones' stumps were out of sight)
+      if (Math.hypot(x + 0.5 - b.phys.x, z + 0.5 - b.phys.z) > 2.5) await b.goto(x + 0.5, y, z + 0.5, 2, { maxMs: 15000 });
+      if (!b.has(sap)) await b.pickUp(6, 2500);
       if (!b.has(sap)) {
         const leaves = b.findBlocks([B.OAK_LEAVES, B.BIRCH_LEAVES], 7, 40).filter(([lx, ly, lz]) => Math.abs(lx - x) <= 3 && Math.abs(lz - z) <= 3 && ly >= y && b.reachTo(lx, ly, lz) <= 4.3);
-        for (const [lx, ly, lz] of leaves.slice(0, 16)) {
+        // (one leaf in twenty gives a sapling: thirty make it all but sure; the rest of the canopy withers by itself)
+        for (const [lx, ly, lz] of leaves.slice(0, 30)) {
           if (b.abort || b.dead || b.has(sap)) break;
           await b.mine(lx, ly, lz, false);
         }
         await b.pickUp(5, 3000);
+      }
+      // none yet: the canopy withers by itself over the next half minute, its saplings falling round the stump
+      while (!b.has(sap) && patience > 0 && !b.abort && !b.dead) {
+        const t = Date.now();
+        await b.wait(40);
+        await b.pickUp(6, 2000);
+        patience -= Date.now() - t;
       }
       if (!b.has(sap)) continue;
       if (await b.place(sap, x, y, z, 8000)) planted++;

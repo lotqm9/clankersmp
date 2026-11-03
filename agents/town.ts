@@ -386,7 +386,32 @@ export function chooseLot(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, buil
   lots.sort((a, b) => score(a) - score(b));
   const plaza = plazaRect(c);
   const all = [...builds.filter((b) => b.kind !== "road" && b.kind !== "wall").map((b) => b as Rect), ...avoid, ...keptLots(c, builds).filter((r) => !lots.some((l) => (l.side === 0 || l.side === 3) && l.x0 === r.x0 && l.z0 === r.z0))];
+  // the cell out in front of every door (its path to the street starts there): nothing new stands on one, and a new
+  // building's own door doesn't open onto something (an arch across the avenue stood with its piers on the doors of
+  // the two houses facing each other across it, once the first houses were cottages: town-plan-test, 78e3e64)
+  const out = (b: Building): [number, number] | null => {
+    const d = doorStep(b);
+    if (!d) return null;
+    const [fx, fz] = [[0, -1], [1, 0], [0, 1], [-1, 0]][b.face ?? 0];
+    return [d[0] + fx, d[1] + fz];
+  };
+  const doors: [number, number][] = [];
+  for (const b of builds) {
+    if (b.kind === "road" || b.kind === "wall" || b.kind === "farm" || b.kind === "lamp" || b.kind === "plaza") continue;
+    const o = out(b);
+    if (o) doors.push(o);
+  }
+  const inRect = (r: Rect, [x, z]: [number, number]) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1;
+  const blocksDoor = (l: Lot) => {
+    if (doors.some((d) => inRect(l, d))) return true;
+    const o = out({ kind, design: l.design, x0: l.x0, z0: l.z0, x1: l.x1, z1: l.z1, y: 0, face: l.face, by: [], done: false, at: 0 } as Building);
+    return !!o && all.some((r) => inRect(r, o));
+  };
   for (const l of lots) {
+    if (blocksDoor(l)) {
+      no("a door");
+      continue;
+    }
     if (l.side >= 3) {
       // over a gate or across an avenue: nothing else there (a building may stand right beside it), never on the
       // plaza, ground that takes it

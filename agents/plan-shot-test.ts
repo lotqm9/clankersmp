@@ -33,8 +33,9 @@ for (const [i, b] of bodies.entries()) {
 }
 cmd(b0, "/time 2000");
 await b0.wait(40);
-const dir = mkdtempSync(join(tmpdir(), "clanker-plan-"));
-writeFileSync(join(dir, "pack.json"), JSON.stringify({ plan: "", by: "", base: { x: ax, y: gy + 1, z: az }, houses: {}, builds: [], trades: 0, stage: -1 }));
+// (PACK_DIR: carry on with a pack that already has a town, the team test's say)
+const dir = process.env.PACK_DIR || mkdtempSync(join(tmpdir(), "clanker-plan-"));
+if (!process.env.PACK_DIR) writeFileSync(join(dir, "pack.json"), JSON.stringify({ plan: "", by: "", base: { x: ax, y: gy + 1, z: az }, houses: {}, builds: [], trades: 0, stage: -1 }));
 process.env.AGENT_STATE_DIR = dir;
 const { Brain } = await import("./brain.ts");
 type T = { load(): void; exec(n: string, i: Record<string, unknown>): Promise<string>; beat(): void; projectBill(p: { kind: string; up: boolean }): Map<number, number> };

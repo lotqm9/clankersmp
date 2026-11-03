@@ -695,7 +695,7 @@ export class Body {
       this.input.strafe = 0;
       this.input.sprint = false;
       this.input.jump = floorY - this.phys.y > 0.55 || (this.phys.collidedH && this.phys.onGround && this.stepAhead()) || this.phys.inWater;
-      if (!this.phys.inWater && (this.waterAhead() || this.dropAhead() > (this.stats.hp <= 6 ? 1 : 3))) this.input.forward = 0;
+      if (!this.phys.inWater && ((!this.swimming && this.waterAhead()) || this.dropAhead() > this.maxDrop())) this.input.forward = 0;
       return;
     }
     let lead = 0;
@@ -713,8 +713,10 @@ export class Body {
     this.input.jump = (floorY - this.phys.y > 0.55 && d < 1.8) || (this.phys.collidedH && this.phys.onGround && this.stepAhead()) || this.phys.inWater;
     this.input.sprint = far > 7 && off < 20 && Math.abs(lead) < 20 && this.stats.food > 6 && !this.phys.inWater;
     // on dry land it never walks into water (ponds with steep banks are traps): only a swimmer swims; and never off a
-    // ledge higher than it can take (a fall of more than 3 blocks hurts, and on low health any fall can kill)
-    if (!this.phys.inWater && (this.waterAhead() || this.dropAhead() > (this.stats.hp <= 6 ? 1 : 3))) {
+    // ledge deeper than the drops its path search takes (maxDrop). Swimming on purpose (no dry way), into the water it
+    // goes, off a bank too (dropAhead says 99 for a drop into water)
+    const fall = this.dropAhead();
+    if (!this.phys.inWater && (this.swimming ? fall !== 99 && fall > this.maxDrop() : this.waterAhead() || fall > this.maxDrop())) {
       this.input.forward = 0;
       this.input.sprint = false;
     }
@@ -742,7 +744,7 @@ export class Body {
       this.input.sprint = false;
       this.input.sneak = false;
       this.input.jump = this.phys.collidedH && this.phys.onGround && this.stepAhead();
-      if (!this.phys.inWater && (this.waterAhead() || this.dropAhead() > (this.stats.hp <= 6 ? 1 : 3))) this.input.forward = 0;
+      if (!this.phys.inWater && (this.waterAhead() || this.dropAhead() > this.maxDrop())) this.input.forward = 0;
       await this.nextTick();
     }
     this.halt();
@@ -764,12 +766,21 @@ export class Body {
     return false;
   }
 
+  /** The deepest drop it walks off, and plans paths over: a fall does no harm up to 6 blocks (SAFE_FALL, half Java's
+   *  damage past it), so 5 (6 at the top of a jump) when healthy, 3 when it's low. At 3 (from a belief that a fall
+   *  of more than 3 hurts) a steep hillside was a wall: haiku stood on ledges west of season 14's town, "couldn't get
+   *  further", for minutes. */
+  maxDrop(): number {
+    return this.stats.hp > 6 ? 5 : 3;
+  }
+
   /** How far down the ground is just ahead (0 when it's level or higher; up to 8). */
   private dropAhead(): number {
     if (!this.phys.onGround) return 0;
     const a = (this.input.yaw * Math.PI) / 180;
     const y = Math.floor(this.phys.y + 0.1);
-    let worst = 0;
+    // the first drop it would step off into (the deepest of the two looks ahead was the step after next as well: on
+    // a slope three or four blocks a step, seven or eight, and it stood at the edge of a step it could take)
     for (const reach of [0.6, 1.1]) {
       const x = Math.floor(this.phys.x - Math.sin(a) * reach);
       const z = Math.floor(this.phys.z + Math.cos(a) * reach);
@@ -777,9 +788,9 @@ export class Body {
       let d = 1;
       while (d < 8 && !SOLID[this.get(x, y - 1 - d, z)] && !IS_WATER[this.get(x, y - 1 - d, z)]) d++;
       if (IS_WATER[this.get(x, y - 1 - d, z)]) return 99; // a drop into water: a pond below a bank is a trap too
-      worst = Math.max(worst, d);
+      return d;
     }
-    return worst;
+    return 0;
   }
 
   /** Water just ahead of its feet, where its next steps would land. */
@@ -796,7 +807,7 @@ export class Body {
 
   /** The way toward a point: the path (empty when it is already as near as it can walk), and whether it is shut in (a
    *  pit, a sealed hole: the search found next to nowhere to go). Null when it isn't standing anywhere. */
-  private plan(x: number, y: number, z: number): { path: PathPoint[]; boxed: boolean } | null {
+  private plan(x: number, y: number, z: number, wet = false): { path: PathPoint[]; boxed: boolean } | null {
     // around water, not through it (a swim is slow and ends in flooded holes), unless it's already swimming
     // room to find the way round a ridge or a ravine on a long walk home (5000 nodes in 40 blocks gave up at 38 out)
     const far = Math.hypot(x - this.phys.x, z - this.phys.z) > 24;
@@ -804,15 +815,45 @@ export class Body {
     // "built" the watchtower from a tunnel under it
     // (no height known, NaN: the column alone, as before)
     const gy = Number.isFinite(y) ? y : undefined;
-    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z), y: gy });
+    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater || wet, aim: true, drop: this.maxDrop() }, { x: Math.floor(x), z: Math.floor(z), y: gy });
     if (!s) return null;
-    const i = s.reached >= 0 ? s.reached : s.closestTo(x, z, gy);
-    // out of reach: the spot nearest it, unless that is no nearer than where it stands. Two spots about as near as each
-    // other, and it walked from one to the other and back, replanning each time (up a hill it couldn't climb: 250
-    // blocks in 90 s for a goal 15 off)
-    if (s.reached < 0 && i > 0) {
-      const near = (k: number) => Math.hypot(s.pts[k].x + 0.5 - x, s.pts[k].z + 0.5 - z, gy === undefined ? 0 : s.pts[k].f - gy);
-      if (near(i) > near(0) - 0.7) return { path: [], boxed: s.pts.length < 8 };
+    if (s.reached >= 0) return { path: s.pathTo(s.reached), boxed: s.pts.length < 8 };
+    // out of reach: the spot nearest it. For a place out under the sky (a town, a spot on a hill), a spot out under the
+    // sky: going down toward a town below, a tunnel or a cave into the hill was always "nearer" than the open slope,
+    // and it walked into the hill and stopped there (haiku, season 14, west of the town, "couldn't get further")
+    const surface = gy !== undefined && this.underSky(Math.floor(x), Math.floor(gy + 0.1), Math.floor(z));
+    const tops = new Map<number, number>();
+    const open = (k: number) => {
+      const p = s.pts[k];
+      const key = p.x | (p.z << 9);
+      let t = tops.get(key);
+      if (t === undefined) {
+        t = 0;
+        for (let yy = 127; yy > 0; yy--) {
+          const id = this.get(p.x, yy, p.z);
+          if (SOLID[id] && !TREE.has(id)) {
+            t = yy;
+            break;
+          }
+        }
+        tops.set(key, t);
+      }
+      return p.f > t + 0.4;
+    };
+    const score = (k: number) => (s.pts[k].x + 0.5 - x) ** 2 + (s.pts[k].z + 0.5 - z) ** 2 + (gy === undefined ? 0 : (s.pts[k].f - gy) ** 2) + s.cost[k] * 0.01;
+    let i = -1;
+    let best = Infinity;
+    if (surface) for (let k = 0; k < s.pts.length; k++) if (open(k) && score(k) < best) [best, i] = [score(k), k];
+    if (i < 0) i = s.closestTo(x, z, gy);
+    // and not off to a spot no nearer than where it stands: two spots about as near as each other, and it walked from
+    // one to the other and back, replanning each time (up a hill it couldn't climb: 250 blocks in 90 s for a goal 15
+    // off). Nearer across the ground, or nearer its height (5 blocks down toward a town 60 off and 15 below is
+    // hardly nearer as the crow flies, and it stood at the top of the drop), or out of a tunnel onto the open ground
+    if (i > 0 && !(surface && open(i) && !open(0))) {
+      const flat = (k: number) => Math.hypot(s.pts[k].x + 0.5 - x, s.pts[k].z + 0.5 - z);
+      const rise = (k: number) => (gy === undefined ? 0 : Math.abs(s.pts[k].f - gy));
+      const nearer = flat(i) < flat(0) - 0.7 || (rise(i) < rise(0) - 1.5 && flat(i) < flat(0) + 1);
+      if (!nearer) return { path: [], boxed: s.pts.length < 8 };
     }
     return { path: s.pathTo(i), boxed: s.pts.length < 8 };
   }
@@ -828,6 +869,8 @@ export class Body {
     let pushes = 0;
     let dugOut = false;
     let climbs = 0;
+    let swims = 0;
+    let wetAt: [number, number, number] | null = null;
     // setting off from inside its own house: open the doorway first (blocked up for the night, or a shut door), or
     // every way out is a wall it won't dig through
     if (this.home && this.atHome() && Math.hypot(x - this.homeMiddle()[0], z - this.homeMiddle()[1]) > 1.5) await this.openDoorway();
@@ -854,7 +897,12 @@ export class Body {
       // at the top of a jump against a fence, it started from on top of the fence and got a path over it it could
       // never walk)
       for (let k = 0; k < 12 && !this.phys.onGround && !this.phys.inWater && !this.abort && !this.dead; k++) await this.nextTick();
-      if (this.phys.inWater && !this.plan(x, y, z)?.path.length) await this.escapeWater(200);
+      // (and out when the way on ends in the water: a pond under cliffs, where the nearest spot to the goal was the water
+      // it floated in, and the walk ended there)
+      if (this.phys.inWater) {
+        const wp = this.plan(x, y, z);
+        if (!wp?.path.length || wp.path[wp.path.length - 1].water) await this.escapeWater(200);
+      }
       const p = this.plan(x, y, z);
       if (!p) {
         // nowhere to stand (mid-air, swimming): push straight at it for a moment, and shake loose only if that got it
@@ -872,11 +920,33 @@ export class Body {
       // no step to take: it's as near as it can walk. The last bit (the point is in its cell or the next): small steps
       // over to it (a path ends at a block's middle, and a goal a little off it was "not there yet", every time)
       if (d < 2.5 && (await this.shuffle(x, z, 30, arrived))) continue;
-      // under the ground, and where it's going is a place up on it: no way there through the tunnel or the cave, so up
-      // and out first rather than pace the rock (opus paced its hole for a minute and a half on its way home, twice).
-      // By day only (out of its hole at night is where the archers are), never up through a building's floor, and
-      // not for a block it's after (ore in the rock is the tunnel's job, not a walk to the surface)
-      if (!dugOut && !this.outing && !this.isNight() && y - this.phys.y > 4 && d > 4 && this.standable(x, y, z) && this.underRock()) {
+      // no dry way on from the open ground (down a cliff into a dry spot by a pond, every way on across the water):
+      // swim it, as a player would, rather than stand there (up to three swims, each looked for from somewhere new: a
+      // pond under cliffs can take two). Never under the rock: a flooded tunnel is no way out
+      if (swims < 3 && !this.covered() && (!wetAt || Math.hypot(this.phys.x - wetAt[0], this.phys.y - wetAt[1], this.phys.z - wetAt[2]) > 2)) {
+        wetAt = [this.phys.x, this.phys.y, this.phys.z];
+        const w = this.plan(x, y, z, true);
+        if (w?.path.some((n) => n.water)) {
+          swims++;
+          this.swimming = true;
+          try {
+            await this.follow(w.path, x, z, arrived);
+          } finally {
+            this.swimming = false;
+          }
+          // somewhere new: the tries at a door, a dig and a hop out start again (spent on the bank before the swim,
+          // the first stop after it ended the walk)
+          pushes = 0;
+          climbs = 0;
+          continue;
+        }
+      }
+      // under the ground, and where it's going is a place up on it, or out under the sky (a town down the hill: haiku in
+      // a tunnel under the hillside, season 14): no way there through the tunnel or the cave, so up and out first
+      // rather than pace the rock (opus paced its hole for a minute and a half on its way home, twice). By day only (out
+      // of its hole at night is where the archers are), never up through a building's floor, and not for a block it's
+      // after (ore in the rock is the tunnel's job, not a walk to the surface)
+      if (!dugOut && !this.outing && !this.isNight() && (y - this.phys.y > 4 || (d > 8 && this.underSky(Math.floor(x), Math.floor(y + 0.1), Math.floor(z)))) && d > 4 && this.standable(x, y, z) && this.underRock()) {
         dugOut = true;
         await this.digOut();
         continue;
@@ -973,7 +1043,9 @@ export class Body {
         const d = Math.hypot(n.x + 0.5 - px, n.z + 0.5 - pz);
         const nn = path[i + 1];
         const nearer = nn && Math.hypot(nn.x + 0.5 - px, nn.z + 0.5 - pz) < d && Math.abs(nn.f - n.f) < 0.6;
-        if ((d < 0.55 && py > n.f - 0.6) || (nearer && d < 1.4)) i++;
+        // (reached on its level: half a block off a node five blocks down, still on the ledge above it, was "there",
+        // and the path ended at the top of the drop)
+        if ((d < 0.55 && py > n.f - 0.6 && py < n.f + 1.3) || (nearer && d < 1.4)) i++;
         else break;
       }
       if (i >= path.length) return i;
@@ -1069,6 +1141,10 @@ export class Body {
     return false;
   }
 
+  /** Swimming on purpose, along a path that crosses water (goto, with no dry way): steer steps into the water, and
+   *  the brain's "stuck in the water" reflex leaves it be. */
+  swimming = false;
+
   /** The side nudge last stepped to (0 or 1), and when. */
   private side = 0;
   private sideAt = 0;
@@ -1090,7 +1166,7 @@ export class Body {
     const z = Math.floor(this.phys.z);
     const room = (cx: number, cy: number, cz: number) => !SOLID[this.get(cx, cy, cz)] && !IS_WATER[this.get(cx, cy, cz)];
     const toward = tx !== undefined && tz !== undefined && Math.hypot(tx - this.phys.x, tz - this.phys.z) > 0.3 ? (deg(Math.atan2(-(tx - this.phys.x), tz - this.phys.z)) + 360) % 360 : this.yaw;
-    const ways: { yaw: number; off: number; up: boolean }[] = [];
+    const ways: { yaw: number; off: number; up: boolean; drop?: boolean }[] = [];
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
       const cx = x + dx;
       const cz = z + dz;
@@ -1103,20 +1179,43 @@ export class Body {
       const yaw = (deg(Math.atan2(-dx, dz)) + 360) % 360;
       ways.push({ yaw, off: Math.abs(angleDiff(yaw, toward)), up });
     }
-    ways.sort((a, b) => a.off - b.off);
+    // on a ledge with every way off it a drop deeper than a walk takes (a cliff face; haiku, season 14, "stopped at
+    // x=129 z=258, couldn't get further" seven times, every way off four blocks down): over the edge the shortest way
+    // down, as a player would, onto dry ground. A fall does nothing up to 6 blocks (SAFE_FALL), and 8 is half a heart
+    if (!ways.length) {
+      const most = this.stats.hp >= 12 ? 8 : 6;
+      const drops: { yaw: number; off: number; fall: number }[] = [];
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const cx = x + dx;
+        const cz = z + dz;
+        if (!room(cx, y, cz) || !room(cx, y + 1, cz)) continue;
+        let k = 1;
+        while (k <= most + 1 && room(cx, y - k, cz)) k++;
+        const fall = k - 1; // it lands on the block at y - k, its feet at y - k + 1
+        if (fall < 1 || fall > most || !SOLID[this.get(cx, y - k, cz)] || IS_WATER[this.get(cx, y - k + 1, cz)]) continue;
+        const yaw = (deg(Math.atan2(-dx, dz)) + 360) % 360;
+        drops.push({ yaw, off: Math.abs(angleDiff(yaw, toward)), fall });
+      }
+      drops.sort((a, b) => a.fall - b.fall || a.off - b.off);
+      for (const w of drops) ways.push({ yaw: w.yaw, off: w.off, up: false, drop: true });
+    } else ways.sort((a, b) => a.off - b.off);
     for (const w of ways.slice(0, 2)) {
       if (this.abort || this.dead) return;
       const x0 = this.phys.x;
       const z0 = this.phys.z;
       this.wantYaw = w.yaw;
-      for (let t = 0; t < 14 && !this.abort && !this.dead && Math.hypot(this.phys.x - x0, this.phys.z - z0) < 1; t++) {
+      for (let t = 0; t < (w.drop ? 24 : 14) && !this.abort && !this.dead && Math.hypot(this.phys.x - x0, this.phys.z - z0) < 1; t++) {
+        // over an edge: slowly, and the keys let go once it's falling, so it lands on the ledge it chose (at a walk,
+        // it sailed past it and down two more: a 13-block fall)
+        if (w.drop && !this.phys.onGround) break;
         this.input.yaw = w.yaw;
-        this.input.forward = 1;
-        this.input.jump = w.up || (this.phys.collidedH && this.phys.onGround);
+        this.input.forward = w.drop ? 0.4 : 1;
+        this.input.jump = w.up || (!w.drop && this.phys.collidedH && this.phys.onGround);
         await this.nextTick();
       }
       this.halt();
-      if (Math.hypot(this.phys.x - x0, this.phys.z - z0) > 0.8) return;
+      if (w.drop) for (let t = 0; t < 40 && !this.phys.onGround && !this.abort && !this.dead; t++) await this.nextTick();
+      if (Math.hypot(this.phys.x - x0, this.phys.z - z0) > 0.8 || (w.drop && this.phys.y < Math.floor(y) - 0.5)) return;
     }
   }
 
@@ -2651,6 +2750,7 @@ export class Body {
     for (let k = 0; k < 6 && !this.abort && !this.dead && !this.outInTheOpen(); k++) if (!(await this.walkUp())) break;
     let dir = -1; // the staircase keeps going the same way
     let walls = 0;
+    const tried = new Set<string>(); // the walls it has gone to, to cut a stair into
     for (let k = 0; k < 140 && !this.abort && !this.dead && !this.outInTheOpen(); k++) {
       const x = Math.floor(this.phys.x);
       const y = Math.floor(this.phys.y + 0.1);
@@ -2665,7 +2765,7 @@ export class Body {
         continue;
       }
       // in the open (a cave floor): go to the nearest wall and cut the stairs into it, toward the wall
-      const wall = ++walls > 30 ? -1 : await this.toWall();
+      const wall = ++walls > 30 ? -1 : await this.toWall(tried);
       this.debug(`dig_out: no step at y=${y}, wall ${wall}`);
       if (wall < 0) break;
       dir = wall;
@@ -2676,43 +2776,80 @@ export class Body {
     return `still underground at y=${Math.floor(this.phys.y)}${up > 0 ? ` (climbed ${up} blocks)` : ""}`;
   }
 
-  /** Walk to the highest spot it can reach on foot from here (a cave's way up). False when nothing is higher. */
+  /** Out from under the rock on foot: under cover, the nearest spot out under the open sky it can walk to (the top of
+   *  the stair it came down); else, or already under the sky (a pit, a ravine's floor), the highest spot it can reach
+   *  (a cave's way up). Two steps down its own stair in a hillside, it walked off to the highest spot in 32 blocks, up
+   *  the hill, and back: 31 blocks in a minute to end 3 from where it started (haiku, season 16). False when there's
+   *  nowhere to go. */
   async walkUp(): Promise<boolean> {
-    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: 6000, radius: 32, water: false });
+    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: 6000, radius: 32, water: false, drop: this.maxDrop() });
     if (!s) return false;
-    let best = 0;
-    for (let i = 1; i < s.pts.length; i++) {
-      const a = s.pts[i];
-      const b = s.pts[best];
-      if (a.f > b.f + 0.5 || (Math.abs(a.f - b.f) <= 0.5 && s.cost[i] < s.cost[best])) best = i;
+    const y0 = this.phys.y;
+    let best = -1;
+    if (!this.surfaced()) {
+      const tops = new Map<number, number>();
+      const sky = (i: number) => {
+        const p = s.pts[i];
+        const key = p.x | (p.z << 9);
+        let t = tops.get(key);
+        if (t === undefined) {
+          t = 0;
+          for (let yy = 127; yy > 0; yy--) {
+            const id = this.get(p.x, yy, p.z);
+            if (SOLID[id] && !TREE.has(id)) {
+              t = yy;
+              break;
+            }
+          }
+          tops.set(key, t);
+        }
+        return p.f > t + 0.4;
+      };
+      for (let i = 1; i < s.pts.length; i++) if (s.pts[i].f >= y0 - 0.5 && sky(i) && (best < 0 || s.cost[i] < s.cost[best])) best = i;
+    }
+    if (best < 0) {
+      best = 0;
+      for (let i = 1; i < s.pts.length; i++) {
+        const a = s.pts[i];
+        const b = s.pts[best];
+        if (a.f > b.f + 0.5 || (Math.abs(a.f - b.f) <= 0.5 && s.cost[i] < s.cost[best])) best = i;
+      }
+      if (s.pts[best].f < y0 + 1.5) return false;
     }
     const top = s.pts[best];
-    if (top.f < this.phys.y + 1.5) return false;
-    const y0 = this.phys.y;
-    await this.goto(top.x + 0.5, top.f, top.z + 0.5, 1.2, { maxMs: 30000 });
-    return this.phys.y > y0 + 1;
+    // on the spot at its height (a block off and a block down, the step it wanted, was "there" at 1.2 across, and it
+    // cut a new step into the rock beside its own stair)
+    const there = () => Math.hypot(top.x + 0.5 - this.phys.x, top.z + 0.5 - this.phys.z) < 0.8 && Math.abs(this.phys.y - top.f) < 0.6;
+    await this.goto(top.x + 0.5, top.f, top.z + 0.5, 0.8, { maxMs: 30000, done: there });
+    return this.phys.y > y0 + 1 || (this.surfaced() && there());
   }
 
   /** Next to the nearest wall (rock at its feet and head height), for a staircase: returns the direction index of
    *  the wall from where it ends up (as stepUp numbers them), or -1 if there is none near. */
-  async toWall(): Promise<number> {
+  async toWall(tried?: Set<string>): Promise<number> {
     const fx = Math.floor(this.phys.x);
     const fy = Math.floor(this.phys.y + 0.1);
     const fz = Math.floor(this.phys.z);
-    let best: [number, number] | null = null;
+    let best = null as [number, number] | null;
     let bd = Infinity;
-    for (let dz = -6; dz <= 6; dz++)
-      for (let dx = -6; dx <= 6; dx++) {
-        const x = fx + dx;
-        const z = fz + dz;
-        if (!SOLID[this.get(x, fy, z)] || !SOLID[this.get(x, fy + 1, z)] || this.get(x, fy + 1, z) === B.BEDROCK) continue;
-        const d = Math.hypot(dx, dz);
-        if (d >= 1 && d < bd) {
-          bd = d;
-          best = [x, z];
+    // within 6, else within 12 (in a big cavern every wall was further, and it gave up "still underground"); never a
+    // wall it has already tried to cut a stair into (back to the same rock, again and again, is pacing)
+    for (const r of [6, 12]) {
+      for (let dz = -r; dz <= r; dz++)
+        for (let dx = -r; dx <= r; dx++) {
+          const x = fx + dx;
+          const z = fz + dz;
+          if (!SOLID[this.get(x, fy, z)] || !SOLID[this.get(x, fy + 1, z)] || this.get(x, fy + 1, z) === B.BEDROCK || tried?.has(`${x},${fy},${z}`)) continue;
+          const d = Math.hypot(dx, dz);
+          if (d >= 1 && d < bd) {
+            bd = d;
+            best = [x, z];
+          }
         }
-      }
+      if (best) break;
+    }
     if (!best) return -1;
+    tried?.add(`${best[0]},${fy},${best[1]}`);
     const [wx, wz] = best;
     // stand in the cell right beside the wall (on its side facing us), centred, so the first step is that rock
     const dirs: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -2815,8 +2952,10 @@ export class Body {
         continue;
       }
       if (!SOLID[this.get(sx, y, sz)]) {
-        // nothing to step onto: build the step, if there is something under it to build on
+        // nothing to step onto: build the step, if there is something under it to build on (from the middle of its own
+        // cell: off it, its body poked into the step's cell, the block was refused and it gave up "still underground")
         const filler = this.fillerBlock();
+        if (filler && SOLID[this.get(sx, y - 1, sz)] && Math.hypot(x + 0.5 - this.phys.x, z + 0.5 - this.phys.z) > 0.15) await this.center(x, z, 12);
         if (!filler || !SOLID[this.get(sx, y - 1, sz)] || !(await this.place(filler, sx, y, sz))) {
           this.debug(`stepUp ${d}: no step (filler ${filler}, under solid ${SOLID[this.get(sx, y - 1, sz)]})`);
           continue;

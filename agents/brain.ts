@@ -1547,6 +1547,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (n) this.log.push(`planted ${n} sapling${n > 1 ? "s" : ""} where the trees were cut`);
     }
     if (got >= count) return `got ${got} ${item}`;
+    // ore with none in sight, standing on ground it mustn't mine under (the town, a village): the staircase that finds
+    // ore in the rock can't start here, so say so (opus asked for iron_ore three times running in town, season 16)
+    const oreOnly = plan.blocks.every((id) => BLOCKS[id]?.key?.endsWith("_ore"));
+    if (!tried && oreOnly && offLimits(b.phys.x, b.phys.z)) return `no ${item} in sight, and you're on the town's ground, where nobody mines: walk 30 or more blocks out past the buildings (go_to), then collect ${item} again (a staircase down from there finds it in the rock)`;
     if (!tried) return `no ${item} within 32 blocks${plan.blocks.includes(B.STONE) ? " (dig_down to reach stone)" : " (explore to find some)"}`;
     return `got ${got} of ${count} ${item}`;
   }

@@ -195,7 +195,7 @@ export function itemOf(state: number): number {
 /** Placed last, once the building is up: they stand on, hang from or lean on the blocks round them. */
 const late = (id: number) =>
   id === B.TORCH || isLantern(id) || isDoor(id) || isLadder(id) || isPot(id) || isChest(id) || isFurnace(id) || isTrapdoor(id) || isGate(id) ||
-  id === B.BARREL || id === B.CRAFTING_TABLE || id === B.WATER || id === B.HAY_BALE || id === B.BOOKSHELF;
+  id === B.BARREL || id === B.CRAFTING_TABLE || id === B.WATER || id === B.HAY_BALE || id === B.BOOKSHELF || (id >= B.RED_BED && id < B.RED_BED + 8);
 
 // ---------------------------------------------------------------- the plans
 
@@ -947,13 +947,15 @@ export class Draft {
   inside(u: number, v: number) {
     return u >= -this.m && v >= -this.m && u < this.W + this.m && v < this.D + this.m;
   }
-  /** Put a block (or a cell kind: "a" keep clear, "o" open, "?p" a path) in a cell; 0 keeps it clear. */
-  put(u: number, dy: number, v: number, k: string | number): void {
+  /** Put a block (or a cell kind: "a" keep clear, "o" open, "?p" a path) in a cell; 0 keeps it clear. `last`: it goes
+   *  in with the furniture, after the rest (an upper floor: the room stays open to the roof while the roof goes on,
+   *  for the pillar a builder climbs to reach it). */
+  put(u: number, dy: number, v: number, k: string | number, last = false): void {
     if (!this.inside(u, v)) return;
     const [x, z] = this.at(u, v);
     const kk = typeof k === "number" ? (k ? exact(k) : "a") : k;
     const t = cellTarget(kk);
-    this.cells.set(`${x},${this.s.y + dy},${z}`, { x, y: this.s.y + dy, z, k: kk, late: !!t && late(t.id) });
+    this.cells.set(`${x},${this.s.y + dy},${z}`, { x, y: this.s.y + dy, z, k: kk, late: !!t && (last || late(t.id)) });
   }
   opt(u: number, dy: number, v: number, id: number): void {
     this.put(u, dy, v, optional(id));
@@ -1031,7 +1033,9 @@ function cottage(d: Draft): void {
       const edge = d.edge(u, v);
       d.put(u, -1, v, edge ? d.mat("footing") : d.mat("floor"));
       for (let dy = 0; dy < H; dy++) {
-        if (!edge) d.put(u, dy, v, floors.includes(dy) && !(u === ladderU && v === ladderV) ? d.mat("loft") || d.mat("floor") : "a");
+        // (the floor above goes in last: until then the room is open to the roof, and the pillar a builder climbs
+        // to reach the roof's middle stands on the floor below; the agents climb no ladders)
+        if (!edge) d.put(u, dy, v, floors.includes(dy) && !(u === ladderU && v === ladderV) ? d.mat("loft") || d.mat("floor") : "a", floors.includes(dy));
         else if (d.corner(u, v) || posts.some(([pu, pv]) => pu === u && pv === v)) d.put(u, dy, v, d.mat("post"));
         else d.put(u, dy, v, dy < (bp.baseCourses ?? 0) ? d.mat("base") : floors.includes(dy) && d.mat("band") ? d.mat("band") : d.mat("wall"));
       }

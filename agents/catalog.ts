@@ -223,12 +223,20 @@ function home(style: string, size: string, roof: string): Blueprint {
   }
   const framed = posts.filter(([u, v]) => !(v === 0 && u === mid));
   const flat = roof === "flat";
+  // a two-storey home keeps its roof the same at every tier: once the floor above is in, the middle of the roof is
+  // out of reach of any pillar (the pillar stands on the floor below, and the agents climb no ladders), so an upgrade
+  // never has to take the roof off
+  const own = parts(style);
+  if (z.floors) {
+    own.roof = all3(own.roof[1]);
+    own.ridge = all3(own.ridge[1]);
+  }
   return {
     kind: "house",
     what: `a ${st.name} ${z.name} with ${ROOFS[roof].name}: ${z.what}, furnished (a kitchen, a table and chairs, beds)`,
     shape: "cottage", core: z.core, eaves: 1, walls: z.walls, baseCourses: 1, ridge: ROOFS[roof].ridge, floors: z.floors,
     rooms: z.what,
-    parts: parts(style),
+    parts: own,
     posts: framed,
     windows: homeWindows(z, framed),
     doors: ["mid"],
@@ -393,9 +401,11 @@ function lighthouse(d: Draft): void {
       d.put(u, -1, v, edge ? d.mat("footing") : d.mat("floor"));
       for (let dy = 0; dy < H; dy++) d.put(u, dy, v, edge ? (Math.floor(dy / 2) % 2 ? d.mat("band") : d.mat("wall")) : "a");
     }
+  // (the gallery over the tower's hollow goes in last, with the beacon on it: till then a pillar up the hollow reaches
+  // the lamp room's cap)
   for (let v = -1; v <= D; v++)
     for (let u = -1; u <= W; u++) {
-      d.put(u, H, v, d.mat("gallery"));
+      d.put(u, H, v, d.mat("gallery"), u >= 1 && u <= W - 2 && v >= 1 && v <= D - 2);
       if (u === -1 || v === -1 || u === W || v === D) d.put(u, H + 1, v, d.mat("rail"));
     }
   for (let dy = 0; dy <= H; dy++) d.put(1, dy, D - 2, B.LADDER + d.OUT);
@@ -404,7 +414,7 @@ function lighthouse(d: Draft): void {
       const edge = d.edge(u, v);
       for (const dy of [H + 1, H + 2]) d.put(u, dy, v, !edge ? "a" : d.corner(u, v) ? d.mat("post") : u === mu && v === 0 ? "a" : d.mat("glass"));
     }
-  d.put(mu, H + 1, Math.floor((D - 1) / 2), d.mat("beacon"));
+  d.put(mu, H + 1, Math.floor((D - 1) / 2), d.mat("beacon"), true);
   hipRoof(d, H + 3, 0);
   furnish(d);
 }
@@ -673,9 +683,15 @@ function building(k: Kind, o: {
   doors?: Pos[]; chimney?: { tier: number; u: Pos }; posts?: [Pos, Pos][]; windows?: [Pos, number, Pos][]; over?: Record<string, Mat>; baseCourses?: number; shape?: string;
 }): Blueprint {
   const D = o.core[1];
+  // (with a floor above, the roof stays the same at every tier: see home())
+  const own = parts(o.style, o.over);
+  if (o.floors) {
+    own.roof = all3(own.roof[1]);
+    own.ridge = all3(own.ridge[1]);
+  }
   return {
     kind: k, what: o.what, shape: o.shape ?? "cottage", core: o.core, eaves: 1, walls: o.walls ?? 3, baseCourses: o.baseCourses ?? 1, ridge: o.ridge ?? "v", floors: o.floors,
-    rooms: o.rooms, parts: parts(o.style, o.over), posts: o.posts, doors: o.doors ?? ["mid"], chimney: o.chimney,
+    rooms: o.rooms, parts: own, posts: o.posts, doors: o.doors ?? ["mid"], chimney: o.chimney,
     windows: o.windows ?? [[1, 1, 0], [-2, 1, 0], [0, 1, 2], [-1, 1, 2], [0, 1, D > 6 ? -3 : 2], [-1, 1, D > 6 ? -3 : 2], ["mid", 1, -1]],
     furniture: o.furniture, tiers: o.tiers,
   };

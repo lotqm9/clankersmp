@@ -1893,6 +1893,123 @@ export class Body {
     return false;
   }
 
+  /** v14: can it get to a monster quickly on foot, so a charge closes in: a short way to a spot it can hit it from,
+   *  about level with it (an archer on a ravine's rim over the floor it stands on is out of reach however near it
+   *  looks: opus charged one twice from a pit and was shot dead, season 14). Asked a second and a half apart at most. */
+  /** Down in a pit or a ravine's floor: open sky, but walls two blocks or more over its feet within four blocks in five
+   *  or more of the eight ways out (out on open ground, a hillside or a valley, it's two or three). */
+  inPit(): boolean {
+    const x = Math.floor(this.phys.x);
+    const y = Math.floor(this.phys.y + 0.1);
+    const z = Math.floor(this.phys.z);
+    if (this.covered()) return false;
+    let walled = 0;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      for (let k = 1; k <= 4; k++) {
+        if (SOLID[this.get(x + dx * k, y + 2, z + dz * k)] && SOLID[this.get(x + dx * k, y + 1, z + dz * k)]) {
+          walled++;
+          break;
+        }
+      }
+    }
+    return walled >= 5;
+  }
+
+  canReach(m: { id: number; x: number; y: number; z: number }): boolean {
+    // out of a pit, or about level with it: a charge, as ever (on open ground a rattler up a slope is walked up to; a
+    // path search there sent fighters off behind blocks under fire, and one died of it in the tests)
+    if (Math.abs(m.y - this.phys.y) < 2 || !this.inPit()) return true;
+    const hit = this.reachSeen.get(m.id);
+    if (hit && Date.now() - hit.at < 1500) return hit.ok;
+    const ok = this.reachNow(m);
+    if (ok === null) return hit?.ok ?? false;
+    this.reachSeen.set(m.id, { at: Date.now(), ok });
+    if (this.reachSeen.size > 64) for (const [k, v] of this.reachSeen) if (Date.now() - v.at > 10000) this.reachSeen.delete(k);
+    return ok;
+  }
+  private reachSeen = new Map<number, { at: number; ok: boolean }>();
+  private reachNow(m: { x: number; y: number; z: number }): boolean | null {
+    const flat = Math.hypot(m.x - this.phys.x, m.z - this.phys.z);
+    // a swing from a spot's eyes to the monster's body (a rattler: 0.6 across, 1.95 high)
+    const swing = (x: number, f: number, z: number) => {
+      const cx = Math.max(m.x - 0.3, Math.min(x, m.x + 0.3));
+      const cy = Math.max(m.y, Math.min(f + EYE_HEIGHT, m.y + 1.95));
+      const cz = Math.max(m.z - 0.3, Math.min(z, m.z + 0.3));
+      return Math.hypot(cx - x, cy - f - EYE_HEIGHT, cz - z);
+    };
+    if (swing(this.phys.x, this.phys.y, this.phys.z) <= HIT_REACH) return true;
+    const gy = Math.floor(m.y + 0.1);
+    // (in the air or in the water there's nowhere to search from: no answer, the last one stands)
+    if (!this.phys.onGround || this.phys.inWater) return null;
+    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: 2500, radius: 28, water: false, aim: true }, { x: Math.floor(m.x), z: Math.floor(m.z), y: gy });
+    if (!s) return null;
+    // the nearest spot it can walk to that a swing reaches it from (up to a block more: it moves), on a short way
+    let best = -1;
+    for (let i = 0; i < s.pts.length; i++) {
+      const p = s.pts[i];
+      if (swing(p.x + 0.5, p.f, p.z + 0.5) > HIT_REACH + 0.4) continue;
+      if (best < 0 || s.cost[i] < s.cost[best]) best = i;
+    }
+    return best >= 0 && s.pathTo(best).length <= flat * 1.6 + 6;
+  }
+
+  /** Out of the sight of an archer up on the rim over it: a two-high nook dug one block into the wall on the archer's
+   *  side, rock over it, and in (the rim between them). True if it's in one, out of the archer's sight. */
+  async nookFrom(m: Seen): Promise<boolean> {
+    // to the foot of the wall on its side first (out in the middle of a ravine's floor there is none beside it)
+    {
+      const ux = m.x - this.phys.x;
+      const uz = m.z - this.phys.z;
+      const [ax, az] = Math.abs(ux) >= Math.abs(uz) ? [Math.sign(ux) || 1, 0] : [0, Math.sign(uz) || 1];
+      let cx = Math.floor(this.phys.x);
+      let cz = Math.floor(this.phys.z);
+      const fy = Math.floor(this.phys.y + 0.1);
+      for (let k = 0; k < 6; k++) {
+        const nx = cx + ax;
+        const nz = cz + az;
+        if (SOLID[this.get(nx, fy, nz)] || SOLID[this.get(nx, fy + 1, nz)] || !SOLID[this.get(nx, fy - 1, nz)] || IS_WATER[this.get(nx, fy, nz)]) break;
+        [cx, cz] = [nx, nz];
+      }
+      if (cx !== Math.floor(this.phys.x) || cz !== Math.floor(this.phys.z)) {
+        const at = () => Math.floor(this.phys.x) === cx && Math.floor(this.phys.z) === cz;
+        this.input.sprint = true;
+        await this.goto(cx + 0.5, fy, cz + 0.5, 0.4, { maxMs: 3000, done: at });
+        if (at()) await this.center(cx, cz, 6);
+        if (!this.seenBy(m)) return true; // the rim between them already
+      }
+    }
+    const x = Math.floor(this.phys.x);
+    const y = Math.floor(this.phys.y + 0.1);
+    const z = Math.floor(this.phys.z);
+    const dx = m.x - this.phys.x;
+    const dz = m.z - this.phys.z;
+    const sx = Math.sign(dx) || 1;
+    const sz = Math.sign(dz) || 1;
+    const sides: [number, number][] = Math.abs(dx) >= Math.abs(dz) ? [[sx, 0], [0, sz]] : [[0, sz], [sx, 0]];
+    for (const [ox, oz] of sides) {
+      if (this.abort || this.dead) return false;
+      const nx = x + ox;
+      const nz = z + oz;
+      // rock to dig into, rock over it for a roof and under it for a floor, and no water about
+      if (!SOLID[this.get(nx, y + 2, nz)] || !SOLID[this.get(nx, y - 1, nz)]) continue;
+      if ([[nx, y, nz], [nx, y + 1, nz], [nx, y + 2, nz]].some(([a, b, c]) => IS_WATER[this.get(a, b, c)] || this.waterNear(a, b, c, 1, 0))) continue;
+      for (const cy of [y + 1, y]) if (SOLID[this.get(nx, cy, nz)]) await this.mine(nx, cy, nz, false);
+      if (SOLID[this.get(nx, y, nz)] || SOLID[this.get(nx, y + 1, nz)]) continue;
+      const inIt = () => Math.floor(this.phys.x) === nx && Math.floor(this.phys.z) === nz;
+      await this.goto(nx + 0.5, y, nz + 0.5, 0.4, { maxMs: 2000, done: inIt });
+      if (!inIt()) continue;
+      await this.center(nx, nz, 8);
+      this.wantYaw = (deg(Math.atan2(ox, -oz)) + 360) % 360; // back to the archer's wall, facing out
+      // and the way in shut behind it (feet first, then head): rock all round, a roof, nothing sees in or shoots in
+      for (const cy of [y, y + 1]) {
+        const f = this.fillerBlock();
+        if (f && !SOLID[this.get(x, cy, z)]) await this.place(f, x, cy, z, 0);
+      }
+      return this.sealed() || !this.seenBy(m);
+    }
+    return false;
+  }
+
   /** Can this monster see it (eye to eye)? An archer only shoots what it sees. */
   seenBy(m: Seen): boolean {
     const h = MOB_SPECS[m.kind]?.h ?? 1.9;
@@ -2088,11 +2205,13 @@ export class Body {
         this.halt();
         return "it got away";
       }
-      // not getting any closer for 6 s (across water, up a cliff, round a fence): give up on this one
+      // not getting any closer for 6 s (across water, up a cliff, round a fence): give up on this one. After an archer up
+      // above it that has it in sight, 2.5 s: every second in a pit not closing in is arrows (opus, seasons 14 and 15:
+      // charged one on a ravine's rim from the floor below, twice, and was shot dead)
       if (d < closest - 0.7) {
         closest = d;
         closedAt = Date.now();
-      } else if (d > HIT_REACH && Date.now() - closedAt > 6000) {
+      } else if (d > HIT_REACH && Date.now() - closedAt > (archer && p.y - this.phys.y >= 2 && this.inPit() && this.mobs.has(t.id) && this.seenBy(this.mobs.get(t.id)!) ? 2500 : 6000)) {
         this.halt();
         return hits ? `it got out of reach after ${what()}` : "couldn't get to it (water, a drop or a wall in the way): try another one";
       }
@@ -2503,11 +2622,12 @@ export class Body {
   }
 
   /** Dig in for the night: three blocks down, then a block over its head. */
-  async digIn(): Promise<string> {
+  async digIn(cantReach?: (id: number) => boolean): Promise<string> {
     if (this.sealed()) return "already sealed in";
     // never with a walker or a crawler at arm's length: it drops into the hole after it, and three blocks down is seconds
-    // of its hits with nowhere to go (season 11: shamblers followed them down)
-    const close = this.hostiles(5).find((m) => m.key !== "rattler");
+    // of its hits with nowhere to go (season 11: shamblers followed them down). One the last fight couldn't get to (across
+    // water, up a drop) can't get here either
+    const close = this.hostiles(5).find((m) => m.key !== "rattler" && !cantReach?.(m.id));
     if (close) return `a ${close.key} is too close to dig in (it would follow you down): fight it, or wall it off first`;
     this.halt();
     if (this.phys.inWater) await this.escapeWater();

@@ -2750,6 +2750,7 @@ export class Body {
     for (let k = 0; k < 6 && !this.abort && !this.dead && !this.outInTheOpen(); k++) if (!(await this.walkUp())) break;
     let dir = -1; // the staircase keeps going the same way
     let walls = 0;
+    const tried = new Set<string>(); // the walls it has gone to, to cut a stair into
     for (let k = 0; k < 140 && !this.abort && !this.dead && !this.outInTheOpen(); k++) {
       const x = Math.floor(this.phys.x);
       const y = Math.floor(this.phys.y + 0.1);
@@ -2764,7 +2765,7 @@ export class Body {
         continue;
       }
       // in the open (a cave floor): go to the nearest wall and cut the stairs into it, toward the wall
-      const wall = ++walls > 30 ? -1 : await this.toWall();
+      const wall = ++walls > 30 ? -1 : await this.toWall(tried);
       this.debug(`dig_out: no step at y=${y}, wall ${wall}`);
       if (wall < 0) break;
       dir = wall;
@@ -2775,43 +2776,80 @@ export class Body {
     return `still underground at y=${Math.floor(this.phys.y)}${up > 0 ? ` (climbed ${up} blocks)` : ""}`;
   }
 
-  /** Walk to the highest spot it can reach on foot from here (a cave's way up). False when nothing is higher. */
+  /** Out from under the rock on foot: under cover, the nearest spot out under the open sky it can walk to (the top of
+   *  the stair it came down); else, or already under the sky (a pit, a ravine's floor), the highest spot it can reach
+   *  (a cave's way up). Two steps down its own stair in a hillside, it walked off to the highest spot in 32 blocks, up
+   *  the hill, and back: 31 blocks in a minute to end 3 from where it started (haiku, season 16). False when there's
+   *  nowhere to go. */
   async walkUp(): Promise<boolean> {
-    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: 6000, radius: 32, water: false });
+    const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: 6000, radius: 32, water: false, drop: this.maxDrop() });
     if (!s) return false;
-    let best = 0;
-    for (let i = 1; i < s.pts.length; i++) {
-      const a = s.pts[i];
-      const b = s.pts[best];
-      if (a.f > b.f + 0.5 || (Math.abs(a.f - b.f) <= 0.5 && s.cost[i] < s.cost[best])) best = i;
+    const y0 = this.phys.y;
+    let best = -1;
+    if (!this.surfaced()) {
+      const tops = new Map<number, number>();
+      const sky = (i: number) => {
+        const p = s.pts[i];
+        const key = p.x | (p.z << 9);
+        let t = tops.get(key);
+        if (t === undefined) {
+          t = 0;
+          for (let yy = 127; yy > 0; yy--) {
+            const id = this.get(p.x, yy, p.z);
+            if (SOLID[id] && !TREE.has(id)) {
+              t = yy;
+              break;
+            }
+          }
+          tops.set(key, t);
+        }
+        return p.f > t + 0.4;
+      };
+      for (let i = 1; i < s.pts.length; i++) if (s.pts[i].f >= y0 - 0.5 && sky(i) && (best < 0 || s.cost[i] < s.cost[best])) best = i;
+    }
+    if (best < 0) {
+      best = 0;
+      for (let i = 1; i < s.pts.length; i++) {
+        const a = s.pts[i];
+        const b = s.pts[best];
+        if (a.f > b.f + 0.5 || (Math.abs(a.f - b.f) <= 0.5 && s.cost[i] < s.cost[best])) best = i;
+      }
+      if (s.pts[best].f < y0 + 1.5) return false;
     }
     const top = s.pts[best];
-    if (top.f < this.phys.y + 1.5) return false;
-    const y0 = this.phys.y;
-    await this.goto(top.x + 0.5, top.f, top.z + 0.5, 1.2, { maxMs: 30000 });
-    return this.phys.y > y0 + 1;
+    // on the spot at its height (a block off and a block down, the step it wanted, was "there" at 1.2 across, and it
+    // cut a new step into the rock beside its own stair)
+    const there = () => Math.hypot(top.x + 0.5 - this.phys.x, top.z + 0.5 - this.phys.z) < 0.8 && Math.abs(this.phys.y - top.f) < 0.6;
+    await this.goto(top.x + 0.5, top.f, top.z + 0.5, 0.8, { maxMs: 30000, done: there });
+    return this.phys.y > y0 + 1 || (this.surfaced() && there());
   }
 
   /** Next to the nearest wall (rock at its feet and head height), for a staircase: returns the direction index of
    *  the wall from where it ends up (as stepUp numbers them), or -1 if there is none near. */
-  async toWall(): Promise<number> {
+  async toWall(tried?: Set<string>): Promise<number> {
     const fx = Math.floor(this.phys.x);
     const fy = Math.floor(this.phys.y + 0.1);
     const fz = Math.floor(this.phys.z);
-    let best: [number, number] | null = null;
+    let best = null as [number, number] | null;
     let bd = Infinity;
-    for (let dz = -6; dz <= 6; dz++)
-      for (let dx = -6; dx <= 6; dx++) {
-        const x = fx + dx;
-        const z = fz + dz;
-        if (!SOLID[this.get(x, fy, z)] || !SOLID[this.get(x, fy + 1, z)] || this.get(x, fy + 1, z) === B.BEDROCK) continue;
-        const d = Math.hypot(dx, dz);
-        if (d >= 1 && d < bd) {
-          bd = d;
-          best = [x, z];
+    // within 6, else within 12 (in a big cavern every wall was further, and it gave up "still underground"); never a
+    // wall it has already tried to cut a stair into (back to the same rock, again and again, is pacing)
+    for (const r of [6, 12]) {
+      for (let dz = -r; dz <= r; dz++)
+        for (let dx = -r; dx <= r; dx++) {
+          const x = fx + dx;
+          const z = fz + dz;
+          if (!SOLID[this.get(x, fy, z)] || !SOLID[this.get(x, fy + 1, z)] || this.get(x, fy + 1, z) === B.BEDROCK || tried?.has(`${x},${fy},${z}`)) continue;
+          const d = Math.hypot(dx, dz);
+          if (d >= 1 && d < bd) {
+            bd = d;
+            best = [x, z];
+          }
         }
-      }
+      if (best) break;
+    }
     if (!best) return -1;
+    tried?.add(`${best[0]},${fy},${best[1]}`);
     const [wx, wz] = best;
     // stand in the cell right beside the wall (on its side facing us), centred, so the first step is that rock
     const dirs: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -2914,8 +2952,10 @@ export class Body {
         continue;
       }
       if (!SOLID[this.get(sx, y, sz)]) {
-        // nothing to step onto: build the step, if there is something under it to build on
+        // nothing to step onto: build the step, if there is something under it to build on (from the middle of its own
+        // cell: off it, its body poked into the step's cell, the block was refused and it gave up "still underground")
         const filler = this.fillerBlock();
+        if (filler && SOLID[this.get(sx, y - 1, sz)] && Math.hypot(x + 0.5 - this.phys.x, z + 0.5 - this.phys.z) > 0.15) await this.center(x, z, 12);
         if (!filler || !SOLID[this.get(sx, y - 1, sz)] || !(await this.place(filler, sx, y, sz))) {
           this.debug(`stepUp ${d}: no step (filler ${filler}, under solid ${SOLID[this.get(sx, y - 1, sz)]})`);
           continue;

@@ -349,6 +349,9 @@ export class Brain {
   private leftAlone = new Map<number, number>();
   /** Animals it couldn't get to (across water, up a drop), and till when it leaves them be. */
   private unreachable = new Map<number, number>();
+  /** Players it couldn't get to just now, and why: not walked to again till then (a gatherer walked to the builder
+   *  over and over while it mined at y=25: "couldn't get to opus", six of its last eight actions, season 14). */
+  private outOfReach = new Map<string, { until: number; why: string }>();
   private lastTidy = 0;
   private lastHunt = 0;
   private lastHelpCall = 0;
@@ -2246,9 +2249,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (!id || !b.has(id)) return `you don't have ${item}`;
     const o = [...b.others.values()].find((p) => p.name === player.toLowerCase());
     if (!o) return `${player} isn't in the world`;
+    const why = this.cantReach(o);
+    if (why) return `${why}: give it once ${o.name} is back up (or put it in the storehouse), rather than walk there`;
     await b.goto(o.x, o.y, o.z, 2.5, { maxMs: 45000, done: () => { const q = b.others.get(o.id); return !!q && Math.hypot(q.x - b.phys.x, q.z - b.phys.z) < 3; } });
     const q = b.others.get(o.id);
-    if (!q || Math.hypot(q.x - b.phys.x, q.z - b.phys.z) > 4) return `couldn't get to ${player}`;
+    if (!q || Math.hypot(q.x - b.phys.x, q.z - b.phys.z) > 4) {
+      this.outOfReach.set(o.name, { until: Date.now() + 180000, why: `${o.name} couldn't be reached a moment ago` });
+      return `couldn't get to ${player}`;
+    }
     await b.lookAt(q.x, q.y + 1.2, q.z, 12);
     if (!(await b.hold(id))) return `couldn't take ${item} in hand`;
     let thrown = 0;
@@ -2784,6 +2792,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (n > 0) give.push([id, n]);
     }
     if (!give.length) return "";
+    const why = this.cantReach(o);
+    if (why) return await this.cantHand(builder, why, give);
     b.action = `bringing ${builder} what the build is short of`;
     const out: string[] = [];
     for (const [id, n] of give) {
@@ -2793,6 +2803,40 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const text = give.map(([id, n]) => `${n} ${key(id)}`).join(", ");
     if (out.some((t) => t.startsWith("threw"))) this.teamSay(`${builder}, brought you ${text} for the build.`);
     return out.join("; ");
+  }
+
+  /** Why a player can't be walked to now, or "": down in the rock (the ground's own blocks over its head: a staircase
+   *  mine, a cave), or tried a moment ago and not got to. */
+  private cantReach(o: { name: string; x: number; y: number; z: number }): string {
+    const was = this.outOfReach.get(o.name);
+    if (was && was.until > Date.now()) return was.why;
+    const b = this.body;
+    const x = Math.floor(o.x);
+    const z = Math.floor(o.z);
+    const y0 = Math.floor(o.y + 0.1);
+    for (let y = y0 + 2; y < Math.min(127, y0 + 80); y++) {
+      const id = b.get(x, y, z);
+      if (id === B.STONE || id === B.DIRT || id === B.GRASS || id === B.GRAVEL || id === B.CLAY || (BLOCKS[id]?.key ?? "").endsWith("_ore")) return `${o.name} is down in the rock (at y=${y0})`;
+    }
+    return "";
+  }
+
+  /** The builder can't be reached: no walk that can't end. With no storehouse yet and enough on it for one, it builds
+   *  the storehouse first (the pack's pool from then on) and puts the haul in it; else it keeps the haul and hands it
+   *  over once the builder is back up. */
+  private async cantHand(builder: string, why: string, give: [number, number][]): Promise<string> {
+    const b = this.body;
+    if (!this.storehouse() && PACK.base && !b.isNight()) {
+      const mine = new Map<number, number>();
+      for (const st of b.inv) if (st) mine.set(st.id, (mine.get(st.id) ?? 0) + st.n);
+      if ([...rawOf(materialsFor("storehouse", 1))].every(([k, n]) => rawIn(mine, k) >= n)) {
+        b.action = `building the storehouse (${builder} can't be reached)`;
+        const r = await this.buildTown("storehouse");
+        if (this.storehouse()) return `${why}, so you built the storehouse instead (the pack's pool from now on): ${r.slice(0, 160)}; ${await this.toStore()}`;
+        return `${why}: you kept the haul (the storehouse didn't go up: ${r.slice(0, 160)})`;
+      }
+    }
+    return `${why}: you kept ${give.map(([id, n]) => `${n} ${key(id)}`).join(", ")} to hand over when ${builder} is back up (or put in the storehouse once there is one), rather than walk there`;
   }
 
   /** A short line in chat when it hands something over or finishes something (not more than once in 40 seconds). */

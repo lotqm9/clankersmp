@@ -1275,7 +1275,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
             b.action = "mining round its hole for the night";
             const r = await this.nightMine(plan.gets, 12);
             const got = plan.gets.reduce((n, id) => n + b.count(id), 0) - before;
-            if (got) return `it's night and you're sealed in underground, so instead of waiting you mined round you: got ${got} cobblestone`;
+            // (net of what sealing it in again used: a staircase into a cave can take more to close than it got, and
+            // "got -2 cobblestone" told opus nothing; that counts as nothing to mine here, and it waits)
+            if (got > 0) return `it's night and you're sealed in underground, so instead of waiting you mined round you: got ${got} cobblestone`;
             // nothing to mine from here: wait for real rather than come straight back (an instant answer every time had
             // sonnet asking to wait every two seconds all night, every ask a model call)
             for (let k = 0; k < Math.max(2, Math.min(30, Number(i.seconds) || 5)) * 20 && !b.abort && !b.dead; k++) await b.nextTick();

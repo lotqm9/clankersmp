@@ -155,18 +155,23 @@ const HOME_BANDS: { to: number; sizes: string[]; stone?: string[] }[] = [
   { to: 50, sizes: ["longhouse", "farmhouse"] },
   { to: 999, sizes: ["farmhouse", "hut"] },
 ];
+/** The town's first homes, before it's a hamlet (four houses): small ones, wherever they stand. Its first lot is by
+ *  the square, where the band says a two-storey row house: 379 blocks, and season 16's camp went 25 minutes on day 2
+ *  with nothing finished. */
+const EARLY_SIZES = ["cottage", "hut"];
+export const EARLY_HOUSES = 4;
 /** The design for a building of a kind on a street, `t` out along it: the street's style; for a house, the size for
  *  how far out it is and the roof in a rhythm along the street (a gable, then one across the front; flat roofs on
  *  the stone avenue's townhouses); the same both sides, so the street comes in pairs. Any other kind: its design in
  *  the street's style if it has one, else its own. */
-export function designFor(kind: Kind, c: Point, si: number, t: number, styles?: string[]): string {
+export function designFor(kind: Kind, c: Point, si: number, t: number, styles?: string[], early = false): string {
   const s = streetsOf(c)[si];
   const style = styleOf(si, styles);
   const out = s && s.arm >= 0 ? t : s?.ring ?? t;
   const slot = Math.floor(t / 7);
   if (kind === "house") {
     const band = HOME_BANDS.find((b) => out < b.to)!;
-    const sizes = style === "stone" && band.stone ? band.stone : band.sizes;
+    const sizes = early ? EARLY_SIZES : style === "stone" && band.stone ? band.stone : band.sizes;
     const size = sizes[slot % sizes.length];
     const roof = style === "stone" && out < 30 && DESIGNS[`house/stone-${size}-flat`] ? "flat" : slot % 2 && DESIGNS[`house/${style}-${size}-cross`] ? "cross" : "gable";
     const id = `house/${style}-${size}-${roof}`;
@@ -240,11 +245,11 @@ export function onStreet(c: Point, x: number, z: number, margin = 0): boolean {
 /** Every lot along the streets a building of this kind could take (chooseLot scores them). The front faces the street
  *  with one cell between them (the step and the path to the door); a cathedral or a keep can also stand across the head
  *  of a main street, out past its last building, facing back down it to the plaza. */
-export function lotsFor(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, lengths: number[] = [0, 0, 0, 0], styles?: string[], only?: string): Lot[] {
+export function lotsFor(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, lengths: number[] = [0, 0, 0, 0], styles?: string[], only?: string, early = false): Lot[] {
   const out: Lot[] = [];
   const dist = distOf(kind);
   const where = KIND_INFO[kind]?.district;
-  const pick = (si: number, t: number) => (only && DESIGNS[only] ? only : KINDS[kind]?.designs.length ? designFor(kind, c, si, t, styles) : kind);
+  const pick = (si: number, t: number) => (only && DESIGNS[only] ? only : KINDS[kind]?.designs.length ? designFor(kind, c, si, t, styles, early) : kind);
   if (where === "gate" || where === "span") {
     // over a gate of the wall (the middle of its front on the street's line, where the wall crosses it), or across
     // an avenue between the plaza and the rings: the street runs through it
@@ -355,7 +360,7 @@ export function chooseLot(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, buil
   const streets = streetsOf(c);
   const caps = armCaps(c, builds);
   const lengths = armLengths(c, builds);
-  const lots = lotsFor(kind, c, lengths, styles, only);
+  const lots = lotsFor(kind, c, lengths, styles, only, kind === "house" && builds.filter((b) => b.kind === "house").length < EARLY_HOUSES);
   // the buildings of this kind already standing, mirrored across their street: a lot there makes a pair
   const pairs: Rect[] = [];
   for (const b of builds) {

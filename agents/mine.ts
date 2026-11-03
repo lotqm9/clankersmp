@@ -322,7 +322,7 @@ export async function climbOut(b: Body): Promise<boolean> {
   const on = (c: Cell, slack = 1.2) => Math.abs(b.phys.x - c[0] - 0.5) + Math.abs(b.phys.z - c[2] - 0.5) <= slack && Math.abs(b.phys.y - c[1]) <= 1.2;
   const top = st.top;
   const atTop = () => Math.abs(b.phys.y - top[1]) <= 1.5 && Math.hypot(b.phys.x - top[0] - 0.5, b.phys.z - top[2] - 0.5) < 3;
-  for (let tries = 0; tries < 4 && !b.abort && !b.dead && !outside(b) && !atTop(); tries++) {
+  for (let tries = 0; tries < 4 && !b.abort && !b.dead && !outside(b) && !atTop() && nearest()[1] <= 12; tries++) {
     let [k, kd] = nearest();
     if (kd > 1) {
       // off its path (a fight moved it, a cave it fell into): back onto it through the tunnel
@@ -363,9 +363,10 @@ export async function climbOut(b: Body): Promise<boolean> {
     await b.goto(top[0] + 0.5, top[1], top[2] + 0.5, 1.2, { maxMs: 40000 });
     out = outside(b) || atTop();
   }
-  if (!out && !waterAbove(b, here(b))) {
-    // the way back is lost for good: a staircase straight up to the sky
+  if (!out && !waterAbove(b, here(b)) && !b.abort && !b.dead) {
+    // the way back is lost for good: a staircase straight up to the sky, and the old stair forgotten
     dbg(b, "climb: lost the way, digging up");
+    TRIPS.delete(b.name);
     b.action = "digging a staircase back up out of the mine";
     await b.digOut();
     out = outside(b);
@@ -459,8 +460,10 @@ async function runTrip(b: Body, maxMs: number): Promise<Trip> {
       dir = ways.sort((p, q) => dist(p) - dist(q))[0];
     };
     aim();
+    // (a cave in the way is no reason to stop: the stair goes on through it, the cave's openings round the stair
+    // blocked up as it goes; two of eight trips gave up at y 40 among the caves before)
     const blocked = (cells: Cell[], floor: Cell) =>
-      cells.some((c) => wet(b, c) || b.get(...c) === B.BEDROCK || cave(b, c, trip.dug)) || b.get(...floor) === B.BEDROCK || IS_WATER[b.get(...floor)] === 1 || waterAbove(b, cells[0], 16);
+      cells.some((c) => wet(b, c) || b.get(...c) === B.BEDROCK) || b.get(...floor) === B.BEDROCK || IS_WATER[b.get(...floor)] === 1 || waterAbove(b, cells[0], 16);
     /** A step one way: down a stair (drop 1) or along (drop 0). */
     const move = async (d: number, drop: number): Promise<boolean> => {
       const [dx, dz] = SIDES[d];

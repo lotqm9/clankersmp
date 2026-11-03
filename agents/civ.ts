@@ -862,7 +862,7 @@ export function register(id: string, bp: Blueprint, opts: { name?: string; style
   return info;
 }
 
-type Cell = { k: string; late: boolean };
+type Cell = { k: string; late: boolean; after?: boolean };
 /** Building a plan in a building's own frame: u along its front (left to right seen from the street), v from the
  *  front wall in, dy up from the floor (dy -1 is the ground course: the footing and the floor). */
 export class Draft {
@@ -949,16 +949,16 @@ export class Draft {
   }
   /** Put a block (or a cell kind: "a" keep clear, "o" open, "?p" a path) in a cell; 0 keeps it clear. `last`: it goes
    *  in with the furniture, after the rest (an upper floor: the room stays open to the roof while the roof goes on,
-   *  for the pillar a builder climbs to reach it). */
-  put(u: number, dy: number, v: number, k: string | number, last = false): void {
+   *  for the pillar a builder climbs to reach it); "after": once even those are in (a light hanging from that floor). */
+  put(u: number, dy: number, v: number, k: string | number, last: boolean | "after" = false): void {
     if (!this.inside(u, v)) return;
     const [x, z] = this.at(u, v);
     const kk = typeof k === "number" ? (k ? exact(k) : "a") : k;
     const t = cellTarget(kk);
-    this.cells.set(`${x},${this.s.y + dy},${z}`, { x, y: this.s.y + dy, z, k: kk, late: !!t && (last || late(t.id)) });
+    this.cells.set(`${x},${this.s.y + dy},${z}`, { x, y: this.s.y + dy, z, k: kk, late: !!t && (!!last || late(t.id)), after: !!t && last === "after" });
   }
-  opt(u: number, dy: number, v: number, id: number): void {
-    this.put(u, dy, v, optional(id));
+  opt(u: number, dy: number, v: number, id: number, last: boolean | "after" = false): void {
+    this.put(u, dy, v, optional(id), last);
   }
   /** A column the foundation fills up to the floor (low ground under the building). */
   foot(u: number, v: number): void {
@@ -1002,8 +1002,10 @@ export function furnish(d: Draft): void {
     for (const k of spots) taken.add(k);
     let id = f.block;
     if (f.facing && (isChest(id) || isFurnace(id) || id === B.RED_BED || stairBase(id) >= 0 || isLadder(id))) id += d.dir(f.facing);
-    if (f.optional) d.opt(u, dy, v, id);
-    else d.put(u, dy, v, id);
+    // (a light hanging from the floor above goes in after that floor, which goes in last)
+    const after = f.hang && bp.floors?.length ? "after" : false;
+    if (f.optional) d.opt(u, dy, v, id, after);
+    else d.put(u, dy, v, id, after);
     if (head) d.put(head[0], dy, head[1], "a");
   }
 }
@@ -1021,9 +1023,11 @@ function cottage(d: Draft): void {
   // walls; across, along u: the front and back are), or flat on top of the walls
   const roofAt = (u: number, v: number) =>
     ridge === "flat" ? H : ridge === "u" ? (v < 0 || v >= D ? H : H + 1 + Math.min(v, D - 1 - v)) : u < 0 || u >= W ? H : H + 1 + Math.min(u, W - 1 - u);
-  d.ceiling = (u, v) => roofAt(u, v);
-  const posts = (bp.posts ?? []).map(([u, v]) => [d.u(u), d.v(v)]);
   const floors = bp.floors ?? [];
+  // a hanging light hangs from what is over it: the roof's underside, or in a home with a floor above, that floor
+  // (up under a two-storey roof it was out of every reach: the agents climb no ladders)
+  d.ceiling = (u, v) => (floors.length ? Math.min(...floors) : roofAt(u, v));
+  const posts = (bp.posts ?? []).map(([u, v]) => [d.u(u), d.v(v)]);
   // an upper floor's way up: a ladder against the back wall in the left corner, a hole in the floor over it
   const ladderU = 1;
   const ladderV = D - 2;
@@ -1417,7 +1421,7 @@ function order(cells: (Cell & { x: number; y: number; z: number })[], r: Rect, f
   const rest = cells.filter((c) => c.k !== "d");
   const supported = (c: { x: number; y: number; z: number }) =>
     c.y <= floor || [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].some(([a, b, d]) => placed.has(key(c.x + a, c.y + b, c.z + d)));
-  for (const group of [rest.filter((c) => !c.late), rest.filter((c) => c.late)]) {
+  for (const group of [rest.filter((c) => !c.late), rest.filter((c) => c.late && !c.after), rest.filter((c) => c.after)]) {
     const byY = new Map<number, typeof cells>();
     for (const c of group) {
       if (!byY.has(c.y)) byY.set(c.y, []);

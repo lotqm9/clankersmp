@@ -43,7 +43,15 @@ for (const kind of want) {
   let site: (Rect & { face: number; y: number }) | null = null;
   if (kind === "plaza") site = { ...plazaRect(c), face: 0, y: 60 };
   else if (kind === "lamp") continue;
-  else site = chooseLot(kind, c, builds, [], fits, wallAt, undefined, styles);
+  else if (KIND_INFO[kind]?.district === "street") {
+    // street furniture goes in the row beside the streets, off the paths (the way the brain puts it: streetSpot)
+    const paths = streetPlan(c, builds, () => 59, 1);
+    const taken = new Set(paths.cells.map(([x, , z]) => `${x},${z}`));
+    for (const b of builds) if (b.kind === "bench" || b.kind === "flowerbed") for (let x = b.x0; x <= b.x1; x++) for (let z = b.z0; z <= b.z1; z++) taken.add(`furniture:${x},${z}`);
+    const spot = streetSpots(c, builds, kind, taken, 3)[0];
+    site = spot ? { ...spot, y: 60 } : null;
+    if (spot) (site as { design?: string }).design = kind;
+  } else site = chooseLot(kind, c, builds, [], fits, wallAt, undefined, styles);
   if (!site) {
     failed++;
     console.log(`no lot for ${kind}`);

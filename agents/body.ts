@@ -99,6 +99,12 @@ export interface Other {
 export type Target = { kind: "mob" | "animal" | "player"; id: number };
 
 const deg = (r: number) => (r * 180) / Math.PI;
+/** Stacks counted up: item -> how many. */
+const tally = (stacks: (Stack | null)[]) => {
+  const m = new Map<number, number>();
+  for (const st of stacks) if (st) m.set(st.id, (m.get(st.id) ?? 0) + st.n);
+  return m;
+};
 /** Smallest signed difference a - b in degrees. */
 const angleDiff = (a: number, b: number) => ((((a - b) % 360) + 540) % 360) - 180;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -2059,17 +2065,15 @@ export class Body {
 
   /** What is in the chest at (x, y, z): item -> count (null if it couldn't be opened). */
   async chestContents(x: number, y: number, z: number): Promise<Map<number, number> | null> {
-    return this.withChest(x, y, z, async (chest) => {
-      const m = new Map<number, number>();
-      for (const st of chest()) if (st) m.set(st.id, (m.get(st.id) ?? 0) + st.n);
-      return m;
-    });
+    return this.withChest(x, y, z, async (chest) => tally(chest()));
   }
 
   /** Put whole stacks into the chest at (x, y, z): `howMany(id, have)` says how many of an item to put in (it goes in
-   *  whole stacks, the smallest first, up to that). What went in, item -> count; null if it couldn't be opened. */
-  async chestPut(x: number, y: number, z: number, howMany: (id: number, have: number) => number): Promise<Map<number, number> | null> {
+   *  whole stacks, the smallest first, up to that). What went in, item -> count, and what the chest holds now; null if
+   *  it couldn't be opened. */
+  async chestPut(x: number, y: number, z: number, howMany: (id: number, have: number) => number): Promise<{ put: Map<number, number>; inside: Map<number, number> } | null> {
     return this.withChest(x, y, z, async (chest, click) => {
+      const done = (put: Map<number, number>) => ({ put, inside: tally(chest()) });
       const put = new Map<number, number>();
       const want = new Map<number, number>();
       for (const st of this.inv) if (st && !want.has(st.id)) want.set(st.id, Math.max(0, howMany(st.id, this.count(st.id))));
@@ -2079,7 +2083,7 @@ export class Body {
         const slots = this.inv.map((st, k) => ({ st, k })).filter((e) => e.st?.id === id).sort((a, b) => a.st!.n - b.st!.n);
         for (const { st, k } of slots) {
           if (left <= 0 || st!.n > left + 16) break;
-          if (!chest().some((c) => !c || (c.id === id && c.n < (itemDef(id)?.stack ?? 64)))) return put;
+          if (!chest().some((c) => !c || (c.id === id && c.n < (itemDef(id)?.stack ?? 64)))) return done(put);
           const before = this.count(id);
           if (!(await click(k < 9 ? 54 + k : 27 + (k - 9)))) continue;
           const went = before - this.count(id);
@@ -2089,26 +2093,27 @@ export class Body {
           }
         }
       }
-      return put;
+      return done(put);
     });
   }
 
   /** Take items out of the chest at (x, y, z), whole stacks until it has what `want` asks (item -> count). What came
-   *  out, item -> count; null if it couldn't be opened. */
-  async chestTake(x: number, y: number, z: number, want: Map<number, number>): Promise<Map<number, number> | null> {
+   *  out, item -> count, and what the chest holds now; null if it couldn't be opened. */
+  async chestTake(x: number, y: number, z: number, want: Map<number, number>): Promise<{ got: Map<number, number>; inside: Map<number, number> } | null> {
     return this.withChest(x, y, z, async (chest, click) => {
       const got = new Map<number, number>();
+      const done = () => ({ got, inside: tally(chest()) });
       for (const [id, n] of want) {
         for (let k = 0; k < 27 && (got.get(id) ?? 0) < n; k++) {
           const st = chest()[k];
           if (!st || st.id !== id) continue;
-          if (this.inv.every((s) => s && (s.id !== id || s.n >= (itemDef(id)?.stack ?? 64)))) return got;
+          if (this.inv.every((s) => s && (s.id !== id || s.n >= (itemDef(id)?.stack ?? 64)))) return done();
           const before = this.count(id);
           if (!(await click(k))) continue;
           if (this.count(id) > before) got.set(id, (got.get(id) ?? 0) + this.count(id) - before);
         }
       }
-      return got;
+      return done();
     });
   }
 
@@ -2543,6 +2548,23 @@ export class Body {
       again.add(c);
       todo.push(c);
     };
+    // up a pillar beside a cell out of reach (or on the room's floor), then every missing block in reach from up there
+    // (what's in the way coming out first: an upgrade's old roof), and back down the pillar. True if it got up
+    const fromPillar = async (i: number): Promise<boolean> => {
+      const [x, y, z] = todo[i];
+      const up = await this.scaffoldTo(x, y, z, footprint, inside, todo.slice(i).filter(missing));
+      if (up < 0) return false;
+      for (const c of todo.slice(i)) {
+        if (this.abort || this.dead || placed >= max) break;
+        const w = this.wantFor(c[3]);
+        if (!w || !missing(c) || this.reachTo(c[0], c[1], c[2]) > REACH) continue;
+        const here = this.get(c[0], c[1], c[2]);
+        if (here !== B.AIR && !IS_WATER[here] && !BLOCKS[here]?.replaceable && (KEEP(here) || !(await this.mine(c[0], c[1], c[2], false)))) continue;
+        if (await this.place(w.item, c[0], c[1], c[2], 20000, w.state)) placed++;
+      }
+      if (up > 0) await this.climbDown(up, { x: this.lastPillar.x, z: this.lastPillar.z, top: this.lastPillar.top, keep: blocks });
+      return true;
+    };
     for (let i = 0; i < todo.length; i++) {
       // eight blocks in a row that wouldn't go in: something's wrong here (walled off, someone in the way), so stop
       // and say so rather than walk about trying every cell
@@ -2600,6 +2622,16 @@ export class Body {
           continue;
         }
         if (!(await this.mine(x, y, z))) {
+          // out of reach from the ground (the roof an upgrade swaps, high over the street): up a pillar to it, the
+          // same as for putting a block in up there (the tavern's oak roof stalled on its top row for 16 rounds)
+          if (this.reachTo(x, y, z) > REACH && lifts < 12 && !this.abort && !this.dead) {
+            lifts++;
+            if ((await fromPillar(i)) && !missing(todo[i])) {
+              misses = 0;
+              continue;
+            }
+            later(todo[i]);
+          }
           misses++;
           continue;
         }
@@ -2636,21 +2668,9 @@ export class Body {
       // room, on the floor), every block in reach from up there, then back down the pillar
       if (this.reachTo(x, y, z) > REACH && lifts < 12) {
         lifts++;
-        const up = await this.scaffoldTo(x, y, z, footprint, inside, todo.slice(i).filter(missing));
-        if (up >= 0) {
-          for (const c of todo.slice(i)) {
-            if (this.abort || this.dead || placed >= max) break;
-            const w = this.wantFor(c[3]);
-            if (!w || !missing(c) || this.reachTo(c[0], c[1], c[2]) > REACH) continue;
-            const here = this.get(c[0], c[1], c[2]);
-            if (here !== B.AIR && !IS_WATER[here] && !BLOCKS[here]?.replaceable && (KEEP(here) || !(await this.mine(c[0], c[1], c[2], false)))) continue;
-            if (await this.place(w.item, c[0], c[1], c[2], 20000, w.state)) placed++;
-          }
-          if (up > 0) await this.climbDown(up, { x: this.lastPillar.x, z: this.lastPillar.z, top: this.lastPillar.top, keep: blocks });
-          if (!missing(todo[i])) {
-            misses = 0;
-            continue;
-          }
+        if ((await fromPillar(i)) && !missing(todo[i])) {
+          misses = 0;
+          continue;
         }
       }
       misses++;

@@ -2533,6 +2533,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     bd.queue = jobs;
     bd.qat = now;
+    // (saved straight away: the relay and the watcher read the queue from the civ event, the next run from the pack)
+    savePack();
   }
 
   /** Where the town stands, for the queue: the stage and its needs, every building, the pool, the roads and lamps,

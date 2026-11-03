@@ -1243,9 +1243,19 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // there with the time starting again. Trees only: an ore 50 blocks off is inside the rock, and walking at one
       // left sonnet standing still for 3 minutes "walking out to find coal_ore"
       if (!found.length && trees && trips < 2) {
+        // never in the dark (a build's materials come through here, past the tools' night rules)
+        if (b.isNight()) return have() > start ? `got ${have() - start} of ${count} ${item}; the trip for the rest waits for dawn` : `it's night: the trip out for ${item} waits for dawn`;
         trips++;
         const grove = b.findGrove(plan.blocks, trips === 1 ? 64 : 160, (gx, gz) => theirs(gx, gz) || badGrove(gx, gz));
         if (grove) {
+          // out of the ground first: from a tunnel the path search finds no way up to the grove, and haiku walked its
+          // tunnel under the town back and forth instead ("ended 0.0 from where it started", season 13 day 8)
+          const top = b.surfaceAt(Math.floor(b.phys.x), Math.floor(b.phys.z));
+          const indoors = footprints().some((r) => b.phys.x >= r.x0 && b.phys.x <= r.x1 + 1 && b.phys.z >= r.z0 && b.phys.z <= r.z1 + 1);
+          if (b.covered() && !indoors && top >= 0 && b.phys.y < top - 1 && !b.outInTheOpen()) {
+            b.action = "climbing out of the ground to go logging";
+            await b.digOut();
+          }
           trip = { x: grove[0], z: grove[2], had: have() };
           const far = Math.round(Math.hypot(grove[0] - b.phys.x, grove[2] - b.phys.z));
           b.action = `going on a logging trip for ${item}, ${far} blocks out`;

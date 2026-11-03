@@ -297,7 +297,7 @@ export function planJobs(s: TownState): Job[] {
   // and the buildings they will ask for, a couple of each ahead of time (the list never runs short, even in a camp)
   const ahead = new Set<string>();
   s.later.forEach((nd, i) => {
-    if (nd.tier > 1 || ahead.has(nd.k) || ["trade", "road", "lamp", "farm", "wall"].includes(nd.k)) return;
+    if (nd.tier > 1 || ahead.has(nd.k) || ["trade", "road", "lamp", "farm", "wall", "bench", "flowerbed"].includes(nd.k)) return;
     ahead.add(nd.k);
     const built = s.buildings.filter((b) => b.kind === nd.k).length;
     const kind = s.kinds.find((x) => x.k === nd.k);
@@ -305,7 +305,7 @@ export function planJobs(s: TownState): Job[] {
   });
   if (s.smelt) add({ id: "smelt", kind: "smelt", k: "smelt", text: "smelt stone bricks and glass for the upgrades (cobblestone and sand from the storehouse)", role: "mason", pri: 44 });
   for (const f of s.fields) add({ id: `fence:${f.at}`, kind: "fence", k: "farm", at: f.at, text: `fence the field ${where(f.at)} (a gate toward the town)`, role: "farmer", pri: 46 });
-  // street furniture: benches and flower beds along the streets in use
+  // street furniture: benches and flower beds along the streets in use (only these: none goes ahead of the streets)
   if (s.stage >= 1) {
     if (s.furniture.bench < s.furniture.want) add({ id: "decorate:bench", kind: "decorate", k: "bench", n: s.furniture.want - s.furniture.bench, text: `put a bench beside the streets (${s.furniture.bench} of ${s.furniture.want})`, role: "builder", pri: 50 });
     if (s.furniture.flowerbed < s.furniture.want) add({ id: "decorate:flowerbed", kind: "decorate", k: "flowerbed", n: s.furniture.want - s.furniture.flowerbed, text: `plant a flower bed beside the streets (${s.furniture.flowerbed} of ${s.furniture.want})`, role: "farmer", pri: 51 });

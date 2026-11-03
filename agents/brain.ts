@@ -849,7 +849,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       const out = await this.walkOutToDig();
       if (out) return out;
     }
-    const r = await miningTrip(b);
+    let r = await miningTrip(b);
+    // the stair met water (or the bedrock) on the way down near the top: start again somewhere drier, twice at most
+    for (let k = 0; k < 2 && r.back && !b.dead && !b.abort && /blocked all round/.test(r.text) && !r.haul.has(I.DIAMOND) && !tripCheck(b); k++) {
+      const first = r.text;
+      if (await this.walkOutToDig(20 + 10 * k)) break;
+      r = await miningTrip(b);
+      r.text = `${first}; so it started again ${Math.round(20 + 10 * k)} blocks off: ${r.text}`;
+    }
     if (!r.back || b.dead || !r.haul.size) return r.text;
     // the haul: in the storehouse, if there is one within a walk
     const s = this.storehouse();
@@ -895,12 +902,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   /** Out to open ground away from the town, the spawn hub and the villages (a mine's stair never goes down under
    *  them): "" once it's there. */
-  private async walkOutToDig(): Promise<string> {
+  private async walkOutToDig(away = 0): Promise<string> {
     const b = this.body;
+    const from = { x: b.phys.x, z: b.phys.z };
     const villages = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean);
     const taken = (x: number, z: number) => inHub(x, z) || (!!PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 26)
       || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 30) || footprints().some((r) => x >= r.x0 - 3 && x <= r.x1 + 3 && z >= r.z0 - 3 && z <= r.z1 + 3);
-    const open = () => !taken(b.phys.x, b.phys.z) && !b.phys.inWater && b.underSky(Math.floor(b.phys.x), Math.floor(b.phys.y + 0.1) + 1, Math.floor(b.phys.z));
+    // (away: somewhere else, that far at least from where it stands: the last stair from here met water)
+    const open = () => !taken(b.phys.x, b.phys.z) && !b.phys.inWater && b.underSky(Math.floor(b.phys.x), Math.floor(b.phys.y + 0.1) + 1, Math.floor(b.phys.z)) && Math.hypot(b.phys.x - from.x, b.phys.z - from.z) >= away - 3;
     if (open()) return "";
     if (b.covered() && !footprints().some((r) => b.phys.x >= r.x0 && b.phys.x <= r.x1 + 1 && b.phys.z >= r.z0 && b.phys.z <= r.z1 + 1)) {
       b.action = "climbing up out of the ground";
@@ -911,10 +920,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const spots: { x: number; z: number; g: number; d: number }[] = [];
     for (let k = 0; k < 16; k++) {
       const a = (k / 16) * Math.PI * 2;
-      for (let r = 8; r <= 90; r += 6) {
+      for (let r = Math.max(8, away); r <= 90; r += 6) {
         const tx = Math.floor(c.x + Math.cos(a) * r);
         const tz = Math.floor(c.z + Math.sin(a) * r);
-        if (taken(tx, tz)) continue;
+        if (taken(tx, tz) || (away && [[0, 0], [6, 0], [-6, 0], [0, 6], [0, -6]].some(([dx, dz]) => b.groundAt(tx + dx, tz + dz, Math.floor(c.y)) === -1))) continue;
         const g = b.groundAt(tx, tz, Math.floor(c.y));
         if (g >= 0) spots.push({ x: tx, z: tz, g, d: Math.hypot(tx - b.phys.x, tz - b.phys.z) });
         break;

@@ -206,7 +206,11 @@ probe.close();
 // spread the trials over the island: a shuffled pick of spots at least 60 apart
 let seed = Number(process.env.MINE_SEED || 7);
 const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-const order = spots.map((s) => ({ s, r: rand() })).sort((p, q) => p.r - q.r).map((o) => o.s);
+// (MINE_SPOTS=x:z,x:z: those spots, in that order)
+const wanted = (process.env.MINE_SPOTS ?? "").split(",").filter(Boolean).map((w) => w.split(":").map(Number));
+const order = wanted.length
+  ? wanted.map(([x, z]) => spots.find((p) => p.x === x && p.z === z)).filter((p): p is (typeof spots)[number] => !!p)
+  : spots.map((s) => ({ s, r: rand() })).sort((p, q) => p.r - q.r).map((o) => o.s);
 const bodies = new Map<string, Body | null>();
 const all: Result[] = [];
 let next = 0;

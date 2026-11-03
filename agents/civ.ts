@@ -16,16 +16,18 @@ import { I } from "../shared/items.ts";
 import { doorId, isDoor, isLadder, slabBase, stairBase } from "../shared/shapes.ts";
 import type { PlanCell, Rect } from "./body.ts";
 
-export type Kind =
-  | "house" | "farm" | "well" | "lamp" | "storehouse" | "hall" | "tower" | "market" | "wall" | "plaza" | "keep" | "road"
-  | "smithy" | "bakery" | "tavern" | "library" | "chapel" | "barn" | "fountain" | "monument" | "cathedral";
+/** A kind of thing the town builds: a category (house, smithy, barn...) that the stages count. The catalog
+ *  (agents/catalog.ts) has many designs for most kinds; "farm", "wall" and "road" are planned on their own. */
+export type Kind = string;
 /** The kinds that are one building on one rectangle, planned by planFor. */
-export type Plain = Exclude<Kind, "farm" | "wall" | "road">;
+export type Plain = string;
 /** Kinds the town has only one of (building it again carries on with that one). */
 export const ONCE: ReadonlySet<Kind> = new Set<Kind>(["wall", "road", "plaza", "keep", "cathedral"]);
 
 export interface Building extends Rect {
   kind: Kind;
+  /** Which design of the catalog it is built to (none: the kind's first design, the one older towns were built to). */
+  design?: string;
   y: number;
   by: string[];
   done: boolean;
@@ -51,10 +53,12 @@ export interface Building extends Rect {
   joined?: [number, number];
   /** A cottage someone has moved into: whose home it is. */
   owner?: string;
+  /** Its lot is dug into a slope: the ground over its floor across the whole rectangle is cut away (a terrace). */
+  cut?: boolean;
 }
 
 /** How many tiers each kind has (roads and farms too). */
-export const maxTier = (k: Kind): number => (k === "road" ? 2 : k === "farm" ? 3 : KINDS[k].tiers);
+export const maxTier = (k: Kind, design?: string): number => (k === "road" ? 2 : k === "farm" ? 3 : (DESIGNS[design ?? k] ?? KINDS[k])?.tiers ?? 1);
 /** What an upgrade of a farm or the roads adds. */
 export const UP_EXTRA: Record<"farm" | "road", string[]> = {
   farm: ["", "the field by the water", "a fence round the field with a gate", "lanterns on the fence corners"],
@@ -73,14 +77,14 @@ export const STAGES: { name: string; needs: Need[] }[] = [
   { name: "a hamlet", needs: [["storehouse", 1], ["house", 4], ["farm", 2], ["lamp", 4], ["road", 4]] },
   { name: "a village", needs: [["plaza", 1], ["house", 6], ["house", 2, 2], ["market", 1], ["farm", 3], ["lamp", 8], ["wall", 1], ["road", 8]] },
   { name: "a market town", needs: [["hall", 1], ["smithy", 1], ["tavern", 1], ["house", 8], ["house", 3, 2], ["market", 1, 2], ["tower", 1], ["lamp", 12], ["trade", 5], ["road", 12]] },
-  { name: "a town", needs: [["bakery", 1], ["library", 1], ["chapel", 1], ["house", 10], ["house", 5, 2], ["house", 1, 3], ["farm", 4], ["hall", 1, 2], ["wall", 1, 2], ["tower", 2], ["plaza", 1, 2], ["storehouse", 1, 2], ["lamp", 16], ["lamp", 4, 2], ["trade", 10], ["road", 15]] },
-  { name: "a city", needs: [["keep", 1], ["barn", 1], ["fountain", 1], ["monument", 1], ["house", 14], ["house", 8, 2], ["house", 3, 3], ["tower", 3], ["tower", 1, 2], ["hall", 1, 3], ["market", 1, 3], ["wall", 1, 3], ["smithy", 1, 2], ["tavern", 1, 2], ["farm", 6], ["farm", 2, 2], ["lamp", 24], ["lamp", 8, 2], ["trade", 20], ["road", 20]] },
-  { name: "a capital", needs: [["cathedral", 1], ["monument", 2], ["house", 20], ["house", 12, 2], ["house", 6, 3], ["keep", 1, 3], ["tower", 4], ["tower", 2, 3], ["plaza", 1, 3], ["well", 1, 3], ["storehouse", 1, 3], ["library", 1, 2], ["chapel", 1, 2], ["bakery", 1, 2], ["farm", 8], ["farm", 4, 3], ["lamp", 32], ["lamp", 16, 2], ["trade", 30], ["road", 28, 2]] },
-  { name: "a kingdom", needs: [["cathedral", 1, 2], ["fountain", 2], ["monument", 3], ["barn", 2], ["house", 26], ["house", 16, 2], ["house", 10, 3], ["library", 1, 3], ["tavern", 1, 3], ["smithy", 1, 3], ["bakery", 1, 3], ["fountain", 1, 2], ["tower", 6], ["farm", 10], ["farm", 6, 3], ["lamp", 40], ["lamp", 24, 2], ["trade", 40], ["road", 34, 2]] },
-  { name: "an empire", needs: [["cathedral", 1, 3], ["chapel", 2], ["monument", 4], ["house", 32], ["house", 24, 2], ["house", 16, 3], ["chapel", 1, 3], ["monument", 2, 3], ["fountain", 2, 3], ["market", 2], ["barn", 2, 2], ["tower", 8], ["tower", 4, 3], ["farm", 12], ["lamp", 48], ["lamp", 32, 2], ["trade", 50], ["road", 40, 2]] },
+  { name: "a town", needs: [["bakery", 1], ["library", 1], ["chapel", 1], ["treefarm", 1], ["carpenter", 1], ["granary", 1], ["garden", 1], ["house", 10], ["house", 5, 2], ["house", 1, 3], ["farm", 4], ["hall", 1, 2], ["wall", 1, 2], ["tower", 2], ["plaza", 1, 2], ["storehouse", 1, 2], ["lamp", 16], ["lamp", 4, 2], ["trade", 10], ["road", 15]] },
+  { name: "a city", needs: [["keep", 1], ["barn", 1], ["fountain", 1], ["monument", 1], ["inn", 1], ["school", 1], ["stable", 1], ["quarry", 1], ["statue", 1], ["guardhouse", 2], ["house", 14], ["house", 8, 2], ["house", 3, 3], ["tower", 3], ["tower", 1, 2], ["hall", 1, 3], ["market", 1, 3], ["wall", 1, 3], ["smithy", 1, 2], ["tavern", 1, 2], ["farm", 6], ["farm", 2, 2], ["lamp", 24], ["lamp", 8, 2], ["trade", 20], ["road", 20]] },
+  { name: "a capital", needs: [["cathedral", 1], ["monument", 2], ["courthouse", 1], ["clocktower", 1], ["gatehouse", 2], ["park", 1], ["windmill", 1], ["bench", 6], ["flowerbed", 6], ["house", 20], ["house", 12, 2], ["house", 6, 3], ["keep", 1, 3], ["tower", 4], ["tower", 2, 3], ["plaza", 1, 3], ["well", 1, 3], ["storehouse", 1, 3], ["library", 1, 2], ["chapel", 1, 2], ["bakery", 1, 2], ["farm", 8], ["farm", 4, 3], ["lamp", 32], ["lamp", 16, 2], ["trade", 30], ["road", 28, 2]] },
+  { name: "a kingdom", needs: [["cathedral", 1, 2], ["fountain", 2], ["monument", 3], ["barn", 2], ["temple", 1], ["bathhouse", 1], ["guildhall", 1], ["silo", 2], ["orchard", 1], ["statue", 3], ["gatehouse", 4], ["house", 26], ["house", 16, 2], ["house", 10, 3], ["library", 1, 3], ["tavern", 1, 3], ["smithy", 1, 3], ["bakery", 1, 3], ["fountain", 1, 2], ["tower", 6], ["farm", 10], ["farm", 6, 3], ["lamp", 40], ["lamp", 24, 2], ["trade", 40], ["road", 34, 2]] },
+  { name: "an empire", needs: [["cathedral", 1, 3], ["chapel", 2], ["monument", 4], ["barracks", 1], ["armory", 1], ["arch", 2], ["belltower", 1], ["inn", 1, 3], ["school", 1, 3], ["house", 32], ["house", 24, 2], ["house", 16, 3], ["chapel", 1, 3], ["monument", 2, 3], ["fountain", 2, 3], ["market", 2], ["barn", 2, 2], ["tower", 8], ["tower", 4, 3], ["farm", 12], ["lamp", 48], ["lamp", 32, 2], ["trade", 50], ["road", 40, 2]] },
 ];
 
-const LABEL: Record<Kind | "trade", [string, string]> = {
+const LABEL: Record<string, [string, string]> = {
   house: ["a house", "houses"], farm: ["a farm", "farms"], well: ["a well", "wells"], lamp: ["a lamp post", "lamp posts"],
   storehouse: ["a storehouse", "storehouses"], hall: ["a town hall", "town halls"], tower: ["a watchtower", "watchtowers"],
   market: ["a market", "markets"], wall: ["the wall round the town", "walls"], trade: ["a trade with a villager", "trades with villagers"],
@@ -89,7 +93,14 @@ const LABEL: Record<Kind | "trade", [string, string]> = {
   chapel: ["a chapel", "chapels"], barn: ["a barn", "barns"], fountain: ["a fountain", "fountains"], monument: ["a monument", "monuments"],
   cathedral: ["the cathedral", "cathedrals"],
 };
-export const label = (k: Kind | "trade", n = 1) => (n === 1 ? LABEL[k][0] : LABEL[k][1]);
+export const label = (k: Kind | "trade", n = 1) => {
+  const l = LABEL[k] ?? [`a ${k.replace(/_/g, " ")}`, `${k.replace(/_/g, " ")}s`];
+  return n === 1 ? l[0] : l[1];
+};
+/** A kind's words, [one, many] (the catalog's new kinds register theirs). */
+export function setLabel(k: Kind, one: string, many: string): void {
+  LABEL[k] = [one, many];
+}
 /** A need in words: "6 houses", "2 houses at tier 2". */
 export const needText = ([k, n, t]: Need, have?: number) =>
   `${n === 1 ? label(k) : `${n} ${label(k, n)}`}${k === "road" && t && t > 1 ? ", paved" : t === 0 ? " (any shelter)" : t && t > 1 ? ` at tier ${t}` : ""}${have !== undefined ? ` ${Math.min(have, n)}/${n}` : ""}`;
@@ -125,8 +136,8 @@ export function cellTarget(k: string): { id: number; optional: boolean } | null 
   if (c < 48 || c > 57) return null;
   return { id: Number(s), optional: opt };
 }
-const exact = (id: number) => String(id);
-const optional = (id: number) => `?${id}`;
+export const exact = (id: number) => String(id);
+export const optional = (id: number) => `?${id}`;
 
 /** The material families and their grades: a better grade counts for a plan that asks for a lower one (a tier 1 plan
  *  is met by a tier 2 building), never the other way round. Oak and birch count alike (whatever is already there
@@ -163,6 +174,10 @@ export function accepts(target: number, cur: number): boolean {
   if (isLantern(target)) return isLantern(cur);
   if (target === B.TORCH) return isLantern(cur); // a lantern where a torch was planned is better
   if (target === B.WATER) return IS_WATER[cur] === 1;
+  // soil: grass is soil too; a sapling has done its job once it has grown into its tree
+  if (target === B.DIRT) return cur === B.GRASS;
+  if (target === B.OAK_SAPLING) return cur === B.OAK_LOG;
+  if (target === B.BIRCH_SAPLING) return cur === B.BIRCH_LOG;
   const tb = baseOf(target);
   const cb = baseOf(cur);
   if (target - tb !== cur - cb) return false; // stairs facing another way, a slab in the other half
@@ -180,7 +195,7 @@ export function itemOf(state: number): number {
 /** Placed last, once the building is up: they stand on, hang from or lean on the blocks round them. */
 const late = (id: number) =>
   id === B.TORCH || isLantern(id) || isDoor(id) || isLadder(id) || isPot(id) || isChest(id) || isFurnace(id) || isTrapdoor(id) || isGate(id) ||
-  id === B.BARREL || id === B.CRAFTING_TABLE || id === B.WATER || id === B.HAY_BALE || id === B.BOOKSHELF;
+  id === B.BARREL || id === B.CRAFTING_TABLE || id === B.WATER || id === B.HAY_BALE || id === B.BOOKSHELF || (id >= B.RED_BED && id < B.RED_BED + 8);
 
 // ---------------------------------------------------------------- the plans
 
@@ -188,6 +203,8 @@ export interface Site extends Rect {
   kind: Kind;
   y: number;
   face?: number;
+  design?: string;
+  cut?: boolean;
 }
 
 /** The side of a rectangle that faces a point (the town's middle): 0 north, 1 east, 2 south, 3 west. */
@@ -198,20 +215,24 @@ export function faceToward(r: Rect, cx: number, cz: number): number {
   return dz > 0 ? 2 : 0;
 }
 /** The rectangle a kind takes with its front facing `face` (a 9 by 11 building turned east is 11 by 9). */
-export function sizeFacing(kind: Exclude<Kind, "farm" | "road">, face: number): [number, number] {
-  const [w, d] = KINDS[kind].size;
+export function sizeFacing(kindOrDesign: string, face: number): [number, number] {
+  const [w, d] = (DESIGNS[kindOrDesign] ?? KINDS[kindOrDesign]).size;
   return face % 2 ? [d, w] : [w, d];
+}
+/** The blueprint a building (or a site) is built to: its design, else its kind's first one. */
+export function designOf(b: { kind: Kind; design?: string }): Blueprint | undefined {
+  return BLUEPRINTS[b.design ?? ""] ?? BLUEPRINTS[b.kind];
 }
 
 // ---------------------------------------------------------------- the blueprints
 
 /** A material per tier: [tier 1, tier 2, tier 3]. Every cell of a part is that one block (0: the part is left open). */
-type Mat = [number, number, number];
-const all3 = (id: number): Mat => [id, id, id];
+export type Mat = [number, number, number];
+export const all3 = (id: number): Mat => [id, id, id];
 /** A position along a building's front (u, from its left wall) or into it (v, from its front wall): a number counts
  *  from that wall (a negative one from the far wall: -1 is the far wall itself, -2 the cell inside it), "mid" is the
  *  middle ("mid-1", "mid+1" beside it), and "out" (v only) is the step outside the front wall. */
-type Pos = number | string;
+export type Pos = number | string;
 
 /** A piece of furniture (or a light, or a detail) in a blueprint. */
 export interface Furniture {
@@ -231,10 +252,9 @@ export interface Furniture {
 }
 
 /** The parts a building is made of; a blueprint says which block each one is at each tier. */
-type Part =
-  | "footing" | "floor" | "base" | "wall" | "post" | "plate" | "gable" | "roof" | "ridge" | "window" | "chimney" | "light"
-  | "rim" | "parapet" | "basin" | "corner" | "battlement" | "paving" | "border" | "counter" | "board" | "divider"
-  | "cap" | "buttress" | "column" | "step";
+/** The parts a building is made of (footing, floor, base, wall, post, plate, gable, roof, ridge, window, chimney,
+ *  light, and whatever a shape names); a blueprint says which block each one is at each tier. */
+export type Part = string;
 
 /** A building's design as data: its footprint, its rooms, the material of every part at every tier, its windows,
  *  doors and furniture. The shape (how the parts go together: a gabled cottage, market stalls, a tower...) is drawn
@@ -242,7 +262,14 @@ type Part =
 export interface Blueprint {
   /** What it is, for the AIs and the site. */
   what: string;
-  shape: "cottage" | "stalls" | "well" | "lamp" | "tower" | "keep" | "plaza" | "church" | "fountain" | "monument";
+  /** How the parts go together: a shape in SHAPES (cottage, church, tower, silo, pier, garden...). */
+  shape: string;
+  /** The kind (category) it is a design of; a blueprint registered under a kind's own name is that kind's first. */
+  kind?: Kind;
+  /** A cottage's roof: the ridge along the depth (v, the default), across the front (u), or a flat roof with a
+   *  parapet; upper floors at these heights over the floor (a ladder up in the back corner). */
+  ridge?: "u" | "v" | "flat";
+  floors?: number[];
   /** The walls' footprint: [along the front, front to back]. */
   core: [number, number];
   /** The overhang round it for the eaves: the rectangle it takes is the core and this much all round. */
@@ -272,44 +299,46 @@ export interface Blueprint {
   buttress?: number;
   /** What each tier adds, in words (index 1 to 3). */
   tiers: string[];
+  /** A shape's own settings (a yard's grid of saplings, its paths, a pond...). */
+  opts?: Record<string, number>;
 }
 
-const COB = B.COBBLESTONE;
-const SBR = B.STONE_BRICKS;
-const PL = B.OAK_PLANKS;
-const LOG = B.OAK_LOG;
-const FEN = B.OAK_FENCE;
-const PANE = B.GLASS_PANE;
-const CST = B.COBBLE_STAIRS;
-const OST = B.OAK_STAIRS;
-const SST = B.STONE_BRICK_STAIRS;
+export const COB = B.COBBLESTONE;
+export const SBR = B.STONE_BRICKS;
+export const PL = B.OAK_PLANKS;
+export const LOG = B.OAK_LOG;
+export const FEN = B.OAK_FENCE;
+export const PANE = B.GLASS_PANE;
+export const CST = B.COBBLE_STAIRS;
+export const OST = B.OAK_STAIRS;
+export const SST = B.STONE_BRICK_STAIRS;
 /** A table: an oak slab in the top half of its cell (a chair is a stair beside it, its back away from the table). */
-const TABLE = B.OAK_SLAB + 1;
+export const TABLE = B.OAK_SLAB + 1;
 /** A rug: white wool (the island's sheep are white) laid into the floor. */
-const RUG = B.WOOL_WHITE;
+export const RUG = B.WOOL_WHITE;
 /** A row of the same furniture along v (a long table, benches). */
-const along = (u: Pos, dy: number, v0: number, v1: number, f: Omit<Furniture, "at">): Furniture[] => {
+export const along = (u: Pos, dy: number, v0: number, v1: number, f: Omit<Furniture, "at">): Furniture[] => {
   const out: Furniture[] = [];
   for (let v = v0; v <= v1; v++) out.push({ ...f, at: [u, dy, v] });
   return out;
 };
 /** A row of the same furniture along u. */
-const across = (u0: number, u1: number, dy: number, v: Pos, f: Omit<Furniture, "at">): Furniture[] => {
+export const across = (u0: number, u1: number, dy: number, v: Pos, f: Omit<Furniture, "at">): Furniture[] => {
   const out: Furniture[] = [];
   for (let u = u0; u <= u1; u++) out.push({ ...f, at: [u, dy, v] });
   return out;
 };
 /** A rug laid into the floor along v (a detail: only with wool to hand). */
-const rug = (u: Pos, v0: number, v1: number, tier: number): Furniture[] => along(u, -1, v0, v1, { block: RUG, tier, optional: true });
+export const rug = (u: Pos, v0: number, v1: number, tier: number): Furniture[] => along(u, -1, v0, v1, { block: RUG, tier, optional: true });
 /** Lanterns on fence posts either side of the door (the finishing touch on a front). */
-const doorLamps = (tier: number): Furniture[] => [
+export const doorLamps = (tier: number): Furniture[] => [
   { block: FEN, at: ["mid-1", 0, "out"], tier },
   { block: B.LANTERN, at: ["mid-1", 1, "out"], tier },
   { block: FEN, at: ["mid+1", 0, "out"], tier },
   { block: B.LANTERN, at: ["mid+1", 1, "out"], tier },
 ];
 
-export const BLUEPRINTS: Record<Plain, Blueprint> = {
+export const BLUEPRINTS: Record<string, Blueprint> = {
   house: {
     what: "a cottage like the villages' houses: one room 5 by 6 and 3 high inside, open up to the roof, with a door, windows on every side, a plank floor, a kitchen along the back wall (a crafting table, a chest and a furnace); a bed, a table and chairs from tier 2",
     shape: "cottage", core: [7, 8], eaves: 1, walls: 3, baseCourses: 1,
@@ -787,26 +816,56 @@ export const BLUEPRINTS: Record<Plain, Blueprint> = {
   },
 };
 
-/** What each kind is for the AIs and the site, from its blueprint (the wall round the base is a line, not a lot).
- *  size: the rectangle a new one takes, its front along the first number; blocks: how many each tier takes. */
-export const KINDS: Record<Exclude<Kind, "farm" | "road">, { size: [number, number]; tiers: number; what: string; up: string[]; blocks: number[] }> = {
-  ...(Object.fromEntries(
-    (Object.keys(BLUEPRINTS) as Plain[]).map((k) => {
-      const bp = BLUEPRINTS[k];
-      return [k, { size: [bp.core[0] + 2 * bp.eaves, bp.core[1] + 2 * bp.eaves], tiers: bp.tiers.length - 1, what: bp.what, up: bp.tiers, blocks: [] as number[] }];
-    }),
-  ) as Record<Plain, { size: [number, number]; tiers: number; what: string; up: string[]; blocks: number[] }>),
+/** What a design is, for the AIs, the board and the site: its kind, its name, the rectangle it takes (its front along
+ *  the first number), how many tiers, what each tier adds, how many blocks each tier takes, and how big a job it is. */
+export interface DesignInfo {
+  id: string;
+  kind: Kind;
+  name: string;
+  size: [number, number];
+  tiers: number;
+  what: string;
+  up: string[];
+  blocks: number[];
+  /** small: a quick win (under ~150 blocks); medium; large; huge: a long project (over ~900). */
+  scale: "small" | "medium" | "large" | "huge";
+  /** The district style it belongs to, if it has one (oak, birch, stone, timber). */
+  style?: string;
+}
+/** Every design in the catalog, by id. */
+export const DESIGNS: Record<string, DesignInfo> = {};
+/** What each kind is: its first design (the one a kind's own name means) and every design of it. size: the rectangle
+ *  its first design takes; blocks: how many each tier of that one takes. */
+export const KINDS: Record<string, { size: [number, number]; tiers: number; what: string; up: string[]; blocks: number[]; designs: string[] }> = {
   wall: {
-    size: [27, 27], tiers: 3, blocks: [],
+    size: [27, 27], tiers: 3, blocks: [], designs: [],
     what: "a wall all the way round the base with four gates (built a stretch at a time)",
     up: ["", "a cobblestone wall two high, log gateposts with torches", "a third course of battlements and fence gates in the gateways", "stone brick gate pillars with lanterns"],
   },
 };
+const scaleOf = (n: number): DesignInfo["scale"] => (n < 150 ? "small" : n < 450 ? "medium" : n < 900 ? "large" : "huge");
 
-type Cell = { k: string; late: boolean };
+/** Put a design in the catalog: its blueprint under its id, its kind's list, what it takes at each tier. A design
+ *  registered under its kind's own name is that kind's first. */
+export function register(id: string, bp: Blueprint, opts: { name?: string; style?: string } = {}): DesignInfo {
+  const kind = bp.kind ?? id;
+  BLUEPRINTS[id] = bp;
+  const size: [number, number] = [bp.core[0] + 2 * bp.eaves, bp.core[1] + 2 * bp.eaves];
+  const info: DesignInfo = { id, kind, name: opts.name ?? id, size, tiers: bp.tiers.length - 1, what: bp.what, up: bp.tiers, blocks: [0], scale: "small", style: opts.style };
+  DESIGNS[id] = info;
+  const s: Site = { kind, design: id, x0: 100, z0: 100, x1: 100 + size[0] - 1, z1: 100 + size[1] - 1, y: 60 };
+  for (let t = 1; t <= info.tiers; t++) info.blocks.push(planFor(s, t, () => 59).filter((c) => cellTarget(c[3])).length);
+  info.scale = scaleOf(info.blocks[1] ?? 0);
+  const k = KINDS[kind];
+  if (!k || id === kind) KINDS[kind] = { size, tiers: info.tiers, what: bp.what, up: bp.tiers, blocks: info.blocks, designs: [...(k?.designs ?? []), ...(k?.designs.includes(id) ? [] : [id])] };
+  else if (!k.designs.includes(id)) k.designs.push(id);
+  return info;
+}
+
+type Cell = { k: string; late: boolean; after?: boolean };
 /** Building a plan in a building's own frame: u along its front (left to right seen from the street), v from the
  *  front wall in, dy up from the floor (dy -1 is the ground course: the footing and the floor). */
-class Draft {
+export class Draft {
   readonly cells = new Map<string, Cell & { x: number; y: number; z: number }>();
   readonly found = new Set<string>();
   W: number;
@@ -888,16 +947,18 @@ class Draft {
   inside(u: number, v: number) {
     return u >= -this.m && v >= -this.m && u < this.W + this.m && v < this.D + this.m;
   }
-  /** Put a block (or a cell kind: "a" keep clear, "o" open, "?p" a path) in a cell; 0 keeps it clear. */
-  put(u: number, dy: number, v: number, k: string | number): void {
+  /** Put a block (or a cell kind: "a" keep clear, "o" open, "?p" a path) in a cell; 0 keeps it clear. `last`: it goes
+   *  in with the furniture, after the rest (an upper floor: the room stays open to the roof while the roof goes on,
+   *  for the pillar a builder climbs to reach it); "after": once even those are in (a light hanging from that floor). */
+  put(u: number, dy: number, v: number, k: string | number, last: boolean | "after" = false): void {
     if (!this.inside(u, v)) return;
     const [x, z] = this.at(u, v);
     const kk = typeof k === "number" ? (k ? exact(k) : "a") : k;
     const t = cellTarget(kk);
-    this.cells.set(`${x},${this.s.y + dy},${z}`, { x, y: this.s.y + dy, z, k: kk, late: !!t && late(t.id) });
+    this.cells.set(`${x},${this.s.y + dy},${z}`, { x, y: this.s.y + dy, z, k: kk, late: !!t && (!!last || late(t.id)), after: !!t && last === "after" });
   }
-  opt(u: number, dy: number, v: number, id: number): void {
-    this.put(u, dy, v, optional(id));
+  opt(u: number, dy: number, v: number, id: number, last: boolean | "after" = false): void {
+    this.put(u, dy, v, optional(id), last);
   }
   /** A column the foundation fills up to the floor (low ground under the building). */
   foot(u: number, v: number): void {
@@ -914,7 +975,7 @@ class Draft {
 }
 
 /** The windows, doors and furniture of a blueprint, at this tier (after the shape, so they take the cells they need). */
-function furnish(d: Draft): void {
+export function furnish(d: Draft): void {
   const bp = d.bp;
   for (const [u, dy, v] of bp.windows ?? []) d.put(d.u(u), dy, d.v(v), d.mat("window"));
   for (const u of bp.doors ?? []) {
@@ -941,8 +1002,10 @@ function furnish(d: Draft): void {
     for (const k of spots) taken.add(k);
     let id = f.block;
     if (f.facing && (isChest(id) || isFurnace(id) || id === B.RED_BED || stairBase(id) >= 0 || isLadder(id))) id += d.dir(f.facing);
-    if (f.optional) d.opt(u, dy, v, id);
-    else d.put(u, dy, v, id);
+    // (a light hanging from the floor above goes in after that floor, which goes in last)
+    const after = f.hang && bp.floors?.length ? "after" : false;
+    if (f.optional) d.opt(u, dy, v, id, after);
+    else d.put(u, dy, v, id, after);
     if (head) d.put(head[0], dy, head[1], "a");
   }
 }
@@ -955,34 +1018,64 @@ function cottage(d: Draft): void {
   const { W, D, t, bp } = d;
   const H = bp.walls;
   const mid = d.mid;
-  const roofDy = (u: number) => (u < 0 || u >= W ? H : H + 1 + Math.min(u, W - 1 - u));
-  d.ceiling = (u) => roofDy(u);
+  const ridge = bp.ridge ?? "v";
+  // the roof's height over a spot: rising from the eaves walls to the ridge (along v: the side walls are the eaves
+  // walls; across, along u: the front and back are), or flat on top of the walls
+  const roofAt = (u: number, v: number) =>
+    ridge === "flat" ? H : ridge === "u" ? (v < 0 || v >= D ? H : H + 1 + Math.min(v, D - 1 - v)) : u < 0 || u >= W ? H : H + 1 + Math.min(u, W - 1 - u);
+  const floors = bp.floors ?? [];
+  // a hanging light hangs from what is over it: the roof's underside, or in a home with a floor above, that floor
+  // (up under a two-storey roof it was out of every reach: the agents climb no ladders)
+  d.ceiling = (u, v) => (floors.length ? Math.min(...floors) : roofAt(u, v));
   const posts = (bp.posts ?? []).map(([u, v]) => [d.u(u), d.v(v)]);
+  // an upper floor's way up: a ladder against the back wall in the left corner, a hole in the floor over it
+  const ladderU = 1;
+  const ladderV = D - 2;
   for (let v = 0; v < D; v++)
     for (let u = 0; u < W; u++) {
       d.foot(u, v);
       const edge = d.edge(u, v);
       d.put(u, -1, v, edge ? d.mat("footing") : d.mat("floor"));
       for (let dy = 0; dy < H; dy++) {
-        if (!edge) d.put(u, dy, v, "a");
+        // (the floor above goes in last: until then the room is open to the roof, and the pillar a builder climbs
+        // to reach the roof's middle stands on the floor below; the agents climb no ladders)
+        if (!edge) d.put(u, dy, v, floors.includes(dy) && !(u === ladderU && v === ladderV) ? d.mat("loft") || d.mat("floor") : "a", floors.includes(dy));
         else if (d.corner(u, v) || posts.some(([pu, pv]) => pu === u && pv === v)) d.put(u, dy, v, d.mat("post"));
-        else d.put(u, dy, v, dy < (bp.baseCourses ?? 0) ? d.mat("base") : d.mat("wall"));
+        else d.put(u, dy, v, dy < (bp.baseCourses ?? 0) ? d.mat("base") : floors.includes(dy) && d.mat("band") ? d.mat("band") : d.mat("wall"));
       }
     }
-  // the plate: a log beam along the top of the two eaves walls, which the roof's first row rests on
-  for (let v = 0; v < D; v++) for (const u of [0, W - 1]) d.put(u, H, v, d.mat("plate"));
-  // the gables, up to the roof
-  for (const v of [0, D - 1]) for (let u = 1; u < W - 1; u++) for (let dy = H; dy < roofDy(u); dy++) d.put(u, dy, v, d.mat("gable"));
-  // the roof, eaves and all (an even width: a ridge two blocks wide)
-  const two = W % 2 === 0;
-  for (let v = -d.m; v < D + d.m; v++)
-    for (let u = -d.m; u < W + d.m; u++) {
-      const top = two ? u === W / 2 - 1 || u === W / 2 : u === mid;
-      d.put(u, roofDy(u), v, top ? d.mat("ridge") : d.mat("roof") + (u < W / 2 ? d.RIGHT : d.LEFT));
-    }
+  for (const f of floors) for (let dy = 0; dy <= f; dy++) d.put(ladderU, dy, ladderV, B.LADDER + d.OUT);
+  if (ridge === "flat") {
+    // a flat roof of the ridge material, a parapet round it
+    for (let v = 0; v < D; v++) for (let u = 0; u < W; u++) d.put(u, H, v, d.edge(u, v) ? d.mat("plate") : d.mat("ridge"));
+    for (let v = 0; v < D; v++) for (let u = 0; u < W; u++) if (d.edge(u, v)) d.put(u, H + 1, v, d.corner(u, v) ? d.mat("post") : d.mat("parapet") || d.mat("plate"));
+  } else if (ridge === "u") {
+    // the ridge across the front: the plate along the front and back walls, gables up the side walls
+    for (let u = 0; u < W; u++) for (const v of [0, D - 1]) d.put(u, H, v, d.mat("plate"));
+    for (const u of [0, W - 1]) for (let v = 1; v < D - 1; v++) for (let dy = H; dy < roofAt(u, v); dy++) d.put(u, dy, v, d.mat("gable"));
+    const two = D % 2 === 0;
+    const mv = Math.floor((D - 1) / 2);
+    for (let v = -d.m; v < D + d.m; v++)
+      for (let u = -d.m; u < W + d.m; u++) {
+        const top = two ? v === D / 2 - 1 || v === D / 2 : v === mv;
+        d.put(u, roofAt(u, v), v, top ? d.mat("ridge") : d.mat("roof") + (v < D / 2 ? d.IN : d.OUT));
+      }
+  } else {
+    // the plate: a log beam along the top of the two eaves walls, which the roof's first row rests on
+    for (let v = 0; v < D; v++) for (const u of [0, W - 1]) d.put(u, H, v, d.mat("plate"));
+    // the gables, up to the roof
+    for (const v of [0, D - 1]) for (let u = 1; u < W - 1; u++) for (let dy = H; dy < roofAt(u, v); dy++) d.put(u, dy, v, d.mat("gable"));
+    // the roof, eaves and all (an even width: a ridge two blocks wide)
+    const two = W % 2 === 0;
+    for (let v = -d.m; v < D + d.m; v++)
+      for (let u = -d.m; u < W + d.m; u++) {
+        const top = two ? u === W / 2 - 1 || u === W / 2 : u === mid;
+        d.put(u, roofAt(u, v), v, top ? d.mat("ridge") : d.mat("roof") + (u < W / 2 ? d.RIGHT : d.LEFT));
+      }
+  }
   if (bp.chimney && t >= bp.chimney.tier) {
     const cu = d.u(bp.chimney.u);
-    for (let dy = H; dy <= roofDy(cu) + 2; dy++) d.put(cu, dy, D - 1, d.mat("chimney"));
+    for (let dy = H; dy <= roofAt(cu, D - 1) + 2; dy++) d.put(cu, dy, D - 1, d.mat("chimney"));
   }
   furnish(d);
 }
@@ -1063,7 +1156,7 @@ function lamp(d: Draft): void {
 }
 
 /** Battlements on a ring at height dy: merlons on the corners and every other block, gaps between. */
-function battlements(d: Draft, dy: number, block: number): void {
+export function battlements(d: Draft, dy: number, block: number): void {
   const { W, D } = d;
   for (let v = 0; v < D; v++)
     for (let u = 0; u < W; u++) {
@@ -1143,7 +1236,7 @@ function plaza(d: Draft): void {
 }
 
 /** A ring of stairs round a rectangle at height dy, each one's high side toward the middle (a stepped pyramid roof). */
-function stairRing(d: Draft, u0: number, u1: number, v0: number, v1: number, dy: number, stair: number): void {
+export function stairRing(d: Draft, u0: number, u1: number, v0: number, v1: number, dy: number, stair: number): void {
   for (let v = v0; v <= v1; v++)
     for (let u = u0; u <= u1; u++) {
       if (u !== u0 && u !== u1 && v !== v0 && v !== v1) continue;
@@ -1304,7 +1397,8 @@ function monument(d: Draft): void {
   furnish(d);
 }
 
-const SHAPES: Record<Blueprint["shape"], (d: Draft) => void> = { cottage, stalls, well, lamp, tower, keep, plaza, church, fountain, monument };
+/** How each shape is drawn; the catalog (agents/catalog.ts) adds its own. */
+export const SHAPES: Record<string, (d: Draft) => void> = { cottage, stalls, well, lamp, tower, keep, plaza, church, fountain, monument };
 
 /** The order a person builds in: the foundation, then a layer at a time from the bottom, each layer walked round
  *  from the blocks already standing (a wall's top before the roof that rests on it, the inner roof row before the
@@ -1327,7 +1421,7 @@ function order(cells: (Cell & { x: number; y: number; z: number })[], r: Rect, f
   const rest = cells.filter((c) => c.k !== "d");
   const supported = (c: { x: number; y: number; z: number }) =>
     c.y <= floor || [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].some(([a, b, d]) => placed.has(key(c.x + a, c.y + b, c.z + d)));
-  for (const group of [rest.filter((c) => !c.late), rest.filter((c) => c.late)]) {
+  for (const group of [rest.filter((c) => !c.late), rest.filter((c) => c.late && !c.after), rest.filter((c) => c.after)]) {
     const byY = new Map<number, typeof cells>();
     for (const c of group) {
       if (!byY.has(c.y)) byY.set(c.y, []);
@@ -1359,7 +1453,7 @@ function order(cells: (Cell & { x: number; y: number; z: number })[], r: Rect, f
 /** The plan of a building at a tier: its cells in build order. `ground` gives the ground under a column, so low spots
  *  get a foundation first. */
 export function planFor(s: Site, tier: number, ground: (x: number, z: number) => number): PlanCell[] {
-  const bp = BLUEPRINTS[s.kind as Plain];
+  const bp = designOf(s);
   if (!bp) return [];
   const top = bp.tiers.length - 1;
   const t = Math.max(1, Math.min(tier, top));
@@ -1388,6 +1482,14 @@ export function planFor(s: Site, tier: number, ground: (x: number, z: number) =>
     const outer = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => !d.found.has(`${x + dx},${z + dz}`));
     for (let yy = Math.max(g + 1, s.y - 3); yy < s.y; yy++) if (!d.cells.has(`${x},${yy},${z}`)) d.cells.set(`${x},${yy},${z}`, { x, y: yy, z, k: outer ? exact(B.COBBLESTONE) : "d", late: false });
   }
+  // the cut: a lot dug into a slope has the ground over its floor taken away across the whole rectangle (the building
+  // and its eaves), a terrace, so the walls stand clear and the windows look out
+  if (s.cut)
+    for (let x = s.x0; x <= s.x1; x++)
+      for (let z = s.z0; z <= s.z1; z++) {
+        const g = ground(x, z);
+        for (let yy = s.y; yy <= Math.min(g, s.y + 3); yy++) if (!d.cells.has(`${x},${yy},${z}`)) d.cells.set(`${x},${yy},${z}`, { x, y: yy, z, k: "a", late: false });
+      }
   // steps down from each door when the ground falls away in front of it: the step outside a cottage on a slope stood
   // two blocks over the grass, and nobody could get in (sonnet walked round its own house for minutes)
   for (const du of bp.doors ?? []) {
@@ -1522,8 +1624,8 @@ export function roadPlan(hub: { x: number; z: number }, builds: Building[], grou
 
 /** A cottage as a home: the room inside, its door (the lower cell) and where its bed goes (and the bed's state). */
 export function homeOf(b: Building): { room: Rect; door: [number, number, number]; bed: [number, number, number, number] | null } | null {
-  const bp = BLUEPRINTS[b.kind as Plain];
-  if (!bp || bp.shape !== "cottage") return null;
+  const bp = designOf(b);
+  if (!bp || bp.shape !== "cottage" || b.kind !== "house") return null;
   const d = new Draft(b, 1, bp);
   const [ax, az] = d.at(1, 1);
   const [bx, bz] = d.at(d.W - 2, d.D - 2);
@@ -1539,7 +1641,7 @@ export function homeOf(b: Building): { room: Rect; door: [number, number, number
 
 /** The cell in front of a building's door (outside it), or null for something without a door. */
 export function doorStep(b: Building): [number, number] | null {
-  const bp = BLUEPRINTS[b.kind as Plain];
+  const bp = designOf(b);
   if (!bp || b.kind === "lamp" || b.kind === "well" || b.kind === "plaza") return null;
   const d = new Draft(b, 1, bp);
   return d.at(d.mid, -1);
@@ -1550,9 +1652,9 @@ export function doorStep(b: Building): [number, number] | null {
 /** A building's blueprint at a tier: on flat ground, its front to the north, every cell relative to the north-west
  *  corner of its rectangle (dx, dy up from the floor, dz) with what goes there (a cell kind, see cellTarget). What a
  *  town planner lays out and costs; the same plan planFor turns to face the town and fits to the ground. */
-export function blueprint(kind: Plain, tier: number): { size: [number, number]; cells: PlanCell[] } {
-  const [w, d] = KINDS[kind].size;
-  const s: Site = { kind, x0: 0, z0: 0, x1: w - 1, z1: d - 1, y: 0, face: 0 };
+export function blueprint(id: string, tier: number): { size: [number, number]; cells: PlanCell[] } {
+  const [w, d] = (DESIGNS[id] ?? KINDS[id]).size;
+  const s: Site = { kind: DESIGNS[id]?.kind ?? id, design: id, x0: 0, z0: 0, x1: w - 1, z1: d - 1, y: 0, face: 0 };
   return { size: [w, d], cells: planFor(s, tier, () => -1) };
 }
 
@@ -1571,7 +1673,7 @@ export function billOfCells(cells: PlanCell[]): Map<number, number> {
 
 /** What a building takes at a tier built from nothing (no foundation: that's the ground's), or with `from`, what the
  *  upgrade from that tier takes: only the cells whose block changes or is new. */
-export function materialsFor(kind: Plain | "wall", tier: number, from = 0): Map<number, number> {
+export function materialsFor(kind: string, tier: number, from = 0): Map<number, number> {
   const plan = (t: number) => (kind === "wall" ? wallPlan(0, 0, 13, () => 0, t) : blueprint(kind, t).cells);
   const want = plan(tier);
   if (!from) return billOfCells(want);
@@ -1583,13 +1685,8 @@ export function materialsFor(kind: Plain | "wall", tier: number, from = 0): Map<
   }));
 }
 
-// how many blocks each tier takes (for the AIs: what a build or an upgrade costs), on flat ground
-for (const k of Object.keys(BLUEPRINTS) as Plain[]) {
-  const [w, dd] = KINDS[k].size;
-  const s: Site = { kind: k, x0: 100, z0: 100, x1: 100 + w - 1, z1: 100 + dd - 1, y: 60 };
-  KINDS[k].blocks = [0];
-  for (let t = 1; t <= KINDS[k].tiers; t++) KINDS[k].blocks.push(planFor(s, t, () => 59).filter((c) => cellTarget(c[3])).length);
-}
+// the town's first designs, one per kind (the catalog adds the rest)
+for (const id of Object.keys(BLUEPRINTS)) register(id, BLUEPRINTS[id], { name: id });
 {
   const flat = () => 59;
   KINDS.wall.blocks = [0, 1, 2, 3].map((t) => (t ? wallPlan(200, 200, 13, flat, t).length : 0));

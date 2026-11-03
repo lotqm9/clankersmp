@@ -2,13 +2,21 @@
 // order the stages ask for them, each on the lot chooseLot picks (the same call the brain makes), then the streets
 // and the wall are planned round them, and the town is drawn as a map: every lot taken, nothing overlapping, nothing
 // on a street, every door joined to a street.
-//   node agents/town-plan-test.ts        (MAP=0 to skip the drawing; ROUGH=1 for a patch of ground that's no good)
-import { KINDS, ONCE, STAGES, doorStep, type Building, type Plain } from "./civ.ts";
-import { chooseLot, plazaRect, streetPlan, wallRadius, type Point } from "./town.ts";
+// Then the catalog's own kinds go in (agents/catalog.ts: workshops, farm buildings, civic buildings, gardens, tree
+// farms, gatehouses over the gates...), each with the design its street gives it, and the street furniture (benches,
+// flower beds) in the rows beside the streets; it says what style each street came out in, how many buildings stand
+// across the street from a twin, and how the houses step down from the middle out.
+//   node agents/town-plan-test.ts        (MAP=0 to skip the drawing; ROUGH=1 for a patch of ground that's no good;
+//   DUMP=plan.json writes the town out: every building with its design and style, the streets, the wall)
+import { DESIGNS, KINDS, ONCE, STAGES, doorStep, type Building, type Plain } from "./civ.ts";
+import { KIND_INFO } from "./catalog.ts";
+import { chooseLot, plazaRect, streetOf, streetPlan, streetSpots, streetsOf, styleOf, wallRadius, STREET_STYLES, type Point } from "./town.ts";
 import { wallPlan } from "./civ.ts";
 import type { Rect } from "./body.ts";
 
 const c: Point = { x: 256, z: 256 };
+// the districts' styles, north, east, south, west (STYLES=stone,timber,oak,birch: a birch district to the west)
+const styles = process.env.STYLES ? process.env.STYLES.split(",") : STREET_STYLES;
 const builds: Building[] = [];
 // rough ground: a lake east of the plaza and a hill to the south-west, where nothing fits
 const rough = process.env.ROUGH === "1";
@@ -35,13 +43,45 @@ for (const kind of want) {
   let site: (Rect & { face: number; y: number }) | null = null;
   if (kind === "plaza") site = { ...plazaRect(c), face: 0, y: 60 };
   else if (kind === "lamp") continue;
-  else site = chooseLot(kind, c, builds, [], fits, wallAt);
+  else if (KIND_INFO[kind]?.district === "street") {
+    // street furniture goes in the row beside the streets, off the paths (the way the brain puts it: streetSpot)
+    const paths = streetPlan(c, builds, () => 59, 1);
+    const taken = new Set(paths.cells.map(([x, , z]) => `${x},${z}`));
+    for (const b of builds) if (b.kind === "bench" || b.kind === "flowerbed") for (let x = b.x0; x <= b.x1; x++) for (let z = b.z0; z <= b.z1; z++) taken.add(`furniture:${x},${z}`);
+    const spot = streetSpots(c, builds, kind, taken, 3)[0];
+    site = spot ? { ...spot, y: 60 } : null;
+    if (spot) (site as { design?: string }).design = kind;
+  } else site = chooseLot(kind, c, builds, [], fits, wallAt, undefined, styles);
   if (!site) {
     failed++;
     console.log(`no lot for ${kind}`);
     continue;
   }
-  builds.push({ kind, x0: site.x0, z0: site.z0, x1: site.x1, z1: site.z1, y: 60, face: site.face, by: [], done: true, at: 0 });
+  builds.push({ kind, design: "design" in site ? (site.design as string | undefined) : undefined, x0: site.x0, z0: site.z0, x1: site.x1, z1: site.z1, y: 60, face: site.face, by: [], done: true, at: 0 });
+}
+// the catalog's kinds, by the stage they come in at: up to two of each (four gatehouses, one over each gate)
+const extra = Object.entries(KIND_INFO).filter(([k, i]) => !have.has(k) && i.district !== "street" && i.district !== "shore" && i.district !== "plaza").sort((a, b) => a[1].from - b[1].from);
+for (const [kind, info] of extra)
+  for (let n = 0; n < (info.district === "gate" ? 4 : Math.min(2, info.most)); n++) {
+    const site = chooseLot(kind, c, builds, [], fits, wallAt || wallRadius(), undefined, styles);
+    if (!site) {
+      failed++;
+      console.log(`no lot for ${kind}`);
+      break;
+    }
+    builds.push({ kind, design: site.design, x0: site.x0, z0: site.z0, x1: site.x1, z1: site.z1, y: 60, face: site.face, by: [], done: true, at: 0 });
+  }
+// street furniture in the rows beside the streets, kept off the paths to the doors and apart from each other
+{
+  const paths = streetPlan(c, builds, () => 59, 1);
+  const taken = new Set(paths.cells.map(([x, , z]) => `${x},${z}`));
+  for (const [kind, design, n] of [["bench", "bench", 10], ["flowerbed", "flowerbed", 10]] as [string, string, number][])
+    for (let i = 0; i < n; i++) {
+      const spot = streetSpots(c, builds, design, taken, 3)[0];
+      if (!spot) break;
+      builds.push({ kind, design, x0: spot.x0, z0: spot.z0, x1: spot.x1, z1: spot.z1, y: 60, face: spot.face, by: [], done: true, at: 0 });
+      for (let x = spot.x0; x <= spot.x1; x++) for (let z = spot.z0; z <= spot.z1; z++) taken.add(`furniture:${x},${z}`);
+    }
 }
 const roads = streetPlan(c, builds, () => 59, 1);
 const r = wallAt || wallRadius();
@@ -70,11 +110,60 @@ builds.forEach((b) => {
     console.log(`NO PATH to the ${b.kind}'s door at ${d}`);
   }
 });
+// every building is the design its street gives it: the style of the street, a design of its own kind
+const streets = streetsOf(c);
+const byStreet = new Map<number, Map<string, number>>();
+let offStyle = 0;
+for (const b of builds) {
+  if (!b.design || !DESIGNS[b.design]) continue;
+  if (DESIGNS[b.design].kind !== b.kind) {
+    problems++;
+    console.log(`WRONG DESIGN ${b.design} for a ${b.kind}`);
+  }
+  const at = streetOf(c, b);
+  if (!at) continue;
+  const m = byStreet.get(at[0]) ?? new Map<string, number>();
+  m.set(b.design, (m.get(b.design) ?? 0) + 1);
+  byStreet.set(at[0], m);
+  const st = DESIGNS[b.design].style;
+  const own = KINDS[b.kind].designs.some((id) => DESIGNS[id].style === styleOf(at[0], styles));
+  if (st && own && st !== styleOf(at[0], styles)) offStyle++;
+}
+for (const [si, m] of [...byStreet].sort((a, b) => a[0] - b[0])) console.log(`  ${streets[si].name} (${styleOf(si, styles)}): ${[...m].map(([d, n]) => `${d} ${n}`).join(", ")}`);
+// twins across the street: a building with one of its own design mirrored across its street
+let twins = 0;
+for (const b of builds) {
+  const at = streetOf(c, b);
+  if (!at || !b.design) continue;
+  const s = streets[at[0]];
+  const m = s.d[0] === 0 ? { x0: 2 * s.o.x - b.x1, x1: 2 * s.o.x - b.x0, z0: b.z0, z1: b.z1 } : { x0: b.x0, x1: b.x1, z0: 2 * s.o.z - b.z1, z1: 2 * s.o.z - b.z0 };
+  if (builds.some((q) => q !== b && q.design === b.design && Math.abs(q.x0 - m.x0) + Math.abs(q.z0 - m.z0) <= 1)) twins++;
+}
+// the houses' heights from the middle out
+const rings = [16, 30, 50, 999].map((to, i, a) => ({ from: i ? a[i - 1] : 0, to, sizes: new Map<string, number>() }));
+for (const b of builds) {
+  if (b.kind !== "house" || !b.design) continue;
+  const out = Math.max(Math.abs((b.x0 + b.x1) / 2 - c.x), Math.abs((b.z0 + b.z1) / 2 - c.z));
+  const ring = rings.find((q) => out < q.to)!;
+  const size = b.design.split("-")[1] ?? b.design;
+  ring.sizes.set(size, (ring.sizes.get(size) ?? 0) + 1);
+}
+console.log(`  houses from the middle out: ${rings.map((q) => `${q.from}-${q.to === 999 ? "edge" : q.to}: ${[...q.sizes].map(([s, n]) => `${s} ${n}`).join(" ") || "none"}`).join("; ")}`);
+console.log(`  ${twins} buildings with a twin across the street, ${offStyle} off their street's style (styles ${styles.join(", ")})`);
 const count = new Map<string, number>();
 for (const b of builds) count.set(b.kind, (count.get(b.kind) ?? 0) + 1);
 console.log(`${builds.length} buildings on lots (${[...count].map(([k, n]) => `${k} ${n}`).join(", ")}), ${roads.cells.length} street and path cells, the wall ${r} out (${wall.length} blocks); ${failed} with no lot, ${problems} problems`);
+if (process.env.DUMP) {
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(process.env.DUMP, JSON.stringify({
+    centre: c,
+    builds: builds.map((b) => ({ kind: b.kind, design: b.design, style: b.design ? DESIGNS[b.design]?.style : undefined, x0: b.x0, z0: b.z0, x1: b.x1, z1: b.z1, face: b.face, door: doorStep(b) })),
+    roads: roads.cells.map(([x, , z]) => [x, z]),
+    wall: wall.map(([x, , z]) => [x, z]),
+  }));
+}
 if (process.env.MAP !== "0") {
-  const L: Record<string, string> = { house: "h", storehouse: "S", hall: "H", market: "M", well: "W", tower: "T", keep: "K", plaza: "P", smithy: "F", bakery: "B", tavern: "V", library: "L", chapel: "C", barn: "N", fountain: "O", monument: "M", cathedral: "X" };
+  const L: Record<string, string> = { house: "h", storehouse: "S", hall: "H", market: "M", well: "W", tower: "T", keep: "K", plaza: "P", smithy: "F", bakery: "B", tavern: "V", library: "L", chapel: "C", barn: "N", fountain: "O", monument: "M", cathedral: "X", bench: "=", flowerbed: "*", gatehouse: "G", arch: "A", treefarm: "t", quarry: "q", garden: "g", park: "p" };
   const xs = builds.flatMap((b) => [b.x0, b.x1]).concat(c.x - r - 2, c.x + r + 2);
   const zs = builds.flatMap((b) => [b.z0, b.z1]).concat(c.z - r - 2, c.z + r + 2);
   const wallSet = new Set(wall.map(([x, , z]) => `${x},${z}`));

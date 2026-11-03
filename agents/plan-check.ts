@@ -4,12 +4,15 @@
 // hanging lantern one over it, a door the floor. It also says how high the top block is (the scaffolding reaches
 // about 14 over the floor), what each tier takes, and (PLANS=1) draws the floor plan of the room and the front.
 //   node agents/plan-check.ts            KINDS=chapel,cathedral PLANS=1 node agents/plan-check.ts
-import { BLUEPRINTS, KINDS, cellTarget, materialsFor, planFor, sizeFacing, type Plain } from "./civ.ts";
+// Every design of the catalog (agents/catalog.ts) is checked: KINDS takes design ids or kinds (a kind: all its designs).
+import { BLUEPRINTS, DESIGNS, KINDS, cellTarget, materialsFor, planFor, sizeFacing } from "./civ.ts";
+import "./catalog.ts";
 import { B, BLOCKS, OPAQUE, SOLID } from "../shared/blocks.ts";
 import { itemDef } from "../shared/items.ts";
 import { isDoor, isLadder } from "../shared/shapes.ts";
 
-const kinds = (process.env.KINDS || Object.keys(BLUEPRINTS).join(",")).split(",") as Plain[];
+const asked = (process.env.KINDS || "").split(",").filter(Boolean);
+const kinds = asked.length ? asked.flatMap((k) => (DESIGNS[k] ? [k] : KINDS[k]?.designs ?? [k])) : Object.keys(DESIGNS);
 const plans = process.env.PLANS === "1";
 const name = (id: number) => itemDef(id)?.key ?? BLOCKS[id]?.key ?? String(id);
 let bad = 0;
@@ -22,10 +25,11 @@ for (const kind of kinds) {
     bad++;
     continue;
   }
-  for (let tier = 1; tier <= KINDS[kind].tiers; tier++) {
+  const info = DESIGNS[kind];
+  for (let tier = 1; tier <= info.tiers; tier++) {
     for (let face = 0; face < 4; face++) {
       const [w, d] = sizeFacing(kind, face);
-      const s = { kind, x0: 100, z0: 100, x1: 100 + w - 1, z1: 100 + d - 1, y: Y, face };
+      const s = { kind: info.kind, design: kind, x0: 100, z0: 100, x1: 100 + w - 1, z1: 100 + d - 1, y: Y, face };
       const cells = planFor(s, tier, () => Y - 1);
       const solid = new Set<string>();
       const at = new Map<string, number>();
@@ -58,13 +62,16 @@ for (const kind of kinds) {
       }
       if (face === 0) {
         const bill = [...materialsFor(kind, tier, tier > 1 ? tier - 1 : 0)].map(([id, n]) => `${name(id)} ${n}`).join(", ");
-        console.log(`${kind} tier ${tier}: ${KINDS[kind].blocks[tier]} blocks, top ${top} over the floor${top > 14 ? " (OUT OF REACH?)" : ""}; ${tier > 1 ? "the upgrade takes" : "takes"}: ${bill}`);
+        console.log(`${kind} tier ${tier}: ${info.blocks[tier]} blocks (${info.scale}), top ${top} over the floor${top > 14 ? " (OUT OF REACH?)" : ""}; ${tier > 1 ? "the upgrade takes" : "takes"}: ${bill}`);
       }
       if (problems.length) {
         bad++;
         console.log(`  FAIL ${kind} tier ${tier} facing ${face}: ${problems.length} problems: ${problems.slice(0, 6).join("; ")}`);
       }
-      if (plans && face === 0 && tier === KINDS[kind].tiers) {
+      // every cell inside the rectangle the design takes (a cell outside it would land on the street or a neighbour)
+      const outside = cells.find(([x, , z]) => x < s.x0 || x > s.x1 || z < s.z0 || z > s.z1);
+      if (outside) problems.push(`a cell outside the lot at ${outside[0] - s.x0},${outside[2] - s.z0}`);
+      if (plans && face === 0 && tier === info.tiers) {
         // the room at floor height (dy 0) and one up, seen from above with the front at the bottom
         for (const dy of [-1, 0, 1]) {
           console.log(`  dy ${dy} (front at the bottom):`);
@@ -116,5 +123,6 @@ function glyph(id: number): string {
   if (k.includes("pot")) return "o";
   return "?";
 }
-console.log(bad ? `\n${bad} designs with problems` : "\nevery design builds in order");
+console.log(`\n${kinds.length} designs checked (${new Set(kinds.map((k) => DESIGNS[k]?.kind)).size} kinds)`);
+console.log(bad ? `${bad} designs with problems` : "every design builds in order");
 process.exit(bad ? 1 : 0);

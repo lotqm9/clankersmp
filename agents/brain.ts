@@ -19,7 +19,8 @@ import { B, BLOCKS, IS_WATER, SOLID, isStorage } from "../shared/blocks.ts";
 import { I, ITEMS, itemDef, type Stack } from "../shared/items.ts";
 import { MF, MOB_SPECS } from "../shared/mobs.ts";
 import { armorValue } from "../shared/combat.ts";
-import { collectObsidian, enchant as enchantGear, isObsidian, techText } from "./tech.ts";
+import { collectObsidian, deepGoal, enchant as enchantGear, isObsidian, tableAt, techText } from "./tech.ts";
+import { HEAD_BACK, LAST_START, climbOut, dayClock, miningTrip, oughtToClimbOut, pendingTrip, tripCheck, tripNeeds } from "./mine.ts";
 import { messiness, organize } from "./inventory.ts";
 import { SPECS as ANIMAL_SPECS } from "../shared/animals.ts";
 import { canHarvest } from "../shared/mining.ts";
@@ -195,7 +196,7 @@ How to play well:
 - If something failed, don't do the same thing again: change what you ask for, move somewhere else, or do something else first.
 - With a weapon, kill what attacks you, Rattlers too (charge them: they are weak up close). Back off only when you are badly hurt. Without a weapon, keep away from monsters at night.
 - Stone only drops cobblestone if you mine it with a pickaxe.
-- Deep caves (below about y 30) are dark and full of Rattlers. Mine near the surface; don't go deep. If you end up underground, dig_out digs a staircase back up to the open sky from anywhere.
+- Deep caves (below about y 30) are dark and full of Rattlers: everyday mining (collect) stays near the surface. The deep, where the diamonds, rubies and most iron are, is for a mine_trip: in the morning (dawn to time ${LAST_START}), armoured, with an iron pickaxe, a real weapon, torches, food and spare blocks. It digs a lit staircase down to the diamond layer, tunnels to the diamonds it knows of mining every ore on the way, blocks off the caves it opens, comes back up before dusk and puts the haul in the storehouse. Never deep at night. If you end up underground, dig_out digs a staircase back up to the open sky from anywhere.
 - Armor goes on by itself as soon as you have it.
 - Chat is public. Everyone in the world sees it. Only say something when you have something to say to the others, like a question, an offer, a warning or a request. Do not narrate your own actions or plans.
 - Names of blocks and items are lowercase with underscores, like oak_log, cobblestone, wooden_pickaxe, porkchop.
@@ -210,6 +211,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: "attack", description: "Fight a creature or a player until it is dead or gone. target: shambler, rattler, skitter, pig, cow, sheep, chicken, or a player's name. You use your best weapon.", input_schema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] } },
   { name: "dig_in", description: "Dig straight down three blocks and close the hole over your head: safe from monsters. Use it before night.", input_schema: { type: "object", properties: {} } },
   { name: "dig_out", description: "Climb back up to the surface from anywhere underground: out of your hole, then a staircase dug up through the rock until you see the sky.", input_schema: { type: "object", properties: {} } },
+  { name: "mine_trip", description: "A deep mining trip for diamonds, rubies and iron, by day: from open ground outside the town, a lit staircase down to the diamond layer (y 11), a tunnel to the nearest diamonds it knows of, every ore its walls show mined (whole veins), caves it breaks into blocked off, then back up the same way before dusk and the haul into the storehouse (it keeps what its own next gear needs). Mornings only, and only armoured with an iron pickaxe, a real weapon, 8+ torches, food and 16 spare blocks; a stone_pickaxe as well digs the stone and saves the iron one for the ores. Cut short by a fight, call it again to carry on.", input_schema: { type: "object", properties: {} } },
   { name: "dig_down", description: "Dig straight down a few blocks, to reach stone and ores.", input_schema: { type: "object", properties: { blocks: { type: "integer", minimum: 1, maximum: 8 } }, required: ["blocks"] } },
   { name: "go_to_player", description: "Walk over to another player.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "go_to", description: "Walk to coordinates.", input_schema: { type: "object", properties: { x: { type: "number" }, z: { type: "number" } }, required: ["x", "z"] } },
@@ -335,6 +337,7 @@ export class Brain {
   private lastHelpReply = 0;
   /** Mining a staircase out of its hole at night (the wait tool): the hole isn't sealed while it does. */
   private holeMining = false;
+  private lastClimb = 0;
   /** What the running reflex is, so being shot can cut a walk short. */
   private reflexLabel = "";
   private lastEat = 0;
@@ -628,6 +631,7 @@ export class Brain {
     const day = !b.isNight();
     const where = b.inHole() || b.sealed()
       ? (day ? "in a hole in broad daylight (dig_out to get out and get on with the day)" : "in a hole, sealed in" + (b.sealed() ? "" : " (the roof is open)"))
+      : pendingTrip(b) && b.covered() ? "down your mine on a deep trip (mine_trip carries on; it climbs back out the way it came)"
       : b.covered() ? (fy < 44 ? "underground in the dark, where monsters spawn even by day (dig_out climbs up)" : "under cover") : "under open sky";
     lines.push(`You: health ${b.stats.hp.toFixed(0)}/20, hunger ${b.stats.food}/20${b.stats.air < 300 ? `, air ${b.stats.air}/300` : ""}. At x=${fx} y=${fy} z=${fz}, standing on ${under}, ${where}${b.phys.inWater ? ", in water" : ""}.`);
     const invMap = new Map<number, number>();
@@ -648,6 +652,14 @@ export class Brain {
     if (!worn.length && has("iron_ingot")) missing.push("armor (you have iron)");
     if (missing.length) lines.push(`Still missing: ${missing.join(", ")}.`);
     lines.push(techText(b));
+    // v14: the morning is for a deep trip when the next gear is down there and it has the kit
+    const deep = deepGoal(b);
+    const trip = pendingTrip(b);
+    if (trip && b.covered()) lines.push(`You're on a deep mining trip that a fight or a meal cut short (you're at y ${fy}): mine_trip carries on${dayClock(b) >= HEAD_BACK ? " (it's late: it climbs out)" : ""}.`);
+    else if (deep && !b.isNight() && dayClock(b) <= LAST_START) {
+      const needs = tripNeeds(b);
+      lines.push(needs.length ? `What your next gear needs (${deep}) is deep down: a mine_trip there needs ${needs.join(", ")} first.` : `This morning is the time for a mine_trip: what your next gear needs (${deep}) is deep down, and you have the kit for it.`);
+    }
     lines.push(PACK.plan ? `The pack's plan (written by ${PACK.by}; anyone can rewrite it with pack_plan):
 ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (PACK.base) lines.push(`The pack's base: x=${PACK.base.x} z=${PACK.base.z}, ${Math.round(Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z))} blocks ${dirWord(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z)}.`);
@@ -749,6 +761,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       case "dig_in": return "!shelter";
       case "dig_out": return "!goToSurface";
       case "dig_down": return `!digDown(${Number(i.blocks) || 3})`;
+      case "mine_trip": return "!mineTrip";
       case "go_to_player": return `!goToPlayer(${q(i.name)})`;
       case "go_to": return `!goToCoordinates(${Number(i.x)}, ${Number(i.z)})`;
       case "explore": return `!explore(${q(i.direction)})`;
@@ -802,6 +815,97 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
   }
 
+  /** v14: a deep mining trip (agents/mine.ts): out of the town to open ground first, the haul into the storehouse
+   *  after. What its own next gear needs stays with it (iron for the armour and tools it lacks, diamonds for the
+   *  pickaxe and the table); rubies pay for enchanting and trades, so they stay too. */
+  private async mineTrip(): Promise<string> {
+    const b = this.body;
+    if (!pendingTrip(b)) {
+      const why = tripCheck(b);
+      if (why) return why;
+      const out = await this.walkOutToDig();
+      if (out) return out;
+    }
+    const r = await miningTrip(b);
+    if (!r.back || b.dead || !r.haul.size) return r.text;
+    // the haul: in the storehouse, if there is one within a walk
+    const s = this.storehouse();
+    if (!s) return `${r.text}. (No storehouse yet: keep it, or give it to whoever needs it.)`;
+    const far = Math.hypot((s.x0 + s.x1) / 2 - b.phys.x, (s.z0 + s.z1) / 2 - b.phys.z);
+    if (far > 160) return `${r.text}. (The storehouse is ${Math.round(far)} blocks away: take the haul in when you're back at the base.)`;
+    const only = new Map<number, number>();
+    const spare = (id: number, keep: number) => {
+      const n = b.count(id) - keep;
+      if (n > 0) only.set(id, n);
+    };
+    spare(I.RAW_IRON, this.ironNeed());
+    spare(I.COAL, 8);
+    spare(I.RAW_GOLD, 0);
+    spare(I.DIAMOND, this.diamondNeed());
+    spare(B.COBBLESTONE, 32);
+    if (!only.size) return `${r.text}. You kept it all: your own next gear needs it.`;
+    if (far > 30) {
+      b.action = "taking the haul back to the storehouse";
+      await b.goto((s.x0 + s.x1) / 2 + 0.5, PACK.base?.y ?? b.phys.y, (s.z0 + s.z1) / 2 + 0.5, 5, { maxMs: 60000 });
+    }
+    const put = await this.toStore(only);
+    return `${r.text}. ${put || "Couldn't get the haul into the storehouse."}`;
+  }
+
+  /** Iron its own next gear still needs (an iron pickaxe and sword, and iron armour in every slot), less what it has. */
+  private ironNeed(): number {
+    const b = this.body;
+    const all = [...b.inv, ...b.armor].filter((s): s is Stack => !!s);
+    const has = (kind: string) => all.some((s) => itemDef(s.id)?.tool?.kind === kind && (itemDef(s.id)?.tool?.tier ?? 0) >= 3);
+    let n = (has("pickaxe") ? 0 : 3) + (has("sword") || has("axe") ? 0 : 2);
+    const cost = [5, 8, 7, 4];
+    for (let slot = 0; slot < 4; slot++) if (!all.some((s) => itemDef(s.id)?.armor?.slot === slot && (itemDef(s.id)?.armor?.material ?? 0) >= 1)) n += cost[slot];
+    return Math.max(0, n - b.count(I.IRON_INGOT));
+  }
+
+  /** Diamonds its next gear still needs: 3 for a diamond pickaxe, 2 for the pack's enchanting table while there's none. */
+  private diamondNeed(): number {
+    const b = this.body;
+    const pick = b.inv.some((s) => s && canHarvest(B.OBSIDIAN, s.id));
+    return (pick ? 0 : 3) + (tableAt(b) || b.has(B.ENCHANTING_TABLE) ? 0 : 2);
+  }
+
+  /** Out to open ground away from the town, the spawn hub and the villages (a mine's stair never goes down under
+   *  them): "" once it's there. */
+  private async walkOutToDig(): Promise<string> {
+    const b = this.body;
+    const villages = (b.world?.villages ?? []).map((k) => VILLAGE_SITES[k]).filter(Boolean);
+    const taken = (x: number, z: number) => inHub(x, z) || (!!PACK.base && Math.hypot(x - PACK.base.x, z - PACK.base.z) < 26)
+      || villages.some((v) => Math.hypot(x - v.x, z - v.z) < 30) || footprints().some((r) => x >= r.x0 - 3 && x <= r.x1 + 3 && z >= r.z0 - 3 && z <= r.z1 + 3);
+    const open = () => !taken(b.phys.x, b.phys.z) && !b.phys.inWater && b.underSky(Math.floor(b.phys.x), Math.floor(b.phys.y + 0.1) + 1, Math.floor(b.phys.z));
+    if (open()) return "";
+    if (b.covered() && !footprints().some((r) => b.phys.x >= r.x0 && b.phys.x <= r.x1 + 1 && b.phys.z >= r.z0 && b.phys.z <= r.z1 + 1)) {
+      b.action = "climbing up out of the ground";
+      await b.digOut();
+      if (open()) return "";
+    }
+    const c = taken(b.phys.x, b.phys.z) && PACK.base ? PACK.base : { x: b.phys.x, z: b.phys.z, y: b.phys.y };
+    const spots: { x: number; z: number; g: number; d: number }[] = [];
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      for (let r = 8; r <= 90; r += 6) {
+        const tx = Math.floor(c.x + Math.cos(a) * r);
+        const tz = Math.floor(c.z + Math.sin(a) * r);
+        if (taken(tx, tz)) continue;
+        const g = b.groundAt(tx, tz, Math.floor(c.y));
+        if (g >= 0) spots.push({ x: tx, z: tz, g, d: Math.hypot(tx - b.phys.x, tz - b.phys.z) });
+        break;
+      }
+    }
+    spots.sort((p, q) => p.d - q.d);
+    for (const sp of spots.slice(0, 3)) {
+      if (open() || b.abort || b.dead) break;
+      b.action = "walking out to open ground to start a mine";
+      await b.goto(sp.x + 0.5, sp.g + 1, sp.z + 0.5, 2, { maxMs: 40000 });
+    }
+    return open() ? "" : "couldn't find open ground outside the town to start a mine from: walk out a little (explore), then mine_trip";
+  }
+
   /** Why a tool would take it out across open ground at night, or "" if it's fine. Archers come out in the dark and
    *  shoot from range, and the shamblers come in numbers: sonnet left its hole on season 12's first night to look
    *  for sheep, walked a ravine in the dark and was shot. Nights are for the house or the hole. */
@@ -812,6 +916,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     switch (name) {
       case "explore": return `${why}; explore by day`;
       case "dig_out": return `${why}; dig_out at dawn`;
+      case "mine_trip": return pendingTrip(b) ? "" : `${why}; the deep is a morning trip (mine_trip at dawn)`;
       case "go_to_base": return PACK.base && far(PACK.base.x, PACK.base.z) ? `${why}; go to the base by day` : "";
       case "go_home": {
         // home through the rock in the dark, from a hole it's safe in: no (out in the open, home is the place to go)
@@ -869,6 +974,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           return await b.digIn();
         }
         case "dig_out": return await b.digOut();
+        case "mine_trip": return await this.mineTrip();
         case "dig_down": return await this.digDown(Math.max(1, Math.min(8, Number(i.blocks) || 3)));
         case "go_to_player": {
           const o = [...b.others.values()].find((p) => p.name === String(i.name ?? "").toLowerCase());
@@ -2649,6 +2755,13 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       await this.reflex("eating", async () => (b.stats.food <= 8 ? `You were starving, so you ate: ${await b.eat()}.` : `You were hurt, and a full stomach heals fast, so you ate: ${await b.eat()}.`));
       return;
     }
+    // a deep trip left below (a fight cut it short and nothing took it up again), late in the day: back up the way it
+    // went down, before the dark (the night rules: nobody is deep after dusk)
+    if (oughtToClimbOut(b) && !b.hostiles(10).length && this.skill !== "mine_trip" && Date.now() - this.lastClimb > 60000) {
+      this.lastClimb = Date.now();
+      await this.reflex("climbing out of the mine before dusk", async () => `It was getting late and you were still down the mine, so you climbed back out: ${(await climbOut(b)) ? "you're up in the open again" : "you're still underground (dig_out)"}.`);
+      return;
+    }
     // dusk with a house: home before dark (and to bed). Not out of a sealed hole (safe there till morning), not
     // in the middle of digging in or out (it cut dig_out short every minute and left haiku in the rock all night),
     // and not a long walk through the dark once night has fallen
@@ -2656,7 +2769,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const homeFar = b.home ? Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) : 0;
     // dusk near the storehouse with a bag of things for the town: put them in before going home (the day plan's dusk
     // round; work does it, this catches whoever is busy with something else). Not the builder (its bag is the build)
-    if (tod >= 10800 && tod < 11500 && Date.now() - this.lastStoreTrip > 300000 && !["build", "upgrade", "work", "collect", "storehouse", "dig_out", "dig_in", "go_home", "sleep", "smelt"].includes(this.skill)
+    if (tod >= 10800 && tod < 11500 && Date.now() - this.lastStoreTrip > 300000 && !["build", "upgrade", "work", "collect", "storehouse", "dig_out", "dig_in", "go_home", "sleep", "smelt", "mine_trip"].includes(this.skill)
       && !/home|bed|asleep|storehouse/.test(b.action) && !b.sealed() && PACK.board?.roles[this.name] !== "builder") {
       const s = this.storehouse();
       if (s && Math.hypot((s.x0 + s.x1) / 2 - b.phys.x, (s.z0 + s.z1) / 2 - b.phys.z) < 40) {
@@ -2673,12 +2786,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // a long way out in the late afternoon: start back now, while there's daylight for the walk (opus went 190 blocks
     // after sheep and was still out there at dusk, in a marsh where it couldn't dig in)
     if (b.home && homeFar > 45 && tod >= 9000 && tod < 11600 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
-      && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill)) {
+      && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house", "mine_trip"].includes(this.skill) && !pendingTrip(b)) {
       this.lastHomeTrip = Date.now();
       await this.reflex("heading home before dark, it's a long walk", async () => `You were ${Math.round(homeFar)} blocks from home late in the afternoon, so you started back before dark: ${await b.goHome()}.`);
       return;
     }
-    if (b.home && !b.atHome() && tod >= 11600 && tod < 23000 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
+    if (b.home && !b.atHome() && tod >= 11600 && tod < 23000 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action) && this.skill !== "mine_trip" && !pendingTrip(b)
       && !b.sealed() && !this.holeMining && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill) && (!b.isNight() || homeFar < 40)
       // once it's dark, only from out in the open: under cover it stays and works (underground at night, opus set off
       // for a house 19 blocks away through the rock and paced its tunnel for a minute and a half, twice)
@@ -2690,7 +2803,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     // late afternoon with no house but the blocks for one: build it now at the base, so night finds it indoors with
     // its bed (beds go in houses, not holes)
-    if (!b.home && tod >= 10200 && tod < 11900 && b.buildingBlocks().n >= 38 && Date.now() - this.lastHouseTry > 120000 && !/build|house/.test(b.action)) {
+    // (not from down a mine: the trip climbs out first; all four test trips were pulled off their climb to go and build)
+    if (!b.home && tod >= 10200 && tod < 11900 && b.buildingBlocks().n >= 38 && Date.now() - this.lastHouseTry > 120000 && !/build|house/.test(b.action) && this.skill !== "mine_trip" && !pendingTrip(b)) {
       this.lastHouseTry = Date.now();
       const far = PACK.base ? Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z) : 0;
       if (!PACK.base || far < 60) {

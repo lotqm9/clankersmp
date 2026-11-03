@@ -980,10 +980,18 @@ export class Body {
     return this.heldId() === id;
   }
 
-  /** The fastest thing it has for breaking this block (its hand if nothing helps). */
+  /** v14: a tool kept for what only it can do, 0: none. A deep trip spares its iron pickaxe for the diamonds and digs
+   *  the stair with the stone one (an iron pickaxe is 250 blocks: one stair and tunnel wore one out, and the trip
+   *  went on digging stone by hand). */
+  spareTool = 0;
+
+  /** The fastest thing it has for breaking this block (its hand if nothing helps); the spared tool only where nothing
+   *  else can get the block out. */
   bestToolFor(block: number): number {
     let best = 0;
     let bt = breakTicks(block, 0);
+    let alt = 0;
+    let at = Infinity;
     for (const st of this.inv) {
       if (!st || !itemDef(st.id)?.tool) continue;
       const t = breakTicks(block, st.id);
@@ -991,8 +999,12 @@ export class Body {
         bt = t;
         best = st.id;
       }
+      if (this.spareTool && st.id !== this.spareTool && t >= 0 && t < at && canHarvest(block, st.id)) {
+        at = t;
+        alt = st.id;
+      }
     }
-    return best;
+    return this.spareTool && best === this.spareTool && alt ? alt : best;
   }
 
   /** Well armoured (iron or better on most of the body) with a real sword or axe: it can take a monster on rather

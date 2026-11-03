@@ -2973,18 +2973,32 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   private async replant(stumps: [number, number, number, boolean][]): Promise<number> {
     const b = this.body;
     let planted = 0;
+    // what it waits, all told, for a canopy to drop a sapling as it withers
+    let patience = 20000;
     for (const [x, y, z, birch] of stumps.slice(0, 6)) {
       if (b.abort || b.dead || b.isNight()) break;
       const below = b.get(x, y - 1, z);
       if (b.get(x, y, z) !== B.AIR || (below !== B.GRASS && below !== B.DIRT) || SOLID[b.get(x, y + 1, z)]) continue;
       const sap = birch ? B.BIRCH_SAPLING : B.OAK_SAPLING;
+      // over to the stump: the saplings its canopy drops as the leaves wither fall round it, and its leaves are in
+      // reach from there (from the last tree it cut, the first ones' stumps were out of sight)
+      if (Math.hypot(x + 0.5 - b.phys.x, z + 0.5 - b.phys.z) > 2.5) await b.goto(x + 0.5, y, z + 0.5, 2, { maxMs: 15000 });
+      if (!b.has(sap)) await b.pickUp(6, 2500);
       if (!b.has(sap)) {
         const leaves = b.findBlocks([B.OAK_LEAVES, B.BIRCH_LEAVES], 7, 40).filter(([lx, ly, lz]) => Math.abs(lx - x) <= 3 && Math.abs(lz - z) <= 3 && ly >= y && b.reachTo(lx, ly, lz) <= 4.3);
-        for (const [lx, ly, lz] of leaves.slice(0, 16)) {
+        // (one leaf in twenty gives a sapling: thirty make it all but sure; the rest of the canopy withers by itself)
+        for (const [lx, ly, lz] of leaves.slice(0, 30)) {
           if (b.abort || b.dead || b.has(sap)) break;
           await b.mine(lx, ly, lz, false);
         }
         await b.pickUp(5, 3000);
+      }
+      // none yet: the canopy withers by itself over the next half minute, its saplings falling round the stump
+      while (!b.has(sap) && patience > 0 && !b.abort && !b.dead) {
+        const t = Date.now();
+        await b.wait(40);
+        await b.pickUp(6, 2000);
+        patience -= Date.now() - t;
       }
       if (!b.has(sap)) continue;
       if (await b.place(sap, x, y, z, 8000)) planted++;

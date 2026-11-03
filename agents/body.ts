@@ -3192,6 +3192,16 @@ export class Body {
   /** Place what is still missing of a plan (cells in build order), up to `max` blocks: wrong blocks come out first
    *  (dirt in a wall, cobblestone an upgrade turns into stone bricks), furniture and anyone's chest never do. `short`
    *  comes back with the items it ran out of, cell by cell, so the job can go and get them. */
+  /** Something to put a block against: the server only places one touching a block that isn't air or water (its
+   *  hasNeighbor). */
+  touching(x: number, y: number, z: number): boolean {
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+      const id = this.get(x + dx, y + dy, z + dz);
+      if (id !== B.AIR && !IS_WATER[id]) return true;
+    }
+    return false;
+  }
+
   async buildCells(cells: PlanCell[], max: number, label: string, floorY = -1): Promise<{ placed: number; left: number; outOf: boolean; why: string; short: Map<number, number> }> {
     this.scaffoldNeed = 0;
     const missing = (c: PlanCell) => this.needsWork(c);
@@ -3210,6 +3220,7 @@ export class Body {
     let lifts = 0;
     let why = "";
     let misses = 0;
+    let floating = 0; // blocks with nothing yet to go against (what they rest on is missing)
     this.action = label;
     const todo = cells.filter(missing);
     // a cell that won't go in goes to the back of the list, once (the blocks round it may make it reachable)
@@ -3234,7 +3245,7 @@ export class Body {
           continue;
         }
         const w = this.wantFor(c[3]);
-        if (!w || !missing(c) || this.reachTo(c[0], c[1], c[2]) > REACH) continue;
+        if (!w || !missing(c) || this.reachTo(c[0], c[1], c[2]) > REACH || !this.touching(c[0], c[1], c[2])) continue;
         const here = this.get(c[0], c[1], c[2]);
         if (here !== B.AIR && !IS_WATER[here] && !BLOCKS[here]?.replaceable && (KEEP(here) || !(await this.mine(c[0], c[1], c[2], false)))) continue;
         if (await this.place(w.item, c[0], c[1], c[2], 20000, w.state)) placed++;
@@ -3345,6 +3356,14 @@ export class Body {
           continue;
         }
       }
+      // nothing to put it against yet (what it rests on is a block it has none of, so that cell was skipped): the server
+      // only places a block touching another, so trying it is clicking at the air (Laith watched opus do it on a
+      // house short of planks). Later, once the blocks round it are in, or not at all this time
+      if (!this.touching(x, y, z)) {
+        if (!again.has(todo[i])) later(todo[i]);
+        else floating++;
+        continue;
+      }
       // a cell well above the ground round it is out of reach from anywhere down there: no long walk about first
       const round = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) => !footprint.has(`${x + dx},${z + dz}`)).map(([dx, dz]) => this.groundAt(x + dx, z + dz, y));
       const high = (round.length > 0 && y - Math.max(...round) > 4) || y - fy > 4;
@@ -3373,6 +3392,7 @@ export class Body {
           : `something is in the way at x=${x} y=${y} z=${z} (someone standing there, or a block that isn't yours to replace)`;
       }
     }
+    if (!why && floating) why = `${floating} block${floating > 1 ? "s have" : " has"} nothing to go against yet: what ${floating > 1 ? "they rest" : "it rests"} on is still missing`;
     return { placed, left: cells.filter(missing).length, outOf, why, short };
   }
 

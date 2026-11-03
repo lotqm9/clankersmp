@@ -21,7 +21,7 @@ const NEW = Array.from({ length: NEXT_FREE_BLOCK - B.COBBLE_WALL }, (_, k) => B.
 
 test("v8 ids: 159-222 in order, all valid, the mesher's 255 left alone; textures fit the 256 layers; the picker has them", () => {
   assert.equal(BLOCKS.length, NEXT_FREE_BLOCK);
-  assert.equal(NEXT_FREE_BLOCK, 223);
+  assert.equal(NEXT_FREE_BLOCK, 225); // v13: obsidian, the enchanting table
   assert.ok(NEXT_FREE_BLOCK <= 255, "255 is the mesher's 'outside the world'");
   for (const id of NEW) {
     assert.equal(BLOCKS[id].id, id);
@@ -44,7 +44,7 @@ test("every new block (and item) can be had in survival: a recipe, the furnace, 
   const world = generateWorld(DEFAULT_SEED).blocks;
   const inWorld = new Set<number>();
   for (let i = 0; i < world.length; i++) if (world[i] >= B.COBBLE_WALL) inWorld.add(world[i]);
-  const madeOtherwise = new Set<number>([B.DIRT_PATH]); // a shovel on grass
+  const madeOtherwise = new Set<number>([B.DIRT_PATH, B.OBSIDIAN]); // a shovel on grass; v13: the smith's lava poured onto water
   for (const id of NEW) {
     if (!BLOCKS[id].placeable || BLOCKS[id].item !== id) continue;
     if (id === B.PALM_LEAVES) continue; // like the other leaves: they drop things, not themselves

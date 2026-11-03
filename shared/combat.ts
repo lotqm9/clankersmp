@@ -53,17 +53,19 @@ export function swingDamage(id: number, strength: number, crit: boolean): number
 export const KNOCKBACK = 0.4;
 export const SPRINT_KNOCKBACK = 0.5;
 
-/** Armour points and toughness of what is worn (4 slots: head, chest, legs, feet). */
-export function armorOf(armor: (Stack | null)[]): { points: number; tough: number } {
+/** Armour points and toughness of what is worn (4 slots: head, chest, legs, feet); v13: and its Protection levels. */
+export function armorOf(armor: (Stack | null)[]): { points: number; tough: number; prot: number } {
   let points = 0;
   let tough = 0;
+  let prot = 0;
   for (const st of armor) {
     const a = st ? itemDef(st.id)?.armor : undefined;
     if (!a) continue;
     points += a.points;
     tough += a.tough;
+    prot += a.prot ?? 0;
   }
-  return { points, tough };
+  return { points, tough, prot };
 }
 
 /** Damage left after armour (Java's formula). */
@@ -71,6 +73,20 @@ export function afterArmor(damage: number, points: number, tough: number): numbe
   if (points <= 0 || damage <= 0) return damage;
   const f = Math.min(20, Math.max(points / 5, points - damage / (2 + tough / 4)));
   return damage * (1 - f / 25);
+}
+
+/** v13: how good a piece of armour is, to choose what to wear: its points, a point a level of Protection (each takes
+ *  about 4% off, like a point of armour does) and half a point a point of toughness. 0 for anything else. */
+export function armorValue(id: number): number {
+  const a = itemDef(id)?.armor;
+  return a ? a.points + (a.prot ?? 0) + a.tough * 0.5 : 0;
+}
+
+/** v13: damage left after Protection (Java's enchantment protection factor: 4% a level over all the pieces worn,
+ *  at most 80%). Taken off after the armour. */
+export function afterProtection(damage: number, prot: number): number {
+  if (prot <= 0 || damage <= 0) return damage;
+  return damage * (1 - Math.min(20, prot) / 25);
 }
 
 /** How much each worn armour piece wears from one hit of `damage` (before armour). */

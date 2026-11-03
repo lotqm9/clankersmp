@@ -11,7 +11,8 @@
 // a slice at a time), and the bow (draw and release: the power, the arrow and the wear all on the server's clock).
 
 import { B, BLOCKS, CLIMB, IS_WATER, SOLID, cakeBites, isCake, isChest, isFarmland, isFlower, isFurnace, isPot, isSapling, isStorage, isWheat, potFor, pottedFlower, wheatAge } from "../../shared/blocks.ts";
-import { BOW_SPEED, KNOCKBACK, SPRINT_KNOCKBACK, afterArmor, armorOf, armorWear, attackStrength, bowPower, isCrit, packArmor, swingDamage } from "../../shared/combat.ts";
+import { BOW_SPEED, KNOCKBACK, SPRINT_KNOCKBACK, afterArmor, afterProtection, armorOf, armorValue, armorWear, attackStrength, bowPower, isCrit, packArmor, swingDamage } from "../../shared/combat.ts";
+import { planEnchant, shelvesAround, type EnchantPlan } from "../../shared/enchanting.ts";
 import { ANIMAL } from "../../shared/animals.ts";
 import { hydrated } from "./farm.ts";
 import { EYE_HEIGHT, SNEAK_EYE_HEIGHT, WORLD_SIZE, cellX, cellY, cellZ, idx, inWorld } from "../../shared/constants.ts";
@@ -551,6 +552,8 @@ export class Survival {
     const st = this.held(p);
     // v7: water is poured from a water bucket (a block item for it alone is creative only)
     if (id === B.WATER) return !!st && st.id === I.WATER_BUCKET;
+    // v13: the smith's lava sets into obsidian where it's poured (the shard checks there's water beside it)
+    if (id === B.OBSIDIAN && st?.id === I.LAVA_BUCKET) return true;
     const want = BLOCKS[id]?.item;
     if (!st || st.id !== want) return false;
     return true;
@@ -649,6 +652,12 @@ export class Survival {
     if (id === B.GRASS && held === I.BONE_MEAL) return this.boneMealGrass(p, x, y, z);
     if (isPot(id)) return this.usePot(p, x, y, z, id, held);
     if (id === B.VILLAGE_CHIME) return this.ringChime(p, x, y, z);
+    // v13: the enchanting table, with something enchantable in hand: the best level the shelves allow and you can pay
+    if (id === B.ENCHANTING_TABLE) {
+      const r = this.enchant(p, 0, [x, y, z]);
+      this.sh.notice(p, r.id ? `Enchanted: ${itemDef(r.id)?.name} for ${r.cost} rubies.` : `The table can't enchant that: ${r.why}.`);
+      return true;
+    }
     if (isBed(id)) {
       this.useBed(p, x, y, z, id);
       return true;
@@ -1050,7 +1059,8 @@ export class Survival {
         this.wearArmor(p, amount);
         amount = afterArmor(amount, a.points, a.tough);
       }
-    }
+      amount = afterProtection(amount, a.prot); // v13
+    } else if (cause === "fall") amount = afterProtection(amount, armorOf(s.inv.armor).prot); // v13: like Java, falls too
     s.body.hp = Math.max(0, s.body.hp - amount);
     s.hurtUntil = this.sh.tickCount + HURT_TICKS;
     exhaust(s.body, EXHAUST.damage);
@@ -1160,8 +1170,7 @@ export class Survival {
       const a = st ? itemDef(st.id)?.armor : undefined;
       if (!st || !a) continue;
       const cur = s.inv.armor[a.slot];
-      const ca = cur ? itemDef(cur.id)?.armor : undefined;
-      if (ca && ca.points >= a.points) continue;
+      if (cur && armorValue(cur.id) >= armorValue(st.id)) continue; // v13: Protection counts too
       s.inv.armor[a.slot] = st;
       s.inv.inv[k] = cur ?? null;
       this.markSlot(p, k);
@@ -1243,6 +1252,33 @@ export class Survival {
     return { n, ms };
   }
 
+  /** v13: enchant what this player holds at an enchanting table within reach (`at`: the one clicked): level `want`, or
+   *  the best the bookshelves round the table allow and its rubies pay for. The rubies go, the held item becomes its
+   *  enchanted self (keeping its wear), and everyone near sees the table's glyphs. */
+  enchant(p: Player, want: number, at?: [number, number, number], armorSlot = -1): EnchantPlan {
+    const s = p.sv;
+    if (s.dead || s.win) return { id: 0, level: 0, cost: 0, kind: null, why: "busy" };
+    const table = at ?? this.blockNear(p, (id) => id === B.ENCHANTING_TABLE);
+    if (!table) return { id: 0, level: 0, cost: 0, kind: null, why: "no enchanting table within reach" };
+    // what it holds, or (an agent, which has no screen to take armour off with) a piece it wears
+    const worn = armorSlot >= 0 && armorSlot < 4;
+    const st = worn ? s.inv.armor[armorSlot] : this.held(p);
+    if (!st) return { id: 0, level: 0, cost: 0, kind: null, why: worn ? "nothing worn there" : "nothing in hand to enchant" };
+    const rubies = s.inv.inv.reduce((n, x) => n + (x && x.id === I.RUBY && x.d === 0 ? x.n : 0), 0);
+    const plan = planEnchant(st.id, s.gm === "creative" ? 99 : rubies, shelvesAround(this.sh.getBlock, table[0], table[1], table[2]), Math.max(0, Math.floor(want) || 0));
+    if (!plan.id) return plan;
+    if (s.gm !== "creative") for (let k = 0; k < plan.cost; k++) this.takeOne(p, I.RUBY);
+    if (worn) {
+      s.inv.armor[armorSlot] = { id: plan.id, n: 1, d: st.d };
+      s.dirty.add(36 + armorSlot);
+    } else {
+      s.inv.inv[s.sel] = { id: plan.id, n: 1, d: st.d };
+      this.markSlot(p, s.sel);
+    }
+    this.sh.broadcastNearPoint(table[0] + 0.5, table[2] + 0.5, { t: "fx", k: "enchant", id: plan.level, x: table[0] + 0.5, y: table[1] + 1.1, z: table[2] + 0.5 }, 32);
+    return plan;
+  }
+
   /** Agents: take everything from the chest (or barrel) within reach. No window: an agent has no screen. */
   agentLoot(p: Player): { got: [number, number][]; why?: string } {
     const s = p.sv;
@@ -1268,10 +1304,11 @@ export class Survival {
   }
 
   /** Agents: the nearest villager within `r` blocks, where it stands and what it trades. */
-  agentTrades(p: Player, r = 24): { vid: number; name: string; job: number; x: number; y: number; z: number; offers: ReturnType<Shard["villagers"]["offers"]> } | null {
+  agentTrades(p: Player, r = 24, job = -1): { vid: number; name: string; job: number; x: number; y: number; z: number; offers: ReturnType<Shard["villagers"]["offers"]> } | null {
     let best: Villager | null = null;
     let bd = r;
     for (const v of this.sh.villagers.villagers.values()) {
+      if (job >= 0 && v.job !== job) continue; // v13: a villager of that trade (the smith sells lava)
       const d = Math.hypot(v.x - p.x, v.z - p.z);
       if (d < bd && Math.abs(v.y - p.y) < 8) [bd, best] = [d, v];
     }

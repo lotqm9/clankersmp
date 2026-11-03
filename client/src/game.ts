@@ -28,7 +28,8 @@ import { BoatView } from "./render/boats.ts";
 import { hydratedAt } from "../../shared/farming.ts";
 import { FLAG, OP, decodeBlocks, decodePlayers, encodeMove, readBlockEntries, type C2S, type GameMode, type PlayerInfo, type S2C, type ShardInfo, type Stats, type WindowKind } from "../../shared/protocol.ts";
 import { Menu, newPlayerInv, type Click, type Items, type PlayerInv } from "../../shared/inventory.ts";
-import { I, fromWire, isHoe, itemDef, itemName, type Stack } from "../../shared/items.ts";
+import { I, enchKindOf, fromWire, isHoe, itemDef, itemName, plainOf, type Stack } from "../../shared/items.ts";
+import { waterBeside } from "../../shared/enchanting.ts";
 import { MF, MOB_SPECS, OP_MOBS, OP_MOBS_GONE } from "../../shared/mobs.ts";
 import { armorOf, attackStrength, packArmor } from "../../shared/combat.ts";
 import { breakTicks } from "../../shared/mining.ts";
@@ -1149,6 +1150,14 @@ export class Game {
           this.particles.breakBlock(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z), B.OAK_PLANKS, this.lightHere);
         } else if (m.k === "path") this.sound.till(at);
         else if (m.k === "pot") this.sound.place("stone", at);
+        // v13: the enchanting table's glyphs and chime; lava hissing into obsidian
+        else if (m.k === "enchant" && at) {
+          this.particles.enchant(at.x, at.y, at.z);
+          this.sound.play("chime", 0.6, 1.45 + Math.random() * 0.1, at, 32);
+        } else if (m.k === "hiss" && at) {
+          this.particles.steam(at.x, at.y, at.z);
+          this.sound.play("splash", 0.55, 1.7, at, 24);
+        }
         else if (m.k === "mob_die" && at) {
           const spec = MOB_SPECS[m.id ?? 0];
           if (spec) {
@@ -2680,6 +2689,8 @@ export class Game {
     if (id === B.GRASS && held === I.BONE_MEAL) return above && !this.spawnProtected(t.x, t.z);
     if (id === B.FLOWER_POT) return potFor(held) > 0 && !this.spawnProtected(t.x, t.z);
     if (isPot(id)) return held === 0 && !this.spawnProtected(t.x, t.z);
+    // v13: something enchantable in hand at the enchanting table: enchant it (the server says what it did)
+    if (id === B.ENCHANTING_TABLE) return !!enchKindOf(plainOf(held));
     return isOpenable(id) || id === B.CRAFTING_TABLE || isFurnace(id) || isChest(id) || isBed(id) || id === B.BARREL || id === B.VILLAGE_CHIME;
   }
 
@@ -2761,6 +2772,16 @@ export class Game {
     if (!item || !BLOCKS[item]?.clientPlace) return;
     if (held < 256 && !BLOCKS[item]?.placeable) return;
     if (item === B.WATER && this.gm !== "creative" && held !== I.WATER_BUCKET) return;
+    // v13: the smith's lava sets into obsidian, so it only pours where water is beside it
+    if (held === I.LAVA_BUCKET) {
+      const lx = BLOCKS[t.id].replaceable ? t.x : t.x + t.nx;
+      const ly = BLOCKS[t.id].replaceable ? t.y : t.y + t.ny;
+      const lz = BLOCKS[t.id].replaceable ? t.z : t.z + t.nz;
+      if (!waterBeside(this.safeGet, lx, ly, lz)) {
+        this.ui.notice("Lava needs water beside it to set into obsidian: pour it next to water.");
+        return;
+      }
+    }
     let x = t.x + t.nx;
     let y = t.y + t.ny;
     let z = t.z + t.nz;
@@ -2811,7 +2832,10 @@ export class Game {
       this.refreshHotbar();
     }
     if (item === B.WATER && held === I.WATER_BUCKET) this.sound.bucket(false, { x: x + 0.5, y: y + 0.5, z: z + 0.5 });
-    else this.sound.place(BLOCKS[changes[0][3]].sound);
+    else if (held === I.LAVA_BUCKET) {
+      this.particles.steam(x + 0.5, y + 0.9, z + 0.5);
+      this.sound.play("splash", 0.55, 1.7, { x: x + 0.5, y: y + 0.5, z: z + 0.5 });
+    } else this.sound.place(BLOCKS[changes[0][3]].sound);
     this.hand.startSwing();
     this.self?.startSwing();
     this.net?.send({ t: "swing" });

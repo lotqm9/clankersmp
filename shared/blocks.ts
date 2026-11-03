@@ -162,11 +162,19 @@ export const TEX = {
   coconut: 219,
   // v9 items
   smoked_fish: 220,
+  // v13: the way to enchanting (obsidian, the enchanting table, books, the smith's lava)
+  obsidian: 221,
+  enchant_top: 222,
+  enchant_side: 223,
+  enchant_bottom: 224,
+  book: 225,
+  lava_bucket: 226,
+  fx_glyph: 227, // the table's glyphs (a particle, never on a block or item)
 } as const;
 export const WATER_FRAMES = 16;
 export const CRACK_STAGES = 10;
 /** Texture layers in use. The mesher sends the layer as a u8 and WebGL2 only promises 256 array layers: keep <= 256. */
-export const TEX_LAYERS = 221;
+export const TEX_LAYERS = 228;
 
 export interface BlockDef {
   id: number;
@@ -339,10 +347,14 @@ export const B = {
   BLUEBELL: 220,
   PALM_LOG: 221,
   PALM_LEAVES: 222,
+  // v13: enchanting. Obsidian sets where the smith's lava meets water (only a diamond pickaxe gets it out whole); the
+  // enchanting table (a book, two diamonds, four obsidian) enchants gear for rubies, higher with bookshelves round it.
+  OBSIDIAN: 223,
+  ENCHANTING_TABLE: 224,
 } as const;
 /** First block id not in use yet. Ids are a u8 on the wire and in the world arrays, and the mesher uses 255 for
- *  "outside the world": 254 is the last id a block can have (32 left after v8). */
-export const NEXT_FREE_BLOCK = 223;
+ *  "outside the world": 254 is the last id a block can have (30 left after v13). */
+export const NEXT_FREE_BLOCK = 225;
 
 /** Texture per face (+X, -X, +Y, -Y, +Z, -Z) for a block whose front faces `facing` (0 north -Z, 1 east +X,
  *  2 south +Z, 3 west -X). */
@@ -623,6 +635,10 @@ export const SLAB_DOUBLE = new Map<number, number>();
     key: "palm_leaves", name: "Palm Fronds", opaque: false, aoOccluder: true, render: "cutout", tex: all6(TEX.palm_leaves),
     breakTicks: 6, lightOpacity: 1, sound: "grass", color: 0x5aa83a,
   }));
+  // ---- v13: enchanting
+  cube(B.OBSIDIAN, "obsidian", "Obsidian", all6(TEX.obsidian), 1500, "stone", 0x150f22);
+  // the table glows a little (light 7, like Java's), an open book on its red cloth on top, obsidian below
+  cube(B.ENCHANTING_TABLE, "enchanting_table", "Enchanting Table", column(TEX.enchant_side, TEX.enchant_top, TEX.enchant_bottom), 100, "stone", 0x3a1f3c, { light: 7 });
   if (BLOCKS.length !== NEXT_FREE_BLOCK) throw new Error(`NEXT_FREE_BLOCK is ${NEXT_FREE_BLOCK}, blocks end at ${BLOCKS.length}`);
   for (let i = 0; i < BLOCKS.length; i++) if (BLOCKS[i].id !== i) throw new Error(`block id gap at ${i}`);
 }
@@ -693,6 +709,8 @@ export const PICKER_ORDER: number[] = [
   B.TERRACOTTA + 3, B.TERRACOTTA + 4, B.TERRACOTTA + 5, B.WOOL_BROWN, B.WOOL_GREEN, B.WOOL_GREY, B.WOOL_LIGHT_BLUE, B.DIRT_PATH,
   B.LANTERN, B.BARREL, B.BOOKSHELF, B.HAY_BALE, B.FLOWER_POT, B.VILLAGE_CHIME, B.OAK_GATE, B.TRAPDOOR, B.BIRCH_STAIRS,
   B.BIRCH_SLAB, B.BIRCH_FENCE, B.BLUEBELL, B.PALM_LOG, B.PALM_LEAVES,
+  // v13
+  B.OBSIDIAN, B.ENCHANTING_TABLE,
 ];
 
 export const DEFAULT_HOTBAR: number[] = [

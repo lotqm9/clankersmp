@@ -1,4 +1,5 @@
-// Crafting recipes (protocol v5; armour, bone meal and wool from string v6; farming, food, buckets, bow and arrows v7):
+// Crafting recipes (protocol v5; armour, bone meal and wool from string v6; farming, food, buckets, bow and arrows v7;
+// books and the enchanting table v13):
 // the classic shapes (game mechanics; all art is our own). Shaped recipes match
 // anywhere in the grid and mirrored left-right; the 2x2 grid in the inventory takes any recipe that fits in 2x2,
 // the crafting table's 3x3 grid takes them all. Shared by the client (result preview, the recipe book) and the
@@ -121,6 +122,11 @@ shaped("hay_bale", "building", out(B.HAY_BALE), ["WWW", "WWW", "WWW"], { W: [I.W
 shapeless("wheat_from_hay", "materials", out(I.WHEAT, 9), [[B.HAY_BALE]]);
 shaped("village_chime", "building", out(B.VILLAGE_CHIME), ["PPP", "sgs", " g "], { P: PLANKS, s: STICK, g: [I.GOLD_INGOT] });
 shaped("clay", "materials", out(B.CLAY), ["cc", "cc"], { c: [I.CLAY_BALL] });
+
+// ---- v13: the way to enchanting: a book (three paper and a piece of leather) and the enchanting table (a book on
+// two diamonds and four obsidian: the classic shapes)
+shapeless("book", "materials", out(I.BOOK), [[I.PAPER], [I.PAPER], [I.PAPER], [I.LEATHER]]);
+shaped("enchanting_table", "basics", out(B.ENCHANTING_TABLE), [" B ", "DOD", "OOO"], { B: [I.BOOK], D: [I.DIAMOND], O: [B.OBSIDIAN] });
 
 // Colours, our own way (no dye items): eight white wool (or terracotta) around a flower, a sapling, coal or bone
 // meal; then two wools mix into a third, like paint.

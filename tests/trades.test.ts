@@ -30,7 +30,7 @@ const inv = (...st: (Stack | null)[]): Items => {
 test("every job has a handful of trades, rubies on one side, real items on the other", () => {
   assert.equal(TRADES.length, JOBS.length);
   for (const [j, list] of TRADES.entries()) {
-    assert.ok(list.length >= 4 && list.length <= 5, `${JOBS[j].name}: ${list.length} trades`);
+    assert.ok(list.length >= 4 && list.length <= 6, `${JOBS[j].name}: ${list.length} trades`); // v13: the smith's lava, the librarian's books
     for (const o of list) {
       assert.ok((o.buy[0] === I.RUBY) !== (o.sell[0] === I.RUBY), `${JOBS[j].name}: rubies on exactly one side`);
       for (const [id, n] of [o.buy, o.sell, ...(o.buy2 ? [o.buy2] : [])]) {

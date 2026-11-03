@@ -74,6 +74,7 @@ import { Containers } from "./containers.ts";
 import { Survival, newSurvival, type SurvivalData, type SurvivalState } from "./survival.ts";
 import { SafeZone, TILE, TILES, keepTiles, type HubPlan } from "../../shared/hub12.ts";
 import { I, itemDef, ITEMS, toWire } from "../../shared/items.ts";
+import { waterBeside } from "../../shared/enchanting.ts";
 import { blockDrops } from "../../shared/mining.ts";
 import { treeChanges } from "../../shared/trees.ts";
 import { isSapling } from "../../shared/blocks.ts";
@@ -691,12 +692,21 @@ export class Shard {
         if (p.agent) this.send(p, { t: "looted", ...this.survival.agentLoot(p) });
         break;
       case "atrades":
-        if (p.agent) this.send(p, { t: "atrades", v: this.survival.agentTrades(p) });
+        // v13: job: the nearest villager of that trade, anywhere in a village (64 blocks)
+        if (p.agent) this.send(p, { t: "atrades", v: Number.isInteger(msg.job) && (msg.job as number) >= 0 ? this.survival.agentTrades(p, 64, msg.job as number) : this.survival.agentTrades(p) });
         break;
       case "atrade":
         if (p.agent && Number.isInteger(msg.v) && Number.isInteger(msg.o))
           this.send(p, { t: "atraded", ...this.survival.agentTrade(p, msg.v, msg.o, Math.max(1, Math.min(16, Math.floor(Number(msg.n) || 1)))) });
         break;
+      case "enchant": {
+        // v13: an AI at the enchanting table (a player right-clicks the table instead)
+        if (!p.agent) break;
+        const slot = Number.isInteger(msg.a) && (msg.a as number) >= 0 && (msg.a as number) < 4 ? (msg.a as number) : -1;
+        const r = this.survival.enchant(p, Math.max(0, Math.min(3, Math.floor(Number(msg.l) || 0))), undefined, slot);
+        this.send(p, { t: "enchanted", id: r.id, l: r.level, cost: r.cost, why: r.why });
+        break;
+      }
       case "craft": {
         if (!p.agent || typeof msg.r !== "string") break;
         const n = this.survival.craft(p, msg.r, Math.max(1, Math.min(64, Math.floor(Number(msg.n) || 1))));
@@ -1191,6 +1201,13 @@ export class Shard {
       this.survival.sendInventory(p);
       return revertAll();
     }
+    // v13: lava poured from the smith's bucket sets into obsidian, so it needs water beside it (or in the spot)
+    const lava = id === B.OBSIDIAN && this.survival.heldId(p) === I.LAVA_BUCKET;
+    if (lava && !waterBeside(this.getBlock, x, y, z)) {
+      this.notice(p, "Lava needs water beside it to set into obsidian: pour it next to water.");
+      this.survival.sendInventory(p);
+      return revertAll();
+    }
     const changes = placeChanges(id, x, y, z, this.getBlock);
     if (!changes) return revertAll();
     for (const [cx, , cz] of changes) if (this.protectedFor(p, cx, cz)) return revertAll();
@@ -1209,6 +1226,7 @@ export class Shard {
     for (const [cx, cy, cz, cid] of changes) if (pathBreaksUnder(cid) && this.getBlock(cx, cy - 1, cz) === B.DIRT_PATH) this.setBlock(idx(cx, cy - 1, cz), B.DIRT, p);
     this.survival.consumePlaced(p);
     if (id === B.WATER) this.broadcastNear(p, { t: "fx", k: "bucket_empty", x: x + 0.5, y: y + 0.5, z: z + 0.5 }, 24);
+    if (lava) this.broadcastNearPoint(x + 0.5, z + 0.5, { t: "fx", k: "hiss", x: x + 0.5, y: y + 0.9, z: z + 0.5 }, 32);
   }
 
   /** Right-click on a block: doors open and close (anywhere), crafting tables, furnaces and chests open, beds are

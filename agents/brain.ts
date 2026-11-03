@@ -1495,8 +1495,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   private roadCount(road: Building): [number, number, number] {
     const b = this.body;
     const builds = PACK.builds.filter((x) => x.done || x === road);
-    const p1 = streetPlan(this.hub(), builds, (x, z) => b.pathAt(x, z, PACK.base!.y), 1);
-    const p2 = streetPlan(this.hub(), builds, (x, z) => b.pathAt(x, z, PACK.base!.y), 2);
+    // (never the cells in the spawn hub: nothing is dug there, and a path through it would never count)
+    const p1 = noHub(streetPlan(this.hub(), builds, (x, z) => b.pathAt(x, z, PACK.base!.y), 1));
+    const p2 = noHub(streetPlan(this.hub(), builds, (x, z) => b.pathAt(x, z, PACK.base!.y), 2));
     const doors = builds.map((x, i) => (doorStep(x) && x.kind !== "lamp" ? i : -1)).filter((i) => i >= 0);
     const joined = (p: { cells: PlanCell[]; of: number[] }) => doors.filter((i) => p.cells.every((c, k) => p.of[k] !== i || !b.needsWork(c))).length;
     return [joined(p1), joined(p2), doors.length];

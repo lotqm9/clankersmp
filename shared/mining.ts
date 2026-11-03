@@ -13,7 +13,7 @@ import { isBed, isDoor, slabBase, stairBase } from "./shapes.ts";
 export interface MineInfo {
   hardness: number; // -1 unbreakable
   tool: ToolKind | null; // the tool that speeds it up
-  needs: number; // harvest tier needed for drops (0 = anything, 1 wood, 2 stone, 3 iron)
+  needs: number; // harvest tier needed for drops (0 = anything, 1 wood, 2 stone, 3 iron, 4 diamond)
 }
 
 const INFO: MineInfo[] = [];
@@ -68,6 +68,10 @@ set([B.VILLAGE_CHIME, B.PALM_LOG, B.BIRCH_FENCE, ...range(B.OAK_GATE, 8), ...ran
 set(range(B.TRAPDOOR, 16), 3, "axe");
 set([B.BLUEBELL], 0, null);
 set([B.PALM_LEAVES], 0.2, null);
+// v13: obsidian (Java's hardness 50: 9.4 s with a diamond pickaxe, and only a diamond one gets it out whole) and the
+// enchanting table
+set([B.OBSIDIAN], 50, "pickaxe", 4);
+set([B.ENCHANTING_TABLE], 5, "pickaxe", 1);
 for (const b of BLOCKS) if (!INFO[b.id]) INFO[b.id] = { hardness: 1, tool: null, needs: 0 };
 
 export function mineInfo(block: number): MineInfo {

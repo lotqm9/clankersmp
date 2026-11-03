@@ -34,6 +34,8 @@ export const TRADES: Offer[][] = [
     { buy: [R, 2], sell: [toolId(2, 3), 1], max: 3 }, // iron sword
     { buy: [R, 3], sell: [toolId(2, 0), 1], max: 3 }, // iron pickaxe
     { buy: [R, 6], sell: [armorId(1, 1), 1], max: 2 }, // iron chestplate
+    // v13: lava from the forge, in your own bucket (it sets into obsidian where it meets water)
+    { buy: [R, 2], buy2: [I.BUCKET, 1], sell: [I.LAVA_BUCKET, 1], max: 4 },
   ],
   // librarian
   [
@@ -41,6 +43,8 @@ export const TRADES: Offer[][] = [
     { buy: [R, 1], sell: [B.BOOKSHELF, 1], max: 8 },
     { buy: [R, 1], sell: [B.LANTERN, 2], max: 8 },
     { buy: [R, 1], sell: [B.GLASS, 4], max: 12 },
+    // v13: a bound book (three of your paper and a ruby for the binding)
+    { buy: [R, 1], buy2: [I.PAPER, 3], sell: [I.BOOK, 1], max: 4 },
   ],
   // fisher
   [

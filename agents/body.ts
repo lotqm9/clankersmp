@@ -11,15 +11,15 @@ import { HUB_R } from "../shared/hub12.ts";
 import { FLAG, OP, decodeBlocks, decodePlayers, encodeMove, readBlockEntries, type S2C, type Stats } from "../shared/protocol.ts";
 import { OP_ANIMALS, OP_ANIMALS_GONE, SPECS as ANIMAL_SPECS, decodeAnimals, decodeGone } from "../shared/animals.ts";
 import { OP_ITEMS, OP_ITEMS_GONE, OP_ITEM_PICKUP, decodeIds, decodeItems, decodePickups, type ItemSnap } from "../shared/drops.ts";
-import { MF, MOB_SPECS, OP_MOBS, OP_MOBS_GONE } from "../shared/mobs.ts";
+import { ARROW_DRAG, ARROW_GRAVITY, MF, MOB_SPECS, OP_MOBS, OP_MOBS_GONE, meleeReachSq } from "../shared/mobs.ts";
 import { generateWorld, hashBlocks, type GenInfo } from "../shared/worldgen.ts";
 import { newPhysState, tickPlayer, type MoveInput, type PhysState } from "../shared/physics.ts";
 import { PathFinder, type PathPoint } from "../server/src/pathfind.ts";
 import { breakTicks } from "../shared/mining.ts";
-import { B, BLOCKS, IS_WATER, SOLID, isFarmland, isFurnace, isStorage as isStorageId } from "../shared/blocks.ts";
+import { B, BLOCKS, IS_WATER, OPAQUE, SOLID, isFarmland, isFurnace, isStorage as isStorageId } from "../shared/blocks.ts";
 import { I, fromWire, isHoe as isHoeId, itemDef, type Stack } from "../shared/items.ts";
 import { canHarvest } from "../shared/mining.ts";
-import { cooldownTicks } from "../shared/combat.ts";
+import { BOW_SPEED, cooldownTicks } from "../shared/combat.ts";
 import { EAT_TICKS } from "../shared/survival.ts";
 import { RECIPES, recipeNeeds, recipeSize } from "../shared/recipes.ts";
 import { JOBS } from "../shared/villagers.ts";
@@ -82,6 +82,9 @@ export interface Seen {
   yaw: number;
   flags: number;
   at: number;
+  /** v13: how it's moving (blocks a tick, from its last snapshots): where an arrow has to lead it. */
+  vx?: number;
+  vz?: number;
 }
 
 export interface Other {
@@ -155,6 +158,8 @@ export class Body {
   private answers = new Map<string, (m: unknown) => void>();
   /** Chests it has emptied (or found empty): not walked back to. */
   private looted = new Set<number>();
+  /** v13: told when one of its hits or arrows lands (the server's "struck"). */
+  onStruck = new Set<(m: { id: number; mob: boolean; dmg: number; crit: boolean; kills: boolean }) => void>();
 
   constructor(name: string) {
     this.name = name;
@@ -330,6 +335,16 @@ export class Body {
         this.names.delete(m.id);
         this.others.delete(m.id);
         break;
+      case "struck":
+        // v13: one of its hits (or arrows) landed: what it did
+        for (const f of this.onStruck) f(m);
+        break;
+      case "enchanted": {
+        const f = this.answers.get(m.t);
+        this.answers.delete(m.t);
+        f?.(m);
+        break;
+      }
       case "crafted":
         this.crafted?.(m.n);
         this.crafted = null;
@@ -366,7 +381,14 @@ export class Body {
       }
     } else if (op === OP_ANIMALS || op === OP_MOBS) {
       const map = op === OP_MOBS ? this.mobs : this.animals;
-      for (const a of decodeAnimals(view).list) map.set(a.id, { ...a, at: now });
+      for (const a of decodeAnimals(view).list) {
+        // its speed from the last snapshot (smoothed): what an arrow has to lead
+        const was = map.get(a.id);
+        const dt = was ? (now - was.at) / 50 : 0;
+        const vx = was && dt >= 0.5 && dt < 20 ? 0.5 * (was.vx ?? 0) + (0.5 * (a.x - was.x)) / dt : (was?.vx ?? 0);
+        const vz = was && dt >= 0.5 && dt < 20 ? 0.5 * (was.vz ?? 0) + (0.5 * (a.z - was.z)) / dt : (was?.vz ?? 0);
+        map.set(a.id, { ...a, at: now, vx, vz });
+      }
     } else if (op === OP_ANIMALS_GONE || op === OP_MOBS_GONE) {
       const map = op === OP_MOBS_GONE ? this.mobs : this.animals;
       for (const id of decodeGone(view)) map.delete(id);
@@ -1291,6 +1313,14 @@ export class Body {
     });
   }
 
+  /** v13: enchant what it holds (or the armour worn in `slot`) at the enchanting table within reach: the server's
+   *  answer (id 0, and why, when nothing happened). */
+  async enchantHeld(level: number, slot = -1): Promise<{ id: number; l: number; cost: number; why?: string }> {
+    const r = await this.ask({ t: "enchant", l: level, ...(slot >= 0 ? { a: slot } : {}) }, "enchanted", { id: 0, l: 0, cost: 0, why: "no answer from the server" });
+    await this.wait(4); // the slots come with the server's next tick
+    return r;
+  }
+
   /** Walk to the nearest chest it hasn't emptied yet (village houses and the islands have them) and take everything. */
   async lootChest(radius = 48): Promise<string> {
     const ids = [0, 1, 2, 3].map((k) => B.CHEST + k).concat([B.BARREL]);
@@ -1317,22 +1347,24 @@ export class Body {
   }
 
   /** The nearest villager (within 24 blocks), what it trades, and a walk over to it. */
-  private async nearVillager(): Promise<VillagerOffers | null> {
-    let v = (await this.ask<{ v: VillagerOffers | null }>({ t: "atrades" }, "atrades", { v: null })).v;
+  private async nearVillager(job = -1): Promise<VillagerOffers | null> {
+    const q = job >= 0 ? { t: "atrades", job } : { t: "atrades" };
+    let v = (await this.ask<{ v: VillagerOffers | null }>(q, "atrades", { v: null })).v;
     for (let k = 0; v && k < 3 && Math.hypot(v.x - this.phys.x, v.z - this.phys.z) > 2.5; k++) {
       if (this.abort || this.dead) return null;
       const target = v;
       await this.goto(target.x, target.y, target.z, 2, { maxMs: 15000, done: () => Math.hypot(target.x - this.phys.x, target.z - this.phys.z) < 2.5 });
-      v = (await this.ask<{ v: VillagerOffers | null }>({ t: "atrades" }, "atrades", { v: null })).v;
+      v = (await this.ask<{ v: VillagerOffers | null }>(q, "atrades", { v: null })).v;
     }
     if (v) await this.lookAt(v.x, v.y + 1.5, v.z, 8);
     return v;
   }
 
-  /** Trade with the nearest villager: no offer = list what it trades; else make offer `o` up to `times` times. */
-  async trade(o: number | undefined, times = 1): Promise<string> {
-    const v = await this.nearVillager();
-    if (!v) return "no villager within 24 blocks (they live in the villages, and stay indoors at night)";
+  /** Trade with the nearest villager (v13: or the nearest of a trade, `job`): no offer = list what it trades; else make
+   *  offer `o` up to `times` times. */
+  async trade(o: number | undefined, times = 1, trade = -1): Promise<string> {
+    const v = await this.nearVillager(trade);
+    if (!v) return trade >= 0 ? `no ${JOBS[trade]?.key ?? "villager"} within 64 blocks (go into a village; they stay indoors at night)` : "no villager within 24 blocks (they live in the villages, and stay indoors at night)";
     const job = JOBS[v.job]?.key ?? "villager";
     const words = (w: [number, number]) => `${w[1]} ${itemName(w[0])}`;
     const list = v.offers.map((f, k) => `${k}: ${words(f.a)}${f.b ? ` + ${words(f.b)}` : ""} -> ${words(f.r)}${f.n ? "" : " (sold out)"}`).join("; ");
@@ -1401,18 +1433,103 @@ export class Body {
     return this.stats.food > before ? `ate ${itemDef(f.id)!.name}, hunger ${this.stats.food}/20` : "eating was interrupted";
   }
 
-  targetPos(t: Target): { x: number; y: number; z: number; h: number } | null {
+  targetPos(t: Target): { x: number; y: number; z: number; h: number; w: number; vx: number; vz: number } | null {
     if (t.kind === "player") {
       const o = this.others.get(t.id);
-      return o && !(o.flags & FLAG.DEAD) ? { x: o.x, y: o.y, z: o.z, h: 1.8 } : null;
+      return o && !(o.flags & FLAG.DEAD) ? { x: o.x, y: o.y, z: o.z, h: 1.8, w: 0.6, vx: 0, vz: 0 } : null;
     }
     const m = (t.kind === "mob" ? this.mobs : this.animals).get(t.id);
     if (!m || (t.kind === "mob" && m.flags & MF.DEAD)) return null;
     const spec = t.kind === "mob" ? MOB_SPECS[m.kind] : ANIMAL_SPECS[m.kind];
-    return { x: m.x, y: m.y, z: m.z, h: spec?.h ?? 1 };
+    return { x: m.x, y: m.y, z: m.z, h: spec?.h ?? 1, w: spec?.w ?? 0.6, vx: m.vx ?? 0, vz: m.vz ?? 0 };
   }
 
-  /** Fight something until it is dead or gone, it gets away, or time runs out. */
+  // ---------------------------------------------------------------- fighting (v13: the way a good player fights)
+
+  /** From its eyes to the nearest point of a body's box: what a hit's reach is judged by (the classic 3 blocks). */
+  boxDist(p: { x: number; y: number; z: number; h: number; w: number } | null): number {
+    if (!p) return Infinity;
+    const [ex, ey, ez] = this.eye();
+    const hw = p.w / 2;
+    return Math.hypot(ex - clamp(ex, p.x - hw, p.x + hw), ey - clamp(ey, p.y, p.y + p.h), ez - clamp(ez, p.z - hw, p.z + hw));
+  }
+
+  /** A clear line between two points: no full, opaque block in the way (how a monster sees, server/src/mobs.ts). */
+  clearSight(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): boolean {
+    const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 0.4);
+    for (let k = 1; k < n; k++) {
+      const f = k / n;
+      if (OPAQUE[this.get(Math.floor(x0 + (x1 - x0) * f), Math.floor(y0 + (y1 - y0) * f), Math.floor(z0 + (z1 - z0) * f))]) return false;
+    }
+    return true;
+  }
+
+  /** A clear path for an arrow between two points: nothing solid in the way (leaves and glass stop arrows, though a
+   *  monster sees through them). */
+  clearShot(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): boolean {
+    const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 0.3);
+    for (let k = 1; k < n; k++) {
+      const f = k / n;
+      if (SOLID[this.get(Math.floor(x0 + (x1 - x0) * f), Math.floor(y0 + (y1 - y0) * f), Math.floor(z0 + (z1 - z0) * f))]) return false;
+    }
+    return true;
+  }
+
+  /** Can this monster see it (eye to eye)? An archer only shoots what it sees. */
+  seenBy(m: Seen): boolean {
+    const h = MOB_SPECS[m.kind]?.h ?? 1.9;
+    const [ex, ey, ez] = this.eye();
+    return this.clearSight(m.x, m.y + h * 0.85, m.z, ex, ey, ez);
+  }
+
+  /** Would a step this way (`yaw`, degrees) keep it safe: room for its body, ground no more than a block down, no water,
+   *  no monster standing there. */
+  safeStep(yaw: number): boolean {
+    const a = (yaw * Math.PI) / 180;
+    const ux = -Math.sin(a);
+    const uz = Math.cos(a);
+    const y = Math.floor(this.phys.y + 0.1);
+    for (const r of [0.6, 1.2]) {
+      const px = this.phys.x + ux * r;
+      const pz = this.phys.z + uz * r;
+      const x = Math.floor(px);
+      const z = Math.floor(pz);
+      if (SOLID[this.get(x, y, z)] || SOLID[this.get(x, y + 1, z)]) return false;
+      if (IS_WATER[this.get(x, y, z)] || IS_WATER[this.get(x, y + 1, z)] || IS_WATER[this.get(x, y - 1, z)]) return false;
+      let drop = 0;
+      while (drop < 3 && !SOLID[this.get(x, y - 1 - drop, z)]) drop++;
+      if (drop >= 2) return false; // a hole or a ledge: a fall, and a pit the monster walks into after it
+      for (const m of this.mobs.values()) if (!(m.flags & MF.DEAD) && Math.hypot(m.x - px, m.z - pz) < 1.1 && Math.abs(m.y - this.phys.y) < 2) return false;
+    }
+    return true;
+  }
+
+  /** One tick of stepping back from (x, z) with its eyes still on it (a player backing off, not turning tail): straight
+   *  back if that's safe, else back and to a side, else sideways. False if every way is a wall, a ledge, water or
+   *  another monster. */
+  retreatStep(fromX: number, fromZ: number): boolean {
+    const away = (deg(Math.atan2(-(this.phys.x - fromX), this.phys.z - fromZ)) + 360) % 360;
+    for (const off of [0, 35, -35, 70, -70, 105, -105]) {
+      const yaw = (away + off + 360) % 360;
+      if (!this.safeStep(yaw)) continue;
+      this.input.yaw = yaw;
+      this.input.forward = 1;
+      this.input.strafe = 0;
+      this.input.sprint = false;
+      this.input.jump = false;
+      return true;
+    }
+    return false;
+  }
+
+  /** Fight something until it is dead or gone, it gets away, or time runs out. v13, the way a good player does it:
+   *  - a charged swing only (a spammed one does a fifth), at arm's length (3 blocks to its box);
+   *  - from a few blocks out it sprints in, and the sprinting hit knocks the monster well back;
+   *  - closer, it jumps first and swings on the way down: a critical hit, half as much again;
+   *  - while the weapon recharges it steps back out of the monster's reach, still facing it, so it never trades blows
+   *    (a shambler hits from a block and a half, the player from three); never off a ledge, into water or into
+   *    another monster;
+   *  - an archer has no reach to keep out of: it stays on it. */
   async fight(t: Target, maxMs = 25000, bailHp = 0, leash = 0): Promise<string> {
     const weapon = this.bestWeapon();
     if (weapon) await this.hold(weapon);
@@ -1420,25 +1537,40 @@ export class Body {
     const x0 = this.phys.x;
     const z0 = this.phys.z;
     let hits = 0;
+    let crits = 0;
     let closest = Infinity;
     let closedAt = Date.now();
+    let jumpAt = -100;
+    const seen = t.kind === "mob" ? this.mobs.get(t.id) : undefined;
+    const spec = seen ? MOB_SPECS[seen.kind] : undefined;
+    const archer = spec?.key === "rattler";
+    // how far it hits from (centre to centre): a walker a block and a half, a crawler three, another player three and a
+    // bit; an archer shoots (no reach to keep out of), an animal doesn't hit back
+    const theirs = t.kind === "player" ? 3.4 : spec && !archer ? Math.sqrt(meleeReachSq(spec.w)) : 0;
+    const what = () => `${hits} hits${crits ? `, ${crits} critical` : ""}`;
+    // the server says which hits were critical
+    const struck = (m: { id: number; crit: boolean }) => {
+      if (m.id === t.id && m.crit) crits++;
+    };
+    this.onStruck.add(struck);
+    try {
     while (!this.abort && !this.dead && Date.now() - t0 < maxMs) {
       if (bailHp && this.stats.hp < bailHp) {
         this.halt();
-        return `backed off, down to ${Math.round(this.stats.hp)} health${hits ? ` after ${hits} hits` : ""}`;
+        return `backed off, down to ${Math.round(this.stats.hp)} health${hits ? ` after ${what()}` : ""}`;
       }
       // a leash: never chased off into the dark, away from the hole or the house it was in
       if (leash && Math.hypot(this.phys.x - x0, this.phys.z - z0) > leash) {
         this.halt();
-        return `let it go rather than chase it more than ${leash} blocks${hits ? ` (${hits} hits)` : ""}`;
+        return `let it go rather than chase it more than ${leash} blocks${hits ? ` (${what()})` : ""}`;
       }
       const p = this.targetPos(t);
       if (!p) {
         this.halt();
-        return hits ? "it's dead or gone" : "it's gone";
+        return hits ? `it's dead or gone (${what()})` : "it's gone";
       }
-      const [ex, ey, ez] = this.eye();
-      const d = Math.hypot(p.x - ex, p.y + p.h * 0.6 - ey, p.z - ez);
+      const d = this.boxDist(p);
+      const dh = Math.hypot(p.x - this.phys.x, p.z - this.phys.z);
       if (d > 24) {
         this.halt();
         return "it got away";
@@ -1449,35 +1581,271 @@ export class Body {
         closedAt = Date.now();
       } else if (d > HIT_REACH && Date.now() - closedAt > 6000) {
         this.halt();
-        return hits ? "it got out of reach after a few hits" : "couldn't get to it (water, a drop or a wall in the way): try another one";
+        return hits ? `it got out of reach after ${what()}` : "couldn't get to it (water, a drop or a wall in the way): try another one";
       }
-      if (d > HIT_REACH - 0.4) {
-        if (d > 16) {
-          await this.goto(p.x, p.y, p.z, 2.2, { maxMs: 4000, done: () => this.inHitRange(t) });
-          continue;
+      const cool = Math.ceil(cooldownTicks(this.heldId()));
+      const since = this.tick - this.lastSwing;
+      const ready = since >= cool;
+      const air = !this.phys.onGround && !this.phys.inWater;
+      // the feet first (steering turns the eyes to the ground ahead), then the eyes back on it
+      if (d > 16) {
+        await this.goto(p.x, p.y, p.z, 2.2, { maxMs: 4000, done: () => this.boxDist(this.targetPos(t)) <= HIT_REACH });
+        continue;
+      }
+      // is it coming at it? (a walker comes to you: wait for it rather than chase it about)
+      const toward = dh > 0.01 ? -(p.vx * (p.x - this.phys.x) + p.vz * (p.z - this.phys.z)) / dh : 0;
+      const coming = theirs > 0 && toward > 0.03;
+      // room to jump (in a two-high tunnel a jump is a bump of the head: no critical there)
+      const fx = Math.floor(this.phys.x);
+      const fz = Math.floor(this.phys.z);
+      const headroom = !SOLID[this.get(fx, Math.floor(this.phys.y + 0.1) + 2, fz)];
+      const critJump = (sprinting = false) => {
+        if ((theirs || archer) && t.kind !== "animal" && headroom && this.phys.onGround && (sprinting || !this.phys.sprinting) && this.tick - jumpAt > 14) {
+          this.input.jump = true;
+          jumpAt = this.tick;
         }
-        // run straight at it (a fleeing animal won't wait for a path), sprinting unless it's right there
-        this.steer(p.x, p.z, p.y, 0);
-        this.input.sprint = d > 3 && this.stats.food > 6 && !this.phys.inWater;
+      };
+      // backing off or running (an archer keeps its distance, and every hit knocks it further): chase it at a sprint
+      const fleeing = archer || toward < -0.02;
+      if (theirs && since < cool - 3 && dh < theirs + 1.2) {
+        // recharging inside its reach: back off a step, facing it
+        if (!this.retreatStep(p.x, p.z)) this.halt();
+      } else if (d > HIT_REACH - 0.25 && (since >= cool - 3 || !theirs)) {
+        if (coming && d < 6) {
+          // charged and it's on its way: stand and meet it; a jump as it comes into reach, so the swing lands on the
+          // way down (a critical)
+          this.halt();
+          if (d < 3.6) critJump();
+        } else if (fleeing && t.kind !== "animal") {
+          // after one that keeps its distance: a sprint, then a sprint-jump from a few blocks out; on the way down it
+          // lets go of the sprint, so the swing lands as a critical with an ordinary knockback (a sprinting hit would
+          // throw it six blocks off, out of reach again)
+          this.steer(p.x, p.z, p.y, 0);
+          this.input.sprint = this.stats.food > 6 && !this.phys.inWater;
+          if (d < 4.8) critJump(true);
+          if (air && this.phys.vy < 0 && d < 3.8) {
+            this.input.sprint = false;
+            this.input.forward = Math.min(this.input.forward, 0.7);
+          }
+        } else {
+          // close in: sprint from well out (a sprinting hit knocks it far back); from closer walk (a sprint and a
+          // critical don't go together), and jump in
+          this.steer(p.x, p.z, p.y, 0);
+          const far = d > 5.5;
+          this.input.sprint = far && this.stats.food > 6 && !this.phys.inWater;
+          if (!far && this.phys.sprinting) this.input.forward = Math.min(this.input.forward, 0.7); // drop out of the sprint
+          if (!far && d < 3.9) critJump();
+        }
       } else this.halt();
       this.look(p.x, p.y + p.h * 0.6, p.z);
-      const ready = this.tick - this.lastSwing >= Math.ceil(cooldownTicks(this.heldId()));
-      if (d <= HIT_REACH && ready && Math.abs(angleDiff(this.wantYaw, this.yaw)) < 30) {
-        this.send({ t: "hit", id: t.id, ...(t.kind === "mob" ? { mob: true } : t.kind === "player" ? { player: true } : {}) });
-        this.swing();
-        hits++;
+      const facing = Math.abs(angleDiff(this.wantYaw, this.yaw)) < 30;
+      if (d <= HIT_REACH && ready && facing) {
+        // a jump on its way up: hold the swing for the fall (half as much again), unless it's about to land a hit
+        const rising = air && this.phys.vy > 0.01;
+        if (!rising || (theirs && dh < theirs + 0.5)) {
+          this.send({ t: "hit", id: t.id, ...(t.kind === "mob" ? { mob: true } : t.kind === "player" ? { player: true } : {}) });
+          this.swing();
+          hits++;
+        }
       }
       await this.nextTick();
     }
     this.halt();
-    return "ran out of time";
+    return hits ? `ran out of time (${what()})` : "ran out of time";
+    } finally {
+      this.onStruck.delete(struck);
+    }
   }
 
   inHitRange(t: Target): boolean {
     const p = this.targetPos(t);
-    if (!p) return true;
-    const [ex, ey, ez] = this.eye();
-    return Math.hypot(p.x - ex, p.y + p.h * 0.6 - ey, p.z - ez) <= HIT_REACH;
+    return !p || this.boxDist(p) <= HIT_REACH;
+  }
+
+  /** The pitch (degrees; up is negative) that puts a fully drawn arrow from its eyes onto a point `dist` blocks away
+   *  across the ground and `dy` above its eyes: the arrow's own flight (shared/mobs.ts: drag, then gravity). */
+  static aimPitch(dist: number, dy: number): number {
+    let lo = -70;
+    let hi = 60;
+    for (let k = 0; k < 26; k++) {
+      const mid = (lo + hi) / 2;
+      const r = (mid * Math.PI) / 180;
+      let x = 0.3 * Math.cos(r);
+      let y = -0.1;
+      let vx = Math.cos(r) * BOW_SPEED;
+      let vy = -Math.sin(r) * BOW_SPEED;
+      let at = y;
+      for (let tk = 0; tk < 120; tk++) {
+        if (x + vx >= dist) {
+          at = y + vy * ((dist - x) / vx);
+          break;
+        }
+        x += vx;
+        y += vy;
+        vx *= ARROW_DRAG;
+        vy = vy * ARROW_DRAG - ARROW_GRAVITY;
+        at = y;
+        if (vx < 0.05) break;
+      }
+      if (at > dy) lo = mid;
+      else hi = mid;
+    }
+    return (lo + hi) / 2;
+  }
+
+  /** Shoot it with the bow from where it stands: a full draw each time (a second), aimed where it will be when the
+   *  arrow gets there, dropped for the arrow's fall. Stops when it's dead or gone, comes within a few blocks (a sword's
+   *  job), stays out of sight, or the arrows run out. */
+  async duel(t: Target, maxMs = 25000, bailHp = 0): Promise<string> {
+    if (!this.has(I.BOW) || !this.has(I.ARROW)) return "no bow and arrows";
+    if (!(await this.hold(I.BOW))) return "couldn't take the bow in hand";
+    const t0 = Date.now();
+    let shots = 0;
+    let hits = 0;
+    let drawAt = -1;
+    let unseen = 0;
+    let steady = 0;
+    const struck = (m: { id: number }) => {
+      if (m.id === t.id) hits++;
+    };
+    this.onStruck.add(struck);
+    const done = (s: string) => {
+      if (drawAt >= 0) this.send({ t: "bow", a: "abort" });
+      this.onStruck.delete(struck);
+      this.halt();
+      return s;
+    };
+    const tally = () => `${shots} arrows, ${hits} hit`;
+    while (!this.abort && !this.dead && Date.now() - t0 < maxMs) {
+      if (bailHp && this.stats.hp < bailHp) return done(`backed off, down to ${Math.round(this.stats.hp)} health (${tally()})`);
+      const p = this.targetPos(t);
+      if (!p) return done(shots ? `it's dead or gone (${tally()})` : "it's gone");
+      const dh = Math.hypot(p.x - this.phys.x, p.z - this.phys.z);
+      if (dh < 3.5) return done(`it came close (${tally()})`);
+      // a walker or a crawler at arm's length: that's the sword's job now (drawing, it stood and took the hits)
+      const close = this.hostiles(5).find((m) => m.key !== "rattler" && m.d < 3.4);
+      if (close) return done(`a ${close.key} came at it (${tally()})`);
+      if (dh > 32) return done(`it got away (${tally()})`);
+      if (!this.has(I.ARROW)) return done(`out of arrows (${tally()})`);
+      if (this.heldId() !== I.BOW) {
+        drawAt = -1;
+        if (!(await this.hold(I.BOW))) return done("lost the bow");
+      }
+      // where it will be when the arrow arrives (a few ticks at this range), its middle
+      const lead = dh / 2.7;
+      const tx = p.x + p.vx * lead;
+      const tz = p.z + p.vz * lead;
+      const [ex, ey, ez] = this.eye();
+      const yaw = (deg(Math.atan2(-(tx - ex), tz - ez)) + 360) % 360;
+      const pitch = Body.aimPitch(Math.hypot(tx - ex, tz - ez), p.y + p.h * 0.55 - ey);
+      this.halt();
+      this.wantYaw = yaw;
+      this.wantPitch = clamp(pitch, -89, 89);
+      const visible = this.clearShot(ex, ey - 0.1, ez, p.x, p.y + p.h * 0.55, p.z);
+      unseen = visible ? 0 : unseen + 1;
+      if (unseen > 50) return done(`lost sight of it (${tally()})`);
+      const onIt = Math.abs(angleDiff(yaw, this.yaw)) < 0.9 && Math.abs(this.wantPitch - this.pitch) < 0.9;
+      steady = onIt ? steady + 1 : 0;
+      if (drawAt < 0) {
+        if (visible) {
+          this.send({ t: "bow", a: "start" });
+          drawAt = this.tick;
+        }
+      } else if (this.tick - drawAt >= 22 && visible && steady >= 2) {
+        this.send({ t: "bow", a: "release" });
+        shots++;
+        drawAt = -1;
+      } else if (this.tick - drawAt > 70) {
+        // held too long without a clear shot: let it down and draw again when it shows
+        this.send({ t: "bow", a: "abort" });
+        drawAt = -1;
+      }
+      await this.nextTick();
+    }
+    return done(`ran out of time (${tally()})`);
+  }
+
+  /** Two blocks up where it stands, and fight from there: a walker can't reach a body a block and a half above it, so
+   *  shamblers stand below and take the hits (the classic pillar). Eats up there when hurt. Digs its pillar away again
+   *  when they're dead or gone. Not against a crawler (it climbs) or with an archer about (it would be a target). */
+  async pillarFight(maxMs = 45000): Promise<string> {
+    const x = Math.floor(this.phys.x);
+    const z = Math.floor(this.phys.z);
+    const y0 = Math.floor(this.phys.y + 0.1);
+    if (this.fillerCount() < 2) return "no blocks to pillar up with";
+    if (SOLID[this.get(x, y0 + 2, z)] || SOLID[this.get(x, y0 + 3, z)] || SOLID[this.get(x, y0 + 4, z)]) return "no room overhead to pillar up";
+    const up = await this.pillarUp(2);
+    if (up < 2) return `couldn't get up out of reach (${up} of 2 blocks)`;
+    const weapon = this.bestWeapon();
+    if (weapon) await this.hold(weapon);
+    const t0 = Date.now();
+    let hits = 0;
+    let why = "";
+    this.halt();
+    this.input.sneak = true; // never steps off the top
+    while (!this.abort && !this.dead && Date.now() - t0 < maxMs) {
+      const below = this.hostiles(12).filter((m) => m.key !== "rattler");
+      if (!below.length) break;
+      const archer = this.hostiles(16).find((m) => m.key === "rattler" && this.seenBy(m));
+      if (archer) {
+        why = ", a rattler had it in sight up there";
+        break;
+      }
+      const near = below.map((m) => ({ m, d: this.boxDist({ x: m.x, y: m.y, z: m.z, h: MOB_SPECS[m.kind]?.h ?? 1.9, w: MOB_SPECS[m.kind]?.w ?? 0.6 }) })).sort((a, b) => a.d - b.d)[0];
+      const h = MOB_SPECS[near.m.kind]?.h ?? 1.9;
+      this.look(near.m.x, near.m.y + h * 0.75, near.m.z);
+      const ready = this.tick - this.lastSwing >= Math.ceil(cooldownTicks(this.heldId()));
+      if (near.d <= HIT_REACH && ready && Math.abs(angleDiff(this.wantYaw, this.yaw)) < 30) {
+        this.send({ t: "hit", id: near.m.id, mob: true });
+        this.swing();
+        hits++;
+      } else if (near.d > HIT_REACH + 1 && this.stats.hp <= 14 && this.stats.food < 20 && this.inv.some((s) => s && itemDef(s.id)?.food && !itemDef(s.id)?.food?.queasy)) {
+        // out of their reach and none in ours: eat (a full stomach heals fast), then back to the weapon
+        await this.eat();
+        if (weapon) await this.hold(weapon);
+        this.input.sneak = true;
+      }
+      await this.nextTick();
+    }
+    this.input.sneak = false;
+    // down again, the blocks back in the bag (a dirt pole left standing is litter in the town)
+    if (!this.dead && !this.abort && !this.hostiles(5).some((m) => m.key !== "rattler")) {
+      for (const by of [y0 + 1, y0]) {
+        if (Math.floor(this.phys.y + 0.1) !== by + 1 || !SOLID[this.get(x, by, z)]) continue;
+        if (!(await this.mine(x, by, z, false))) break;
+        await this.wait(8);
+      }
+      await this.pickUp(3, 3000);
+    }
+    return `pillared up out of reach and fought from there (${hits} hits)${why}`;
+  }
+
+  /** An archer has it in sight: a block wall two high between them (on its side), so the arrows stop and it has to come
+   *  round the corner, into reach, to shoot again. True if it put up any. */
+  async coverFrom(fromX: number, fromZ: number): Promise<boolean> {
+    const x = Math.floor(this.phys.x);
+    const y = Math.floor(this.phys.y + 0.1);
+    const z = Math.floor(this.phys.z);
+    // in the middle of its cell first: a block can't go where its body pokes into the cell beside it
+    await this.center(x, z, 12);
+    const dx = fromX - this.phys.x;
+    const dz = fromZ - this.phys.z;
+    const sx = Math.sign(dx) || 1;
+    const sz = Math.sign(dz) || 1;
+    // the side toward it, and the corner too when it's off at an angle
+    const cols: [number, number][] = Math.abs(dx) >= Math.abs(dz) ? [[x + sx, z]] : [[x, z + sz]];
+    if (Math.min(Math.abs(dx), Math.abs(dz)) > 0.45 * Math.max(Math.abs(dx), Math.abs(dz))) cols.push([x + sx, z + sz], Math.abs(dx) >= Math.abs(dz) ? [x, z + sz] : [x + sx, z]);
+    let placed = 0;
+    for (const [cx, cz] of cols)
+      for (const cy of [y, y + 1]) {
+        if (this.abort || this.dead) return placed > 0;
+        if (SOLID[this.get(cx, cy, cz)]) continue;
+        const f = this.fillerBlock();
+        if (!f) return placed > 0;
+        if (await this.place(f, cx, cy, cz, 0)) placed++;
+      }
+    this.wantPitch = 0;
+    return placed > 0;
   }
 
   /** Run from a point for a few seconds. */
@@ -1579,6 +1947,10 @@ export class Body {
   /** Dig in for the night: three blocks down, then a block over its head. */
   async digIn(): Promise<string> {
     if (this.sealed()) return "already sealed in";
+    // never with a walker or a crawler at arm's length: it drops into the hole after it, and three blocks down is seconds
+    // of its hits with nowhere to go (season 11: shamblers followed them down)
+    const close = this.hostiles(5).find((m) => m.key !== "rattler");
+    if (close) return `a ${close.key} is too close to dig in (it would follow you down): fight it, or wall it off first`;
     this.halt();
     if (this.phys.inWater) await this.escapeWater();
     // a hole next to water floods: walk a few blocks away from it first

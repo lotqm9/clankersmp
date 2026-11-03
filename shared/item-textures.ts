@@ -1242,11 +1242,98 @@ const BUCKET = [
   "................",
 ];
 
-/** A bucket: grey iron with a handle; `contents` fills its mouth (water or milk), or it shows the dark inside. */
-export function bucket(contents: "none" | "water" | "milk"): Img {
-  const inside = contents === "water" ? pal("#1f4fb8", "#3a72e0", "#78a8ff") : contents === "milk" ? pal("#cfcfd6", "#f0f0f3", "#ffffff") : pal("#232327", "#34343a", "#45454c");
+/** A bucket: grey iron with a handle; `contents` fills its mouth (water or milk; v13: lava), or it shows the dark
+ *  inside. */
+export function bucket(contents: "none" | "water" | "milk" | "lava"): Img {
+  const inside =
+    contents === "water" ? pal("#1f4fb8", "#3a72e0", "#78a8ff")
+    : contents === "milk" ? pal("#cfcfd6", "#f0f0f3", "#ffffff")
+    : contents === "lava" ? pal("#c8380c", "#ff7a14", "#ffd24a")
+    : pal("#232327", "#34343a", "#45454c");
   const deep: Pal = [scale(inside[0], 0.85), scale(inside[1], 0.85), scale(inside[1], 0.95)];
-  return sprite(BUCKET, { "#": pal("#5e5e66", "#9a9aa2", "#c8c8ce"), h: pal("#4a4a52", "#76767e", "#a4a4ac"), c: inside, C: deep });
+  const img = sprite(BUCKET, { "#": pal("#5e5e66", "#9a9aa2", "#c8c8ce"), h: pal("#4a4a52", "#76767e", "#a4a4ac"), c: inside, C: deep });
+  if (contents === "lava") for (const [x, y] of [[4, 4], [8, 4], [11, 5], [6, 5]]) put(img, x, y, hex("#fff2a0")); // glowing bubbles
+  return img;
+}
+
+// ------------------------------------------------------------------ v13: the book, obsidian, the enchanting table
+
+const BOOK = [
+  "................",
+  "................",
+  "....cccccccccc..",
+  "...cGcccccccppl.",
+  "...cGccccccppl..",
+  "..cGccccccppl...",
+  "..cGcccccppl....",
+  ".cGccccccppl....",
+  ".cGcccccppl.....",
+  "cGcccccppl......",
+  "cGccccppl.......",
+  "cGcccppl........",
+  "cccccpl.........",
+  ".cccc...........",
+  "................",
+  "................",
+];
+
+/** A book: a red-brown leather cover with a gold band down the spine and its cream pages showing at the edge. */
+export function book(): Img {
+  return sprite(BOOK, { c: pal("#5a1c12", "#8e2e1c", "#b4482c"), G: pal("#a8780c", "#e0b030", "#ffe68a"), p: pal("#c8c0a8", "#efe8d4", "#fffbee"), l: pal("#9a9282", "#bdb5a2", "#d8d0bc") });
+}
+
+/** Obsidian: glassy purple-black volcanic rock, with sharp lighter streaks and a few violet glints. */
+export function obsidian(): Img {
+  const r = mulberry32(1913);
+  const img = newImg();
+  const base = ["#0c0812", "#130d1d", "#1a1228", "#221833"].map(hex);
+  for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) put(img, x, y, base[Math.floor(r() * 4)]);
+  // facets: short diagonal streaks of a lighter violet, like broken glass catching the light
+  for (let k = 0; k < 7; k++) {
+    const x0 = Math.floor(r() * T);
+    const y0 = Math.floor(r() * T);
+    const len = 2 + Math.floor(r() * 3);
+    for (let s = 0; s < len; s++) put(img, (x0 + s) % T, (y0 + (r() < 0.5 ? s : 0)) % T, hex(s === 0 ? "#5a3f84" : "#3a2858"));
+  }
+  for (let k = 0; k < 5; k++) put(img, Math.floor(r() * T), Math.floor(r() * T), hex("#8c6ac4"));
+  return img;
+}
+
+/** The enchanting table's top: a red cloth over obsidian, an open book in the middle (two pages and a spine). */
+export function enchantTop(): Img {
+  const img = obsidian();
+  const cloth = ["#7a1420", "#9a1c2a", "#b42a36"].map(hex);
+  for (let y = 1; y < 15; y++) for (let x = 1; x < 15; x++) put(img, x, y, cloth[(x * 7 + y * 3) % 5 === 0 ? 2 : (x + y) % 4 === 0 ? 0 : 1]);
+  for (let x = 1; x < 15; x++) {
+    put(img, x, 1, hex("#d8a838"));
+    put(img, x, 14, hex("#d8a838"));
+  }
+  // the open book: pages 4..11 across, 4..11 down, a dark spine down the middle
+  for (let y = 4; y <= 11; y++)
+    for (let x = 3; x <= 12; x++) {
+      const spine = x === 7 || x === 8;
+      put(img, x, y, spine ? hex("#6a2a18") : (y + (x < 8 ? 0 : 1)) % 2 === 0 ? hex("#f2ead2") : hex("#dcd2b6"));
+    }
+  for (const [x, y] of [[4, 6], [5, 6], [9, 6], [10, 6], [4, 8], [5, 8], [10, 8], [9, 9]]) put(img, x, y, hex("#5a4aa0")); // lines of glyphs
+  return img;
+}
+
+/** Its sides: obsidian with a band of the red cloth hanging over the top edge and a diamond set at each corner. */
+export function enchantSide(): Img {
+  const img = obsidian();
+  for (let x = 0; x < T; x++) {
+    put(img, x, 0, hex("#b42a36"));
+    put(img, x, 1, hex("#9a1c2a"));
+    put(img, x, 2, x % 3 === 0 ? hex("#7a1420") : hex("#9a1c2a"));
+    put(img, x, 3, x % 3 === 1 ? hex("#d8a838") : hex("#0c0812"));
+  }
+  for (const x0 of [1, 13]) {
+    put(img, x0, 6, hex("#c9fbff"));
+    put(img, x0 + 1, 6, hex("#4dd6da"));
+    put(img, x0, 7, hex("#4dd6da"));
+    put(img, x0 + 1, 7, hex("#1c8e96"));
+  }
+  return img;
 }
 
 const HOE_HEAD = [

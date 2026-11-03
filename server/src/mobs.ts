@@ -73,6 +73,8 @@ export interface Mob extends Body {
   jumpCool: number;
   climbing: boolean;
   burn: number; // ticks left on fire
+  /** Ticks a hit's knockback still carries it (its own legs wait: Java's knockback, a couple of blocks a hit). */
+  knock: number;
   fireTicks: number; // ticks it has been burning (1 damage every 20)
   inWater: boolean;
   far: number; // ticks with nobody within 32 blocks
@@ -292,7 +294,7 @@ export class MobManager {
       yaw: rand(-180, 180), hp: s.hp, hurt: 0, lastDmg: 0, dying: 0, target: 0, provoked: 0, scan: randi(0, 10),
       path: null, pi: 0, replan: 0, goalX: 0, goalZ: 0, timer: randi(20, 80), attackCool: 0, swing: 0, draw: 0,
       seen: 0, strafe: Math.random() < 0.5 ? 1 : -1, strafeTimer: 0, leapCool: 0, jumpCool: 0, climbing: false,
-      burn: 0, fireTicks: 0, inWater: false, far: 0, los: false, losAt: 0, flags: 0, key: -1, version: 1, prog: 0, px: x, pz: z,
+      burn: 0, knock: 0, fireTicks: 0, inWater: false, far: 0, los: false, losAt: 0, flags: 0, key: -1, version: 1, prog: 0, px: x, pz: z,
     };
     this.mobs.set(id, m);
     this.stats.spawned++;
@@ -402,6 +404,9 @@ export class MobManager {
       m.vx = m.vx / 2 + (dx / l) * from.kb;
       m.vz = m.vz / 2 + (dz / l) * from.kb;
       if (m.onGround) m.vy = Math.min(0.4, m.vy / 2 + 0.4);
+      // v13: the knockback carries it: its AI used to set its speed back toward the player on the very next tick, so
+      // a hit moved it half a block and a sprinting hit no further (Java's carry a zombie two blocks and five)
+      m.knock = 10;
       m.provoked = 600;
       if (from.player) {
         m.target = from.player;
@@ -526,6 +531,15 @@ export class MobManager {
     if (m.provoked > 0) m.provoked--;
     if (m.replan > 0) m.replan--;
     m.timer--;
+    // v13: knocked back: the hit carries it (ground friction once it lands) before its legs take over again
+    const legs = m.knock <= 0;
+    if (!legs) {
+      m.knock--;
+      if (m.onGround && m.knock < 8) {
+        m.vx *= 0.6;
+        m.vz *= 0.6;
+      }
+    }
     // the sun: the undead catch fire under the open sky (and water puts it out)
     if (s.burns && sun && !m.inWater && this.light.sky(Math.floor(m.x), Math.floor(m.y + m.h - 0.1), Math.floor(m.z))) m.burn = Math.max(m.burn, 160);
     if (m.inWater) m.burn = 0;
@@ -560,7 +574,7 @@ export class MobManager {
     }
     if (!t) {
       m.draw = 0;
-      this.wander(m, s.walk);
+      if (legs) this.wander(m, s.walk);
       return;
     }
     // facing: at the target
@@ -569,10 +583,13 @@ export class MobManager {
     const dh = Math.hypot(dx, dz);
     const heading = (Math.atan2(-dx, dz) * 180) / Math.PI;
     const d2 = dx * dx + (t.y - m.y) ** 2 + dz * dz;
-    if (s.key === "rattler") return this.archer(m, t, dh, heading);
+    if (s.key === "rattler") return this.archer(m, t, dh, heading, legs);
     // melee: Shambler and Skitter
     const close = dh < 2.6 && Math.abs(t.y - m.y) < 1.6;
-    if (close) {
+    if (!legs) {
+      // flying back from a hit: it only turns to face its target
+      m.yaw = wrap(m.yaw + Math.max(-40, Math.min(40, wrap(heading - m.yaw))));
+    } else if (close) {
       // up close: face it and come to arm's length, never into the player (there is no body push between them)
       m.path = null;
       m.yaw = wrap(m.yaw + Math.max(-40, Math.min(40, wrap(heading - m.yaw))));
@@ -584,7 +601,7 @@ export class MobManager {
     if (s.climbs) {
       // a Skitter goes straight up a wall it runs into, and leaps from a few blocks away
       m.climbing = m.collidedH && !m.inWater;
-      if (m.onGround && m.leapCool === 0 && dh > 2 && dh < 4.5 && Math.random() < 0.1 && this.sees(m.x, this.eyeOf(m), m.z, t.x, t.y + t.eye, t.z)) {
+      if (legs && m.onGround && m.leapCool === 0 && dh > 2 && dh < 4.5 && Math.random() < 0.1 && this.sees(m.x, this.eyeOf(m), m.z, t.x, t.y + t.eye, t.z)) {
         m.vx = (dx / dh) * 0.4 * 0.8 + m.vx * 0.2;
         m.vz = (dz / dh) * 0.4 * 0.8 + m.vz * 0.2;
         m.vy = 0.4;
@@ -600,12 +617,14 @@ export class MobManager {
   }
 
   /** Rattler: close in to about 12 blocks, then hold the distance (strafing), draw and shoot when in sight. */
-  private archer(m: Mob, t: MobTarget, dh: number, heading: number): void {
+  private archer(m: Mob, t: MobTarget, dh: number, heading: number, legs = true): void {
     const s = MOB_SPECS[m.kind];
     const sees = this.sees(m.x, this.eyeOf(m), m.z, t.x, t.y + t.eye, t.z);
     m.seen = sees ? m.seen + 1 : Math.max(0, m.seen - 1);
     m.yaw = wrap(m.yaw + Math.max(-30, Math.min(30, wrap(heading - m.yaw))));
-    if (dh > 12 || m.seen < 20) this.chase(m, t, s.chase);
+    if (!legs) {
+      // knocked back: it still draws and shoots, but where it goes is the hit's
+    } else if (dh > 12 || m.seen < 20) this.chase(m, t, s.chase);
     else {
       m.path = null;
       if (--m.strafeTimer <= 0) {

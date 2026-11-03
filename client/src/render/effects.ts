@@ -205,6 +205,23 @@ export class Particles {
       this.add(x + (r() - 0.5) * 0.9, y + r() * 0.6, z + (r() - 0.5) * 0.9, 0, 0.01 + r() * 0.03, 0, TEX.fx_green, 0.05 + r() * 0.04, 20 + Math.floor(r() * 20), FULL, -0.001);
   }
 
+  /** v13: the enchanting table at work: violet glyphs rising and swirling round the book. */
+  enchant(x: number, y: number, z: number): void {
+    const r = this.rand;
+    for (let i = 0; i < 26; i++) {
+      const a = r() * Math.PI * 2;
+      const d = 0.6 + r() * 0.9;
+      this.add(x + Math.cos(a) * d, y + r() * 0.8, z + Math.sin(a) * d, -Math.cos(a) * 0.03, 0.015 + r() * 0.03, -Math.sin(a) * 0.03, TEX.fx_glyph, 0.05 + r() * 0.05, 16 + Math.floor(r() * 18), FULL, -0.002);
+    }
+  }
+
+  /** v13: lava setting into obsidian: a hiss of steam off the new block. */
+  steam(x: number, y: number, z: number): void {
+    const r = this.rand;
+    for (let i = 0; i < 18; i++)
+      this.add(x + (r() - 0.5) * 0.9, y + r() * 0.3, z + (r() - 0.5) * 0.9, (r() - 0.5) * 0.04, 0.05 + r() * 0.06, (r() - 0.5) * 0.04, TEX.fx_smoke, 0.1 + r() * 0.12, 16 + Math.floor(r() * 16), FULL, -0.004);
+  }
+
   /** A mob is gone: a puff of grey smoke where it fell. */
   poof(x: number, y: number, z: number, w: number, h: number): void {
     const r = this.rand;

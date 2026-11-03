@@ -829,6 +829,14 @@ export function buildTextureLayers(): Img[] {
   L[TEX.brick] = IT.brickItem();
   L[TEX.coconut] = IT.coconut();
   L[TEX.smoked_fish] = IT.smokedFish();
+  // v13: the way to enchanting
+  L[TEX.obsidian] = IT.obsidian();
+  L[TEX.enchant_top] = IT.enchantTop();
+  L[TEX.enchant_side] = IT.enchantSide();
+  L[TEX.enchant_bottom] = IT.obsidian();
+  L[TEX.book] = IT.book();
+  L[TEX.lava_bucket] = IT.bucket("lava");
+  L[TEX.fx_glyph] = speckle(["#b48cff", "#8a5ce8", "#e2d0ff", "#6a3fd0"], 9305);
   for (let i = 0; i < TEX_LAYERS; i++) if (!L[i]) L[i] = newImg();
   cache = L;
   return L;

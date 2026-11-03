@@ -110,7 +110,6 @@ function noHub<T extends { cells: PlanCell[]; of?: number[] }>(p: T): T {
 }
 /** A kind as the thing being built (the roads are one network: "the roads", not "a building joined by a path"). */
 const nameOf = (k: Kind) => (k === "road" ? "the roads" : civLabel(k));
-/** What a tier adds, in words. */
 /** A building's top tier, by its own design. */
 const topOf = (b: { kind: Kind; design?: string }) => maxTier(b.kind, b.design);
 /** What a tier adds to a building, by its own design. */

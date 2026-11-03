@@ -2594,6 +2594,10 @@ export class Body {
     const ring: [number, number][] = [];
     for (let dx = 0; dx < 4; dx++) ring.push([x0 + dx, z0], [x0 + dx, z0 + 3]);
     for (let dz = 1; dz < 3; dz++) ring.push([x0, z0 + dz], [x0 + 3, z0 + dz]);
+    // round the walls in order, the way a player turns as it builds round itself: north wall, south wall, north,
+    // south (the order the ring was made in) turned it half round for nearly every block
+    const [rx, rz] = [this.phys.x, this.phys.z];
+    ring.sort((a, b) => Math.atan2(a[1] + 0.5 - rz, a[0] + 0.5 - rx) - Math.atan2(b[1] + 0.5 - rz, b[0] + 0.5 - rx));
     let placed = 0;
     const put = async (x: number, yy: number, z: number): Promise<void> => {
       if (this.abort || this.dead || SOLID[this.get(x, yy, z)]) return;

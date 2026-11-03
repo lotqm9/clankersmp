@@ -331,17 +331,28 @@ export async function climbOut(b: Body): Promise<boolean> {
       [k, kd] = nearest();
       if (kd > 2) continue;
     }
-    for (let j = k; j >= 0 && !b.abort && !b.dead; j--) {
-      const c = st.path[j];
-      // a flat stretch: every other cell will do
-      if (j > 0 && j < k && st.path[j - 1][1] === c[1] && st.path[j + 1][1] === c[1] && j % 2 === 1) continue;
-      await b.goto(c[0] + 0.5, c[1], c[2] + 0.5, 0.7, { maxMs: 5000 });
-      if (!on(c, 2)) await b.goto(c[0] + 0.5, c[1], c[2] + 0.5, 0.7, { maxMs: 8000 });
-      if (!on(c, 2.5)) await regain(b, c, 4000);
-      if (!on(c, 2.5)) {
-        dbg(b, `climb: couldn't get to cell ${j} (${c.join(" ")}), at ${b.phys.x.toFixed(1)} ${b.phys.y.toFixed(1)} ${b.phys.z.toFixed(1)}`);
-        break;
+    // up the stair three cells at a go (the path along a tunnel is the tunnel); where that doesn't get there, a cell at
+    // a time, out of any hole on the way
+    const t1 = Date.now();
+    let lost = false;
+    for (let j = k; j > 0 && !b.abort && !b.dead && !lost; ) {
+      const next = Math.max(0, j - 3);
+      const c = st.path[next];
+      await b.goto(c[0] + 0.5, c[1], c[2] + 0.5, 0.8, { maxMs: 6000, done: () => on(c, 0.9) });
+      for (let q = j - 1; q >= next && !on(c, 2) && !b.abort && !b.dead; q--) {
+        const cq = st.path[q];
+        await b.goto(cq[0] + 0.5, cq[1], cq[2] + 0.5, 0.8, { maxMs: 3000, done: () => on(cq, 0.9) });
+        if (!on(cq, 2) && !(await regain(b, cq, 3000)) && !on(cq, 2.5)) {
+          dbg(b, `climb: couldn't get to cell ${q} (${cq.join(" ")}), at ${b.phys.x.toFixed(1)} ${b.phys.y.toFixed(1)} ${b.phys.z.toFixed(1)}`);
+          lost = true;
+          break;
+        }
       }
+      if (!lost && !on(c, 2.5)) lost = true;
+      // three minutes and not up: the long way round, or a staircase of its own
+      if (Date.now() - t1 > 180000) lost = true;
+      j = next;
+      if (j % 15 < 3) dbg(b, `climb: at cell ${j} of ${k} after ${((Date.now() - t1) / 1000).toFixed(0)}s`);
     }
   }
   if (b.abort || b.dead) return false;
@@ -364,7 +375,7 @@ export async function climbOut(b: Body): Promise<boolean> {
 }
 
 /** A deep mining trip from where it stands (see the top of this file). */
-export async function miningTrip(b: Body, maxMs = 10 * 60000): Promise<Trip> {
+export async function miningTrip(b: Body, maxMs = Number(process.env.MINE_MAX_MS) || 10 * 60000): Promise<Trip> {
   try {
     return await runTrip(b, maxMs);
   } finally {

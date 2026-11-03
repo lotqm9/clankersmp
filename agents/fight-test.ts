@@ -26,6 +26,7 @@ const BASE = ["dirt 32", "cobblestone 16", "torch 4", "cooked_porkchop 8", "ston
 const STONE = ["stone_sword 1"];
 const IRON = ["iron_sword 1", "iron_helmet 1", "iron_chestplate 1", "iron_leggings 1", "iron_boots 1"];
 const BOW = ["bow 1", "arrow 32"];
+const LEATHER = ["leather_helmet 1", "leather_chestplate 1", "leather_leggings 1", "leather_boots 1"];
 interface Scenario {
   kit: string[];
   hp: number;
@@ -49,6 +50,14 @@ const SCEN: Record<string, Scenario> = {
   team3: { kit: [...BASE, ...STONE], hp: 20, mobs: [["shambler", 3, 9]], team: true },
   // one attacked by two at low health, another of the pack 14 blocks off: does it come and help?
   help2: { kit: [...BASE, ...STONE], hp: 14, mobs: [["shambler", 2, 7]], team: true, apart: 14 },
+  // v14: armed and armoured (a stone sword and leather, or full iron), no bow: they should take it on and finish it
+  a_sh2: { kit: [...BASE, ...STONE, ...LEATHER], hp: 20, mobs: [["shambler", 2, 8]] },
+  a_sk2: { kit: [...BASE, ...STONE, ...LEATHER], hp: 20, mobs: [["skitter", 2, 8]] },
+  a_ra1: { kit: [...BASE, ...STONE, ...LEATHER], hp: 20, mobs: [["rattler", 1, 12]] },
+  a_mix: { kit: [...BASE, ...STONE, ...LEATHER], hp: 20, mobs: [["shambler", 1, 8], ["rattler", 1, 13], ["skitter", 1, 10]] },
+  i_ra2: { kit: [...BASE, ...IRON], hp: 20, mobs: [["rattler", 2, 12]] },
+  i_mix: { kit: [...BASE, ...IRON], hp: 20, mobs: [["shambler", 2, 8], ["rattler", 1, 13], ["skitter", 1, 10]] },
+  a_help: { kit: [...BASE, ...STONE, ...LEATHER], hp: 20, mobs: [["shambler", 2, 7], ["rattler", 1, 12]], team: true, apart: 14 },
   tunnel: { kit: [...BASE, ...STONE], hp: 7, mobs: [["shambler", 1, 4]], tunnel: true },
   // harder ones, like the real deaths: low health against two, three at once, an archer down a mine, no bow
   sh2low: { kit: [...BASE, ...STONE], hp: 10, mobs: [["shambler", 2, 7]] },
@@ -68,6 +77,7 @@ interface Result {
   minHp: number; // the lowest it got
   taken: number; // damage taken in all (half hearts)
   reflexes: string[];
+  helps: number; // v14: how many times its help reflex fired (once a fight)
   death?: string;
 }
 
@@ -248,7 +258,7 @@ async function trial(scen: string, k: number, names: string[], at: { x: number; 
   await sleep(500);
   return team.map((b, j) => ({
     scen, trial: k, alive: !b.dead, hp: b.dead ? 0 : Math.round(b.stats.hp * 10) / 10, killed: died.size, mobs: Math.max(seen.size, s.mobs.reduce((a, m) => a + m[1], 0)),
-    secs: Math.round((Date.now() - t0) / 1000), minHp: Math.round(minHp[j] * 10) / 10, taken: Math.round(taken[j] * 10) / 10, reflexes: [...new Set(reflexes[j])], death: b.dead ? b.deathMsg : undefined,
+    secs: Math.round((Date.now() - t0) / 1000), minHp: Math.round(minHp[j] * 10) / 10, taken: Math.round(taken[j] * 10) / 10, reflexes: [...new Set(reflexes[j])], helps: reflexes[j].filter((x) => x.startsWith("helping")).length, death: b.dead ? b.deathMsg : undefined,
   }));
 }
 
@@ -307,7 +317,11 @@ for (const sc of WANT) {
   const kills = rs.reduce((a, r) => a + r.killed, 0) / rs.length;
   const took = rs.reduce((a, r) => a + r.taken, 0) / rs.length;
   const secs = rs.reduce((a, r) => a + r.secs, 0) / rs.length;
-  console.log(`${sc}: lived ${lived}/${rs.length}, damage taken ${took.toFixed(1)}, avg hp left ${hp.toFixed(1)}, monsters killed per trial ${kills.toFixed(2)}, ${secs.toFixed(0)}s`);
+  // gave ground: took cover, ran, walled off, dug in or went up a pillar
+  const gave = rs.filter((r) => r.reflexes.some((x) => /cover|running|getting away|wall|dig|pillar|flee/.test(x))).length;
+  const helps = rs.reduce((a, r) => a + (r.helps ?? 0), 0);
+  const cleared = rs.filter((r) => r.killed >= r.mobs).length;
+  console.log(`${sc}: lived ${lived}/${rs.length}, damage taken ${took.toFixed(1)}, avg hp left ${hp.toFixed(1)}, monsters killed per trial ${kills.toFixed(2)}, killed them all in ${cleared}/${rs.length}, gave ground in ${gave}/${rs.length}${helps ? `, helped ${helps} times` : ""}, ${secs.toFixed(0)}s`);
 }
 for (const b of bodies.values()) b?.close();
 process.exit(0);

@@ -1139,7 +1139,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           const id = itemByName(String(i.item ?? ""));
           if (!id || !b.has(id)) return `you don't have ${i.item}`;
           if (id === B.TORCH && b.findBlocks([B.TORCH], 4, 1).length) return "there is already a torch right here";
-          const spot = b.spotNearby();
+          const spot = id === B.CRAFTING_TABLE || id === B.FURNACE || id === B.CHEST ? await b.spotForBlock() : b.spotNearby();
           if (!spot) return "no room to place it here";
           return (await b.place(id, ...spot)) ? `placed ${i.item}` : `couldn't place ${i.item}`;
         }

@@ -1569,6 +1569,25 @@ export class Body {
     return null;
   }
 
+  /** A free cell next to it for a crafting table or a furnace; shut in a hole with none, one cut into the wall at its
+   *  feet (the block that goes in closes the wall again: sonnet, sealed in for the night, was told "no room to place
+   *  it here" and "there is none here" by turns, and made no iron sword). Never toward water. */
+  async spotForBlock(): Promise<[number, number, number] | null> {
+    const spot = this.spotNearby();
+    if (spot || !this.covered()) return spot;
+    const fx = Math.floor(this.phys.x);
+    const fy = Math.floor(this.phys.y + 0.1);
+    const fz = Math.floor(this.phys.z);
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const [x, z] = [fx + dx, fz + dz];
+      const id = this.get(x, fy, z);
+      if (!SOLID[id] || id === B.BEDROCK || !SOLID[this.get(x, fy - 1, z)]) continue;
+      if ([[x + dx, fy, z + dz], [x + dz, fy, z + dx], [x - dz, fy, z - dx], [x, fy + 1, z]].some(([a, b2, c]) => IS_WATER[this.get(a, b2, c)])) continue;
+      if ((await this.mine(x, fy, z, false)) && this.get(x, fy, z) === B.AIR) return [x, fy, z];
+    }
+    return null;
+  }
+
   /** Walk over the dropped items near it to pick them up. */
   async pickUp(radius = 7, maxMs = 12000): Promise<number> {
     const t0 = Date.now();
@@ -1662,7 +1681,7 @@ export class Body {
       // does (sonnet asked to smelt over and over with no furnace and got "craft one: furnace" each time)
       if (!near && !this.has(B.FURNACE) && this.count(B.COBBLESTONE) >= 8) await this.craft("furnace", 1);
       if (!near && this.has(B.FURNACE)) {
-        const spot = this.spotNearby();
+        const spot = await this.spotForBlock();
         if (spot) await this.place(B.FURNACE, ...spot);
       }
       if (!this.blockInReach(furnace)) return "there is no furnace here (craft one: furnace, from 8 cobblestone)";
@@ -1775,7 +1794,7 @@ export class Body {
       if (!this.tableInReach() && this.has(B.CRAFTING_TABLE)) {
         // put it down here, or a few steps off when there's no room (a thicket, a slope): never give up on the first try
         for (let k = 0; k < 4 && !this.tableInReach() && !this.abort; k++) {
-          const spot = this.spotNearby();
+          const spot = await this.spotForBlock();
           if (spot && (await this.place(B.CRAFTING_TABLE, ...spot))) break;
           const a = (k * Math.PI) / 2 + 0.6;
           await this.goto(this.phys.x + Math.cos(a) * 3, this.phys.y, this.phys.z + Math.sin(a) * 3, 1, { maxMs: 4000 });

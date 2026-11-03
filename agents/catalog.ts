@@ -264,7 +264,7 @@ for (const [id, own] of Object.entries(FIRST_STYLE)) {
   DESIGNS[id].style = own;
   for (const style of Object.keys(STYLES)) if (style !== own) register(`${id}/${style}`, restyle(id, style), { name: `${id} (${STYLES[style].name})`, style });
 }
-for (const id of ["house", "well", "lamp", "tower", "keep", "plaza", "fountain", "monument", "chapel", "cathedral", "market"]) DESIGNS[id].style ??= ["house", "market"].includes(id) ? "oak" : "stone";
+for (const id of ["house", "well", "lamp", "tower", "keep", "plaza", "fountain", "monument", "chapel", "cathedral", "market"]) DESIGNS[id].style ??= ["house", "market", "lamp"].includes(id) ? "oak" : "stone";
 
 // ---------------------------------------------------------------- shapes of the catalog's own
 
@@ -562,6 +562,9 @@ function yard(d: Draft): void {
         else d.put(u, 0, v, d.mat("fence"));
         continue;
       }
+      // (the whole yard on a level pad: low ground under it filled up to its floor, so a sapling or a flower bed
+      // never floats over a dip)
+      d.foot(u, v);
       const du = Math.abs(u - mu);
       const dv = Math.abs(v - mv);
       if (o.pond && du <= o.pond && dv <= o.pond) {
@@ -1026,14 +1029,14 @@ reg("arch", {
   furniture: [{ block: HANG, at: ["mid", 0, "mid"], hang: true, tier: 2 }],
   tiers: ["", "the arch in cobblestone, a torch on top", "stone brick, a lantern under the arch and on top", "a mossy stone band (old stone)"],
 }, "arch", "stone");
-reg("fountain/small", { ...BLUEPRINTS.fountain, core: [5, 5], what: "a small fountain: a stone basin 3 by 3, a column with water falling from its top, lights on the corners" }, "small fountain", "stone");
-reg("fountain/grand", { ...BLUEPRINTS.fountain, core: [9, 9], what: "a grand fountain: a stone basin 7 by 7 with a low wall round it, a column in the middle with water falling from it, lights on the corners" }, "grand fountain", "stone");
+reg("fountain/small", { ...BLUEPRINTS.fountain, kind: "fountain", core: [5, 5], what: "a small fountain: a stone basin 3 by 3, a column with water falling from its top, lights on the corners" }, "small fountain", "stone");
+reg("fountain/grand", { ...BLUEPRINTS.fountain, kind: "fountain", core: [9, 9], what: "a grand fountain: a stone basin 7 by 7 with a low wall round it, a column in the middle with water falling from it, lights on the corners" }, "grand fountain", "stone");
 reg("well/covered", {
-  ...BLUEPRINTS.well, parts: { rim: [COB, SBR, SBR], parapet: [CWALL, SWALL, SWALL], post: all3(LOG), roof: [CST, SST, SST], ridge: [COB, SBR, SBR], gable: [COB, SBR, SBR], basin: all3(COB) },
+  ...BLUEPRINTS.well, kind: "well", parts: { rim: [COB, SBR, SBR], parapet: [CWALL, SWALL, SWALL], post: all3(LOG), roof: [CST, SST, SST], ridge: [COB, SBR, SBR], gable: [COB, SBR, SBR], basin: all3(COB) },
   what: "a covered stone well: a stone roof on log posts over a stone basin",
 }, "covered well", "stone");
-reg("lamp/stone", { ...BLUEPRINTS.lamp, parts: { footing: [COB, SBR, SBR], post: [COB, SWALL, SWALL], light: [TORCH, LANTERN, LANTERN] }, what: "a stone lamp post: a stone post (a stone brick wall from tier 2) with a light on top" }, "stone lamp post", "stone");
-reg("lamp/birch", { ...BLUEPRINTS.lamp, parts: { footing: [COB, SBR, SBR], post: [BLOG, BFEN, BFEN], light: [TORCH, LANTERN, LANTERN] }, what: "a birch lamp post: a birch post with a light on top" }, "birch lamp post", "birch");
+reg("lamp/stone", { ...BLUEPRINTS.lamp, kind: "lamp", parts: { footing: [COB, SBR, SBR], post: [COB, SWALL, SWALL], light: [TORCH, LANTERN, LANTERN] }, what: "a stone lamp post: a stone post (a stone brick wall from tier 2) with a light on top" }, "stone lamp post", "stone");
+reg("lamp/birch", { ...BLUEPRINTS.lamp, kind: "lamp", parts: { footing: [COB, SBR, SBR], post: [BLOG, BFEN, BFEN], light: [TORCH, LANTERN, LANTERN] }, what: "a birch lamp post: a birch post with a light on top" }, "birch lamp post", "birch");
 
 // ---- street furniture
 kind("bench", "a bench", "benches", 2, "street", 24);

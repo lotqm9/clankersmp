@@ -2506,7 +2506,13 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         continue;
       }
       j.lot = undefined;
-      const spot = this.townSite(j.k as Exclude<Kind, "farm" | "road" | "wall">, avoid);
+      let spot: ReturnType<Brain["townSite"]>;
+      try {
+        spot = this.townSite(j.k as Exclude<Kind, "farm" | "road" | "wall">, avoid);
+      } catch (e) {
+        console.error(`[${this.name}] a lot for ${j.k}: ${(e as Error).message}`);
+        continue;
+      }
       if (typeof spot === "string") continue;
       j.lot = { x0: spot.x0, z0: spot.z0, x1: spot.x1, z1: spot.z1, y: spot.y, face: spot.face, where: spot.where ?? districtOf(j.k), design: spot.design };
       j.design = spot.design;

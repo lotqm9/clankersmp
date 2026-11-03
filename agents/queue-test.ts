@@ -87,6 +87,8 @@ for (let k = 0; k < 3; k++) {
   top(bodies[1]);
 }
 check("the plaza and the storehouse stand", pack().builds.some((x: { kind: string; done: boolean }) => x.kind === "storehouse" && x.done));
+// what a young town is built of: anything else standing is the catalog's
+const BASIC = ["plaza", "storehouse", "house", "well", "road", "lamp", "farm"];
 // now the queue: each takes its next job when it finishes one
 const took: Record<string, string[]> = {};
 for (let r = 0; r < rounds; r++) {
@@ -109,6 +111,12 @@ for (let r = 0; r < rounds; r++) {
     const held = q.filter((j) => j.by);
     check("nobody holds two jobs, no job held by two", new Set(held.map((j) => j.by)).size === held.length);
   }
+  // once a building of the catalog's stands (past the stage's needs), the rest of the rounds can go
+  const beyond = pack().builds.find((x: { kind: string; done: boolean }) => x.done && !BASIC.includes(x.kind));
+  if (beyond) {
+    console.log(`a ${beyond.kind} stands after round ${r + 1}`);
+    break;
+  }
 }
 clearInterval(beater);
 const p = pack();
@@ -116,7 +124,7 @@ const kinds = new Map<string, number>();
 for (const x of p.builds) if (x.done) kinds.set(x.kind, (kinds.get(x.kind) ?? 0) + 1);
 console.log(`\nbuilt: ${[...kinds].map(([k, n]) => `${k} ${n}`).join(", ")}`);
 for (const x of p.builds) console.log(`  ${x.kind}${x.design ? ` (${x.design})` : ""} at ${x.x0},${x.z0}..${x.x1},${x.z1}${x.done ? `, tier ${x.tier ?? 1}` : ", not done"}`);
-check("the work went past the stage's needs onto the catalog", p.builds.some((x: { kind: string; done: boolean }) => x.done && !["plaza", "storehouse", "house", "well", "road", "lamp", "farm"].includes(x.kind)));
+check("the work went past the stage's needs onto the catalog", p.builds.some((x: { kind: string; done: boolean }) => x.done && !BASIC.includes(x.kind)));
 check("the civ event carries the queue's top and the catalog", !!civ && Array.isArray((civ as { queue?: unknown }).queue) && ((civ as { queue: unknown[] }).queue.length > 0) && !!(civ as { catalog?: unknown }).catalog);
 check("the districts have their styles", Array.isArray(p.styles) && p.styles.length === 4);
 console.log(`\nthe queue's top now:\n${((p.board?.queue ?? []) as { text: string; by?: string }[]).slice(0, 12).map((j, k) => `  ${k + 1}. ${j.text}${j.by ? ` [${j.by}]` : ""}`).join("\n")}`);

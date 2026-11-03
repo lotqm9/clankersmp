@@ -888,7 +888,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const away = inHub(b.phys.x, b.phys.z) || !PACK.base
       ? { x: SPAWN_X, z: SPAWN_Z, r: HUB_R + 14, y: b.world?.info.spawnHeight ?? Math.floor(b.phys.y), what: "the spawn hub" }
       : { x: PACK.base.x, z: PACK.base.z, r: 20, y: PACK.base.y, what: "the town" };
-    if (stone && offLimits(b.phys.x, b.phys.z)) {
+    // already well down in the rock under the town (sealed in for the night): the rock down here is nobody's walls,
+    // mine it where it is rather than walk out through the town in the dark (sonnet, season 10, night 7)
+    const deepUnder = b.covered() && b.phys.y < away.y - 4;
+    if (stone && offLimits(b.phys.x, b.phys.z) && !deepUnder) {
       // out on the ground, not through the rock: in a tunnel under the town it stood still for 3 minutes aiming at a
       // spot 20 blocks out at its own depth (opus)
       if (b.phys.y < away.y - 3) {
@@ -926,7 +929,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // and nothing touching water: breaking it lets the water flood in on top of you
       const wet = (x: number, y: number, z: number) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([dx, dy, dz]) => IS_WATER[b.get(x + dx, y + dy, z + dz)] === 1);
       let found = b.findBlocks(plan.blocks, 32, soft ? 4000 : stone ? 400 : 16).filter(([x, y, z]) => y >= floor && !wet(x, y, z) && !skip.has(x + z * 512 + y * 262144));
-      if (stone) found = found.filter(([x, , z]) => !offLimits(x, z)).slice(0, 16);
+      if (stone) found = found.filter(([x, y, z]) => !offLimits(x, z) || (deepUnder && y < away.y - 4)).slice(0, 16);
       else if (!soft) found = found.filter(([x, , z]) => !theirs(x, z));
       // not where another agent is already working (all three went for the same oak at the start of season 7)
       const free = found.filter(([x, , z]) => !takenByOther(this.name, x, z));

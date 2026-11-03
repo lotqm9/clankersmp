@@ -2111,6 +2111,7 @@ export class Body {
     // the way down with the most stone and no water
     let dir: [number, number] | null = null;
     let bestScore = -1;
+    let anyWet = false;
     for (const [sx, sz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as [number, number][]) {
       let score = 0;
       let wet = false;
@@ -2120,10 +2121,15 @@ export class Body {
           if (IS_WATER[id]) wet = true;
           if (id === B.STONE || id === B.COBBLESTONE) score += 1;
           else if (isOre(id)) score += 3;
+          // open air close by that way: its own old staircase (or a cave). Nothing to mine in it, and going back down
+          // it the steps it dug before look like a cave: haiku went down the same two steps, "broke into a cave",
+          // filled it and walked back up, over and over
+          else if (id === B.AIR && k <= 3 && dy < 0) score -= 4; // (below its feet: open air at its feet is just the surface)
         }
-      if (!wet && score > bestScore) [bestScore, dir] = [score, [sx, sz]];
+      if (wet) anyWet = true;
+      else if (score > bestScore) [bestScore, dir] = [score, [sx, sz]];
     }
-    if (!dir) return "water all around here: move somewhere drier to mine";
+    if (!dir) return anyWet ? "water all around here: move somewhere drier to mine" : "the rock round here is dug out already: move a few blocks and mine again";
     const [sx, sz] = dir;
     const stairs: [number, number, number][] = [[fx0, fy0, fz0]];
     // every cell this staircase opened, so a cave can be told from its own steps

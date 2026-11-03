@@ -1036,18 +1036,22 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       // over and over and got "0 of 8": the coal was deeper in the rock than it could walk to)
       const ore = !plan.blocks.includes(B.STONE) && plan.blocks.every((id) => BLOCKS[id]?.key?.endsWith("_ore"));
       if (ore && (!found.length || found[0][1] < b.phys.y - 2 || skip.size >= 1) && b.bestToolFor(B.STONE) && canHarvest(B.STONE, b.bestToolFor(B.STONE)) && !offLimits(b.phys.x, b.phys.z)) {
+        const had = have();
         const r = await b.stairMine(plan.gets, count - (have() - start));
         tried++;
         if (have() - start >= count) return r;
+        // nothing came of it: another staircase from the same spot goes the same way and gets nothing again
+        if (have() <= had) return r;
         skip.add(-2);
         if (skip.size > 3) return r;
         continue;
       }
       if (plan.blocks.includes(B.STONE) && (!found.length || found[0][1] < b.phys.y - 2 || skip.size >= 2)) {
         if (!b.bestToolFor(B.STONE) || !canHarvest(B.STONE, b.bestToolFor(B.STONE))) return "stone needs a pickaxe: craft a wooden_pickaxe first";
+        const had = have();
         const r = await b.stairMine(plan.gets, count - (have() - start));
         tried++;
-        if (have() - start >= count || /water/.test(r)) return r;
+        if (have() - start >= count || /water/.test(r) || have() <= had) return r;
         skip.add(-1);
         if (skip.size > 3) return r;
         continue;
@@ -1715,9 +1719,17 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   }
 
   private async attack(name: string): Promise<string> {
+    const b = this.body;
     const t = this.findTarget(name);
     if (!t) return `no ${name} nearby`;
-    const res = await this.body.fight(t, 30000);
+    // one too far off to fight from here: walk over to it first (the fight gives up on anything past 24 blocks with
+    // "it got away" before taking a step: haiku asked for a sheep 24 blocks off seven times in 16 seconds)
+    const p = b.targetPos(t);
+    if (p && Math.hypot(p.x - b.phys.x, p.z - b.phys.z) > 16) {
+      b.action = `walking over to the ${name}`;
+      await b.goto(p.x, p.y, p.z, 6, { maxMs: 30000, done: () => { const q = b.targetPos(t); return !q || Math.hypot(q.x - b.phys.x, q.z - b.phys.z) < 10; } });
+    }
+    const res = await b.fight(t, 30000);
     await this.body.pickUp(5, 4000);
     return `${name}: ${res}`;
   }

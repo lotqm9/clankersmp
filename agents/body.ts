@@ -1553,7 +1553,10 @@ export class Body {
     if (!this.blockInReach(furnace)) {
       const near = this.findBlocks([0, 1, 2, 3, 4, 5, 6, 7].map((k) => B.FURNACE + k), 20, 1)[0];
       if (near) await this.goto(near[0] + 0.5, near[1], near[2] + 0.5, 2, { maxMs: 25000, done: () => this.blockInReach(furnace) });
-      else if (this.has(B.FURNACE)) {
+      // none near and none in the bag: make one from 8 cobblestone (crafting makes its own table), the way a player
+      // does (sonnet asked to smelt over and over with no furnace and got "craft one: furnace" each time)
+      if (!near && !this.has(B.FURNACE) && this.count(B.COBBLESTONE) >= 8) await this.craft("furnace", 1);
+      if (!near && this.has(B.FURNACE)) {
         const spot = this.spotNearby();
         if (spot) await this.place(B.FURNACE, ...spot);
       }

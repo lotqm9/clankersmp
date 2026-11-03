@@ -688,11 +688,15 @@ function well(d: Draft): void {
   for (let v = 0; v < D; v++)
     for (let u = 0; u < W; u++) {
       d.foot(u, v);
+      // the front middle of the parapet stays open: from the basin floor a rim block is one step up, but a wall on
+      // top of it made two and a half, and whoever fell in was stuck there (Laith: "people get stuck in the well way
+      // too often"). Through the gap it's one hop up onto the rim and out
+      const gap = v === 0 && u === Math.floor(W / 2);
       if (d.edge(u, v)) {
         d.put(u, -1, v, d.mat("rim"));
-        d.put(u, 0, v, d.corner(u, v) ? d.mat("rim") : d.mat("parapet"));
+        d.put(u, 0, v, gap ? "a" : d.corner(u, v) ? d.mat("rim") : d.mat("parapet"));
       } else {
-        // the basin: one deep (anyone can step back out)
+        // the basin: one deep (and the gap in the parapet is the way out)
         d.put(u, -2, v, d.mat("basin"));
         d.put(u, -1, v, "a");
         d.put(u, 0, v, "a");

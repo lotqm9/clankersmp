@@ -277,6 +277,7 @@ export const BLUEPRINTS: Record<Plain, Blueprint> = {
       // a cobblestone stair roof at tier 1, oak from tier 2: the 80 oak stairs of the roof were half the wood of a
       // cottage (about 30 of its 60 logs), and with the oak near the town cut down, season 10's second cottage took
       // the two of them over an hour; cobblestone comes out of every staircase they dig
+      footing: all3(COB), floor: all3(PL), base: [COB, SBR, SBR], wall: all3(PL), post: all3(LOG), plate: all3(LOG),
       gable: all3(PL), roof: [B.COBBLE_STAIRS, B.OAK_STAIRS, B.OAK_STAIRS], ridge: all3(PL), window: [FEN, PANE, PANE], chimney: all3(COB), light: all3(B.TORCH),
     },
     windows: [[1, 1, 0], [-2, 1, 0], [0, 1, 2], [0, 1, -3], [-1, 1, 2], [-1, 1, -3], ["mid", 1, -1], ["mid", 4, 0]],

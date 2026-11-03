@@ -18,6 +18,8 @@ const ago = (t) => {
 };
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s || '');
 const FAIL = /couldn|can.t|^no |nothing|still|failed|got 0 |missing|isn.t|don.t|there is no|out of|stopped|interrupted/i;
+// progress isn't failure, even with "still needed" in it (a build goes up a few blocks a turn)
+const PROGRESS = /^placed [1-9]|^finished|^upgraded|^got [1-9]|^crafted|^smelted/i;
 
 const getJson = async (path) => (await fetch(RELAY + path, { signal: AbortSignal.timeout(10000) })).json();
 
@@ -69,7 +71,7 @@ for (const a of clanker.agents) {
   const s = state.agents?.[a.name]?.status;
   const mine = events.filter((e) => e.agent === a.name);
   const results = mine.filter((e) => e.type === 'result').slice(-24);
-  const fails = results.filter((e) => FAIL.test(e.text));
+  const fails = results.filter((e) => (FAIL.test(e.text) && !PROGRESS.test(e.text)));
   out.push('');
   if (a.dead) {
     out.push(`${a.name.toUpperCase()} DEAD ${ago(a.diedAt)} ago: ${a.death}`);
@@ -85,7 +87,7 @@ for (const a of clanker.agents) {
   if (still.length && now - Math.min(...still.map((p) => p.t)) > 4 * 60000 && !/asleep|bed|home/.test(s?.action ?? '')) out.push(`  !! in the same spot for ${ago(Math.min(...still.map((p) => p.t)))}`);
   track[a.name] = [...hist, { t: now, pos, action: s?.action ?? '' }].slice(-40);
   out.push(`  results: ${results.length} recent, ${fails.length} failed${results.length ? ` (${Math.round((fails.length / results.length) * 100)}%)` : ''}`);
-  for (const e of results.slice(-7)) out.push(`  ${FAIL.test(e.text) ? 'x' : '-'} ${ago(e.t)} ${clip(e.text, 170)}`);
+  for (const e of results.slice(-7)) out.push(`  ${(FAIL.test(e.text) && !PROGRESS.test(e.text)) ? 'x' : '-'} ${ago(e.t)} ${clip(e.text, 170)}`);
   const reflexes = mine.filter((e) => e.type === 'reflex' && now - e.t < 20 * 60000);
   if (reflexes.length) {
     const by = {};

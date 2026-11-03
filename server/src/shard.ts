@@ -1768,6 +1768,27 @@ export class Shard {
    *  out from the hub (east if there is land there), facing away from it. */
   agentSpawn(name: string): { x: number; y: number; z: number; yaw: number } {
     const k = Math.max(0, ["opus", "sonnet", "haiku"].indexOf(name));
+    // a wild start: well away from the spawn hub and from every village, so they found a town from nothing (Laith:
+    // "it should have no base or nearby village"; 80 blocks out of the hub put season 14's town next to Mossford).
+    // Dry, level ground with no water close by; the same spot for all three, the same every time for this world
+    const villages = this.villageSites.map((v) => VILLAGE_SITES[v]).filter(Boolean);
+    let wild: { x: number; z: number; ys: number[]; score: number } | null = null;
+    for (let z = 48; z <= WORLD_SIZE - 48; z += 12)
+      for (let x = 48; x <= WORLD_SIZE - 48; x += 12) {
+        if (Math.hypot(x - this.info.spawn.x, z - this.info.spawn.z) < 140) continue;
+        if (villages.some((v) => Math.hypot(x - v.x, z - v.z) < 100)) continue;
+        const ys = [-3, 0, 3].map((o) => this.standY(x + o, z));
+        if (ys.some((y) => y < 0) || Math.max(...ys) - Math.min(...ys) > 1) continue;
+        let wet = false;
+        for (let dz = -10; dz <= 10 && !wet; dz++) for (let dx = -12; dx <= 12 && !wet; dx++) for (let y = ys[1] - 4; y <= ys[1] + 1 && !wet; y++) wet = IS_WATER[this.getBlock(x + dx, y, z + dz)] === 1;
+        if (wet) continue;
+        // level land round it (room for a town) counts most, then not too far out toward the coast
+        let rough = 0;
+        for (let dz = -8; dz <= 8; dz += 4) for (let dx = -8; dx <= 8; dx += 4) { const y = this.standY(x + dx, z + dz); rough += y < 0 ? 6 : Math.abs(y - ys[1]); }
+        const score = rough + Math.hypot(x - WORLD_SIZE / 2, z - WORLD_SIZE / 2) * 0.02;
+        if (!wild || score < wild.score) wild = { x, z, ys, score };
+      }
+    if (wild) return { x: wild.x + (k - 1) * 3 + 0.5, y: wild.ys[k], z: wild.z + 0.5, yaw: 180 };
     // the same place for all three: the first direction where all three spots are dry land
     for (const d of [0, 90, 180, 270, 45, 135, 225, 315]) {
       const a = (d * Math.PI) / 180;

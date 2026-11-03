@@ -1199,6 +1199,27 @@ export class Body {
 
   /** The fastest thing it has for breaking this block (its hand if nothing helps); the spared tool only where nothing
    *  else can get the block out. */
+  private makingPick = false;
+
+  /** A pickaxe in the bag, made from what it carries when it has none (the last one wore out): a stone one from
+   *  three cobblestone and two sticks, else a wooden one. False when it can't. */
+  async ensurePickaxe(): Promise<boolean> {
+    const has = () => this.inv.some((st) => st && itemDef(st.id)?.tool?.kind === "pickaxe");
+    if (has() || this.makingPick) return has();
+    this.makingPick = true;
+    try {
+      const planks = () => this.count(B.OAK_PLANKS) + this.count(B.BIRCH_PLANKS);
+      if (!this.has(I.STICK, 2)) for (const p of ["oak_planks", "birch_planks", "oak_planks_from_palm"]) if (planks() < 5) await this.craft(p, 1);
+      if (!this.has(I.STICK, 2) && planks() >= 2) await this.craft("sticks", 1);
+      if (!this.has(I.STICK, 2)) return false;
+      if (this.count(B.COBBLESTONE) >= 3 && (await this.craft("stone_pickaxe", 1)).made) return true;
+      if (planks() >= 3) await this.craft("wooden_pickaxe", 1);
+      return has();
+    } finally {
+      this.makingPick = false;
+    }
+  }
+
   bestToolFor(block: number): number {
     let best = 0;
     let bt = breakTicks(block, 0);
@@ -1285,6 +1306,9 @@ export class Body {
         return false;
       }
     }
+    // a block that wants a pickaxe and none in the bag (the last one wore out): make one first, the way a player
+    // does (haiku dug stone with its axe in hand on season 14, its pickaxe worn out and 292 cobblestone in the bag)
+    if (!canHarvest(id, 0) && !this.bestToolFor(id)) await this.ensurePickaxe();
     const tool = this.bestToolFor(id);
     if (tool) await this.hold(tool);
     this.action = `mining ${BLOCKS[id]?.name ?? "a block"}`;

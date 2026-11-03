@@ -48,10 +48,10 @@ test("armour: Java's formula, toughness, wear per hit, and what others see", () 
   // a full diamond set: 20 points, toughness 8
   const dia = [0, 1, 2, 3].map((k) => S(armorId(2, k)));
   const a = armorOf(dia);
-  assert.deepEqual(a, { points: 20, tough: 8 });
+  assert.deepEqual(a, { points: 20, tough: 8, prot: 0 }); // v13: and no Protection on it
   assert.ok(near(afterArmor(10, a.points, a.tough), 3), "10 damage through full diamond: 3");
   const iron = armorOf([0, 1, 2, 3].map((k) => S(armorId(1, k))));
-  assert.deepEqual(iron, { points: 15, tough: 0 });
+  assert.deepEqual(iron, { points: 15, tough: 0, prot: 0 });
   assert.ok(near(afterArmor(3, iron.points, 0), 3 * (1 - 13.5 / 25)), "a Shambler's 3 through full iron: 1.38");
   const leather = armorOf([0, 1, 2, 3].map((k) => S(armorId(0, k))));
   assert.equal(leather.points, 7);
@@ -65,7 +65,7 @@ test("armour: Java's formula, toughness, wear per hit, and what others see", () 
 
 test("armour items: 12 pieces with points, durability and a classic recipe each; mob drops are items", () => {
   let pieces = 0;
-  for (const d of ITEMS) if (d?.armor) pieces++;
+  for (const d of ITEMS) if (d?.armor && !d.ench) pieces++; // v13: the enchanted ones are the same pieces made better
   assert.equal(pieces, 12);
   for (let m = 0; m < 3; m++)
     for (let k = 0; k < 4; k++) {

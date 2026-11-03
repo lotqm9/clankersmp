@@ -258,9 +258,11 @@ export type C2S =
   | { t: "wear" } // an AI puts on the best armour it carries
   | { t: "smelt"; id: number; n?: number } // an AI smelts n of an item in a furnace within reach (its own fuel)
   | { t: "aloot" } // an AI takes everything from the chest within reach
-  | { t: "atrades" } // an AI asks about the nearest villager: where it is and what it trades
+  | { t: "atrades"; job?: number } // an AI asks about the nearest villager (v13 job: of that trade, within 64 blocks): where it is and what it trades
   | { t: "atrade"; v: number; o: number; n?: number } // an AI makes villager v's offer o, n times
-  | { t: "follow"; name: string }; // a spectator watches another AI
+  | { t: "follow"; name: string } // a spectator watches another AI
+  // v13
+  | { t: "enchant"; l?: number; a?: number }; // an AI enchants what it holds (a: or the armour it wears in slot a) at the enchanting table within reach (l: the level, else the best it can)
 
 export type GameMode = "survival" | "creative";
 
@@ -329,7 +331,7 @@ export type S2C =
   | { t: "respawned"; x: number; y: number; z: number; yaw: number }
   | { t: "gm"; mode: GameMode }
   | { t: "sleep"; on: boolean; sleeping: number; needed: number; you: boolean }
-  | { t: "fx"; k: "tool_break" | "burp" | "eat" | "level" | "crit" | "hit" | "equip" | "mob_die" | "bone_meal" | "till" | "bucket_fill" | "bucket_empty" | "drink" | "pickup" | "chime" | "boat_place" | "boat_break" | "path" | "pot" | "barrel" | "trade" | "trade_no"; id?: number; x?: number; y?: number; z?: number }
+  | { t: "fx"; k: "tool_break" | "burp" | "eat" | "level" | "crit" | "hit" | "equip" | "mob_die" | "bone_meal" | "till" | "bucket_fill" | "bucket_empty" | "drink" | "pickup" | "chime" | "boat_place" | "boat_break" | "path" | "pot" | "barrel" | "trade" | "trade_no" | "enchant" | "hiss"; id?: number; x?: number; y?: number; z?: number } // v13: enchant (at the table), hiss (lava setting into obsidian)
   // v6
   | { t: "wear"; id: number; armor: number } // a player's armour changed (packArmor)
   | { t: "arrow"; id: number; x: number; y: number; z: number; vx: number; vy: number; vz: number } // shot (simulate with arrowMove)
@@ -353,4 +355,6 @@ export type S2C =
   | { t: "smelting"; n: number; ms: number; why?: string } // an AI's smelt: how many go in, and when they come out
   | { t: "looted"; got: [number, number][]; why?: string } // what an AI took from a chest
   | { t: "atrades"; v: { vid: number; name: string; job: number; x: number; y: number; z: number; offers: { a: [number, number]; b?: [number, number]; r: [number, number]; n: number; m: number }[] } | null }
-  | { t: "atraded"; n: number; why?: string }; // how many times an AI's trade went through
+  | { t: "atraded"; n: number; why?: string } // how many times an AI's trade went through
+  // v13
+  | { t: "enchanted"; id: number; l: number; cost: number; why?: string }; // an AI's enchanting: what it holds now, the level, the rubies paid (id 0: nothing happened, why)

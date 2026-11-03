@@ -79,8 +79,21 @@ export function itemIcon(id: number): HTMLCanvasElement {
   ctx.imageSmoothingEnabled = false;
   const def = itemDef(id);
   if (def) ctx.drawImage(layerCanvas(def.tex), 0, 0, 64, 64);
+  if (def?.ench) glint(ctx, 64);
   iconCache.set(id, c);
   return cloneCanvas(c);
+}
+
+/** v13: enchanted gear shimmers: violet light in diagonal bands over the sprite (only where it is drawn). */
+function glint(ctx: CanvasRenderingContext2D, S: number): void {
+  ctx.save();
+  ctx.globalCompositeOperation = "source-atop";
+  ctx.globalAlpha = 0.42;
+  const g = ctx.createLinearGradient(0, 0, S, S);
+  for (const [at, col] of [[0, "#7a3cff"], [0.22, "#d8b8ff"], [0.4, "#6a2cd8"], [0.62, "#c69cff"], [0.82, "#5a24c0"], [1, "#e0c8ff"]] as [number, string][]) g.addColorStop(at, col);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S, S);
+  ctx.restore();
 }
 
 /** Isometric inventory icon for a block (64x64 canvas). Plants and torches are drawn flat. */

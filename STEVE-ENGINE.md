@@ -13,7 +13,8 @@ It replaces the $STEVE Craft builder (`sites/steve-game`, protocol 4), which is 
   hub (`hub.ts`, `hub12.ts`, and the landmark in `landmark.ts`: a blocky guy in a teal shirt and blue trousers, one
   fist out, punching an oak, built one block per pixel of our own player art), Java Edition movement physics, block
   shapes, survival (items, mining, recipes, inventories, health and hunger), mobs and combat, farming, islands,
-  boats, villages, villagers and trades, proximity voice, the wire protocol (`stevecraft` v12), names.
+  boats, villages, villagers and trades, proximity voice, enchanting (`enchanting.ts`: obsidian, books, the table,
+  enchanted gear for rubies), the wire protocol (`stevecraft` v13), names.
 - `client/`: the game (Vite + TypeScript + three.js) in $STEVE Craft's look: the KenneyMini pixel font, grey bevelled
   buttons, dirt screens, yellow highlights, our own player skins with the gold "$"; the native in-game GUI
   (inventory, crafting, furnace, chest, trading, hotbar, hearts) drawn in code.

@@ -7,16 +7,19 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { Body, NIGHT_END, NIGHT_START, inHub, type PlanCell, type Rect, type Target } from "./body.ts";
+import { Body, NIGHT_END, NIGHT_START, inHub, type PlanCell, type Rect, type Seen, type Target } from "./body.ts";
 import { SPAWN_X, SPAWN_Z } from "../shared/constants.ts";
 import { HUB_R } from "../shared/hub12.ts";
 import { KINDS, ONCE, STAGES, UP_EXTRA, cellTarget, doorStep, faceToward, farmPlan, homeOf, itemOf, label as civLabel, materialsFor, maxTier, needText, planFor, progress, sizeFacing, wallPlan, type Building, type Kind, type Plain } from "./civ.ts";
 import { chooseLot, districtFar, districtOf, keptLots, lotRoom, plazaRect, streetPlan, streetsOf, wallRadius, STREET_HALF, WALL, type Point } from "./town.ts";
 import { ROLES, assignRoles, jobText, rawIn, rawOf, slotOf, slotText, type Raw, type Role, type Slot } from "./board.ts";
 import { VILLAGE_SITES } from "../shared/villages.ts";
+import { JOBS } from "../shared/villagers.ts";
 import { B, BLOCKS, IS_WATER, SOLID, isStorage } from "../shared/blocks.ts";
 import { I, ITEMS, itemDef, type Stack } from "../shared/items.ts";
 import { MF, MOB_SPECS } from "../shared/mobs.ts";
+import { armorValue } from "../shared/combat.ts";
+import { collectObsidian, enchant as enchantGear, isObsidian, techText } from "./tech.ts";
 import { SPECS as ANIMAL_SPECS } from "../shared/animals.ts";
 import { canHarvest } from "../shared/mining.ts";
 import { FLAG } from "../shared/protocol.ts";
@@ -24,6 +27,8 @@ import { FLAG } from "../shared/protocol.ts";
 /** What each AI is working toward and doing right now, as the others can see it (they all run in this process), and
  *  what it has to offer the board's roles (its best pickaxe, an axe, a hoe or seeds, its food, where it is). */
 const BOARD = new Map<string, { goal: string; doing: string; pick?: number; axe?: boolean; farm?: boolean; food?: number; x?: number; z?: number; at?: number }>();
+/** v13: the monster each of them is fighting right now (the others come and help when they are near). */
+const FIGHTS = new Map<string, { id: number; key: string; x: number; z: number; at: number }>();
 
 /** The town board: the roles for the day, the project the builder is on, what it is short of, and what the storehouse
  *  holds (as last counted, chest by chest). Kept in pack.json. */
@@ -153,6 +158,8 @@ const SURVIVAL_RECIPES = [
   "leather_boots", "iron_helmet", "iron_chestplate", "iron_leggings", "iron_boots", "bucket", "bread", "bow", "arrow", "door", "ladder", "fence",
   "fence_gate", "oak_stairs", "oak_slab", "cobblestone_stairs", "cobblestone_slab", "cobblestone_wall", "stone_bricks", "stone_brick_stairs",
   "stone_brick_slab", "stone_brick_wall", "glass_pane", "lantern", "barrel", "trapdoor",
+  // v13: the way to enchanting, and the rest of the diamond kit
+  "iron_shovel", "diamond_axe", "diamond_shovel", "diamond_helmet", "diamond_chestplate", "diamond_leggings", "diamond_boots", "paper", "book", "bookshelf", "enchanting_table",
 ];
 
 /** Everything the build tool can put up (the wall and the roads besides the buildings on lots). */
@@ -191,10 +198,12 @@ How to play well:
 - Armor goes on by itself as soon as you have it.
 - Chat is public. Everyone in the world sees it. Only say something when you have something to say to the others, like a question, an offer, a warning or a request. Do not narrate your own actions or plans.
 - Names of blocks and items are lowercase with underscores, like oak_log, cobblestone, wooden_pickaxe, porkchop.
-- Recipes you can craft: ${SURVIVAL_RECIPES.join(", ")}. Iron: mine iron_ore with a stone pickaxe, then smelt the raw_iron in a furnace (8 cobblestone) with coal, charcoal, planks or logs as fuel. Smelting raw meat cooks it, which feeds you more.`;
+- Recipes you can craft: ${SURVIVAL_RECIPES.join(", ")}. Iron: mine iron_ore with a stone pickaxe, then smelt the raw_iron in a furnace (8 cobblestone) with coal, charcoal, planks or logs as fuel. Smelting raw meat cooks it, which feeds you more.
+- Gear decides fights. After stone tools, iron armour comes first (24 iron for all four pieces: it takes more than half off every hit), with an iron sword and pickaxe. A bow (3 string from skitters, 3 sticks) and arrows (flint from gravel, a stick, a feather from chickens) let you shoot rattlers from range instead of charging them. Your reflexes fight well on their own: they shoot back with a bow, charge archers, take a pillar two blocks up out of shamblers' reach, step back out of reach while the weapon recharges, and go to help each other.
+- Then the way to enchanted gear, the strongest kit there is (the turn shows your next step): diamonds (deep, y 4 to 16): 3 for a diamond_pickaxe and 2 for the table. Obsidian x4: a smith in a village sells a lava_bucket for 2 rubies and an empty bucket; collect obsidian pours it onto water, where it sets, and mines it (only a diamond pickaxe can). A book: 3 paper (sugar_cane) and 1 leather (cows). The enchanting_table: the book on 2 diamonds and 4 obsidian. enchant puts the table up at the base and enchants your gear for rubies (the island's money: ruby_ore deep down, or trade): Sharpness for swords and axes, Protection for armour, Efficiency for pickaxes and shovels; level 1 costs 2 rubies, level 2 needs 5 bookshelves round the table (4 rubies), level 3 needs 10 (7 rubies). One table for the whole pack: share it.`;
 
 const TOOLS: Anthropic.Tool[] = [
-  { name: "collect", description: "Find, mine and pick up blocks of one kind nearby. Logs: oak_log. Stone: cobblestone (needs a pickaxe). Also dirt, sand, coal_ore and other ores.", input_schema: { type: "object", properties: { item: { type: "string" }, count: { type: "integer", minimum: 1, maximum: 32 } }, required: ["item", "count"] } },
+  { name: "collect", description: "Find, mine and pick up blocks of one kind nearby. Logs: oak_log. Stone: cobblestone (needs a pickaxe). Also dirt, sand, coal_ore and other ores. Obsidian: pours your lava_buckets onto water nearby (or into a pool from your water_bucket) and mines it with a diamond pickaxe.", input_schema: { type: "object", properties: { item: { type: "string" }, count: { type: "integer", minimum: 1, maximum: 32 } }, required: ["item", "count"] } },
   { name: "craft", description: "Craft from your inventory, by recipe name. Several in one go, in order, saves time: recipe \"oak_planks x4, sticks, crafting_table, wooden_pickaxe\". Recipes bigger than 2x2 use a crafting table: a nearby one, or one you carry gets placed.", input_schema: { type: "object", properties: { recipe: { type: "string" }, count: { type: "integer", minimum: 1, maximum: 16 } }, required: ["recipe"] } },
   { name: "eat", description: "Eat the best food you carry.", input_schema: { type: "object", properties: {} } },
   { name: "attack", description: "Fight a creature or a player until it is dead or gone. target: shambler, rattler, skitter, pig, cow, sheep, chicken, or a player's name. You use your best weapon.", input_schema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] } },
@@ -218,7 +227,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: "farm", description: "Till a field beside water near the base with your hoe and plant your wheat_seeds in it: by a pond within 30 blocks of the base, or, with an empty bucket, it fills the bucket at any water and makes the field at the base. Wheat ripens in about a day.", input_schema: { type: "object", properties: {} } },
   { name: "harvest", description: "Cut the ripe wheat near you and plant the seeds straight back. 3 wheat make bread.", input_schema: { type: "object", properties: {} } },
   { name: "loot_chest", description: "Walk to the nearest chest you haven't emptied (within 48 blocks: the villages' houses, treasure on the islands) and take everything in it.", input_schema: { type: "object", properties: {} } },
-  { name: "trade", description: "Trade with the nearest villager (within 24 blocks; they live in the villages). Without an offer number it walks over and tells you what they trade; with one, it makes that trade (times: how many).", input_schema: { type: "object", properties: { offer: { type: "integer", minimum: 0, maximum: 8 }, times: { type: "integer", minimum: 1, maximum: 16 } } } },
+  { name: "trade", description: "Trade with the nearest villager (within 24 blocks; they live in the villages), or with the nearest one of a trade (with: smith, farmer, librarian, fisher or mason, anywhere in the village). Without an offer number it walks over and tells you what they trade; with one, it makes that trade (times: how many). The smith sells lava_bucket (for obsidian), the librarian bookshelves and books.", input_schema: { type: "object", properties: { with: { type: "string", enum: ["smith", "farmer", "librarian", "fisher", "mason"] }, offer: { type: "integer", minimum: 0, maximum: 8 }, times: { type: "integer", minimum: 1, maximum: 16 } } } },
   { name: "build_house", description: "Make yourself a home: move into a finished town cottage nobody lives in (your bed goes in), or, with none free, put up a small shelter right here (about 38 cobblestone, planks or dirt: walls, a roof, a door if you have one, your bed and a torch). It becomes your home.", input_schema: { type: "object", properties: {} } },
   { name: "go_home", description: "Go back into your house and shut the door behind you (and sleep, if it's night and your bed is there).", input_schema: { type: "object", properties: {} } },
   { name: "pack_plan", description: "Write down the pack's shared plan: what the three of you are building and who does what. All three see it every turn; anyone can rewrite it as things change.", input_schema: { type: "object", properties: { plan: { type: "string" } }, required: ["plan"] } },
@@ -226,6 +235,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: "set_goal", description: "Write down what you're working toward. It stays in front of you until you change it, and the other players can see it.", input_schema: { type: "object", properties: { goal: { type: "string" } }, required: ["goal"] } },
   { name: "note", description: "Write down something worth remembering (where things are, what someone said or did). You keep your last 10 notes.", input_schema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
   { name: "follow_player", description: "Stay close to another player for a while (up to 60 seconds): to travel, work or fight alongside them.", input_schema: { type: "object", properties: { name: { type: "string" }, seconds: { type: "integer", minimum: 5, maximum: 60 } }, required: ["name"] } },
+  { name: "enchant", description: "Enchant your gear at the pack's enchanting table, for rubies: an item you carry or wear (item), or the best thing to make better first (your weapon, then your armour, then your pickaxe), at the highest level the table's bookshelves allow (or level). Puts the table up at the base first if you carry one and none stands, and puts any bookshelves you carry round it.", input_schema: { type: "object", properties: { item: { type: "string" }, level: { type: "integer", minimum: 1, maximum: 3 } } } },
   { name: "say", description: "Say something in the public chat. Everyone in the world reads it.", input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] } },
 ];
 TOOLS[TOOLS.length - 1].cache_control = { type: "ephemeral" };
@@ -315,6 +325,8 @@ export class Brain {
   private unreachable = new Map<number, number>();
   private lastTidy = 0;
   private lastHunt = 0;
+  private lastHelpCall = 0;
+  private lastFailedCharge = 0;
   /** Mining a staircase out of its hole at night (the wait tool): the hole isn't sealed while it does. */
   private holeMining = false;
   /** What the running reflex is, so being shot can cut a walk short. */
@@ -629,6 +641,7 @@ export class Brain {
     if (food < 4) missing.push(`food (only ${food})`);
     if (!worn.length && has("iron_ingot")) missing.push("armor (you have iron)");
     if (missing.length) lines.push(`Still missing: ${missing.join(", ")}.`);
+    lines.push(techText(b));
     lines.push(PACK.plan ? `The pack's plan (written by ${PACK.by}; anyone can rewrite it with pack_plan):
 ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     if (PACK.base) lines.push(`The pack's base: x=${PACK.base.x} z=${PACK.base.z}, ${Math.round(Math.hypot(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z))} blocks ${dirWord(PACK.base.x - b.phys.x, PACK.base.z - b.phys.z)}.`);
@@ -753,6 +766,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       case "note": return "!note";
       case "follow_player": return `!followPlayer(${q(i.name)})`;
       case "smelt": return `!smeltItem(${q(i.item)}, ${Number(i.count) || 1})`;
+      case "enchant": return `!enchantItem(${q(i.item ?? "gear")})`;
       case "flee": return "!moveAway";
       case "wait": return "!stay";
       default: return `!${name}`;
@@ -841,7 +855,13 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         }
         case "eat": return await b.eat();
         case "attack": return await this.attack(String(i.target ?? ""));
-        case "dig_in": return await b.digIn();
+        case "dig_in": {
+          // not with a monster on it: digging in is seconds of standing still, and it hits (or shoots) you out of the
+          // hole halfway through. Fight it or run first
+          const m = b.hostiles(8)[0];
+          if (m) return `a ${m.key} is ${Math.round(m.d)} blocks away: digging in takes seconds and it would knock you out of the hole. Fight it (attack) or run (flee) first`;
+          return await b.digIn();
+        }
         case "dig_out": return await b.digOut();
         case "dig_down": return await this.digDown(Math.max(1, Math.min(8, Number(i.blocks) || 3)));
         case "go_to_player": {
@@ -884,6 +904,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           return await b.smelt(id, Math.max(1, Math.min(16, Number(i.count) || 1)));
         }
         case "sleep": return await b.sleep();
+        case "enchant": return await enchantGear(b, String(i.item ?? ""), Math.max(0, Math.min(3, Number(i.level) || 0)), PACK.base, footprints());
         case "build": return await this.buildTown(String(i.what ?? "") as Kind);
         case "upgrade": return await this.buildTown(String(i.what ?? "") as Kind, true);
         case "farm": {
@@ -908,7 +929,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         case "loot_chest": return await b.lootChest();
         case "trade": {
           const o = i.offer === undefined || i.offer === null ? undefined : Number(i.offer);
-          const r = await b.trade(o, Math.max(1, Math.min(16, Number(i.times) || 1)));
+          const job = JOBS.findIndex((j) => j.key === String(i.with ?? "").toLowerCase());
+          const r = await b.trade(o, Math.max(1, Math.min(16, Number(i.times) || 1)), job);
           const m = /^traded with .*? (\d+) times?/.exec(r);
           if (m) {
             PACK.trades += Number(m[1]);
@@ -1016,7 +1038,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           b.halt();
           // out at night and not shut in anywhere: shut in first. Standing there "waiting" is how opus died on season
           // 12's third night (a rattler shot it from across a ravine while it waited near the top)
-          if (b.isNight() && !b.sealed() && !b.atHome()) {
+          if (b.isNight() && !b.sealed() && !b.atHome() && !b.hostiles(8).length) {
             const d = await b.digIn();
             if (!b.sealed()) return `it's night and you weren't shut in anywhere, so you tried to dig in: ${d}`;
           }
@@ -1076,6 +1098,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   private async collect(item: string, count: number): Promise<string> {
     const b = this.body;
+    // v13: obsidian isn't dug out of the rock here: it's the smith's lava set by water (agents/tech.ts)
+    if (isObsidian(item)) return await collectObsidian(b, Math.min(count, 8));
     const plan = miningPlan(item);
     if (!plan) return `don't know how to collect ${item}`;
     const have = () => plan.gets.reduce((n, id) => n + b.count(id), 0);
@@ -2564,17 +2588,16 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const b = this.body;
     // shot at in the middle of a walk (home, or out to build before dark): drop the walk so the archer gets dealt
     // with. A reflex used to run to its end first, and sonnet and haiku were both shot dead walking home at dusk
-    if (this.reflexing && !/rattler|fight|running|dig|wall|hurt|water/.test(this.reflexLabel) && Date.now() - b.lastHurt.at < 1500 && b.hostiles(16).some((m) => m.key === "rattler")) b.abort = true;
+    // (not a fight already: v13's pillar, the hunt, helping another)
+    if (this.reflexing && !/rattler|fight|running|dig|wall|hurt|water|pillar|going after|helping/.test(this.reflexLabel) && Date.now() - b.lastHurt.at < 1500 && b.hostiles(16).some((m) => m.key === "rattler")) b.abort = true;
     if (this.reflexing || this.stopped || b.dead || b.closed) return;
-    const h = b.hostiles(6)[0];
-    const hurtRecently = Date.now() - b.lastHurt.at < 2000;
     // armour it carries goes on (the server swaps each better piece in), checked every few seconds
     if (Date.now() - this.lastWear > 4000) {
       this.lastWear = Date.now();
       const better = b.inv.some((s) => {
         const a = s ? itemDef(s.id)?.armor : undefined;
         const cur = a ? b.armor[a.slot] : null;
-        return !!a && (!cur || (itemDef(cur.id)?.armor?.points ?? 0) < a.points);
+        return !!a && (!cur || armorValue(cur.id) < armorValue(s!.id)); // v13: Protection counts too
       });
       if (better) b.wearBest();
     }
@@ -2587,108 +2610,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         return;
       }
     } else this.inWaterSince = 0;
-    // an archer shooting from range: running in the open doesn't help. Go for it with a weapon and health to spare,
-    // else dig in (arrows can't reach into a sealed hole).
-    if (hurtRecently && b.lastHurt.cause === "mob:rattler" && !b.sealed()) {
-      b.lastHurt.at = 0;
-      const r = b.hostiles(20).find((m) => m.key === "rattler");
-      // with a weapon and the health for it: go and kill it (archers are weak up close), backing off once badly hurt.
-      // At night only a close one with nothing else around, and never a chase out into the dark (haiku left its hole
-      // at night to chase one 23 blocks past two shamblers, and died)
-      const night = b.isNight();
-      const others = r ? b.hostiles(14).filter((m) => m.id !== r.id).length : 0;
-      // in iron with an iron sword it goes after it even at night, with a monster or two about
-      const strong = b.strong();
-      const careful = night && !strong;
-      // only armoured agents chase one: it backs off and keeps shooting, and all three of season 7 died chasing
-      // rattlers (opus in the shade at midday, in nothing but an iron helmet). Without armour, hit one only if it's
-      // right there; otherwise take cover
-      const chase = strong ? r && r.d < 14 && b.stats.hp >= 8 && others <= 2 : r && r.d < 3.5 && b.stats.hp >= 14 && others === 0 && !careful;
-      if (r && chase && b.bestWeapon()) {
-        let res = "";
-        await this.reflex("going after a rattler", async () => {
-          res = await b.fight({ kind: "mob", id: r.id }, 20000, strong ? 5 : 6, careful ? 8 : 14);
-          return `A rattler was shooting at you and you went for it (${res}).`;
-        });
-        if (/backed off/.test(res) && !b.dead && !b.sealed()) await this.reflex("hurt, digging in away from the rattler", async () => `You were badly hurt fighting a rattler, so you dug in: ${await b.digIn()}.`);
-      } else {
-        // a shambler or a skitter close by as well: no digging in (it follows into the hole, and three blocks down
-        // takes seconds of its hits: sonnet dug in from a rattler with a shambler near and died there, season 9), run
-        const melee = b.hostiles(7).filter((m) => m.key !== "rattler");
-        if (melee.length) {
-          const mx = melee.reduce((a, m) => a + m.x, 0) / melee.length;
-          const mz = melee.reduce((a, m) => a + m.z, 0) / melee.length;
-          await this.reflex(`running from a rattler and a ${melee[0].key}`, async () => {
-            await b.flee(mx, mz, 140);
-            return `A rattler was shooting at you with a ${melee[0].key} close by, so you ran instead of digging in.`;
-          });
-        } else await this.reflex("digging in, a rattler is shooting", async () => `A rattler was shooting at you${b.bestWeapon() ? " and you were too hurt to fight it" : " and you had no weapon"}, so you dug in: ${await b.digIn()}.`);
-      }
-      return;
-    }
-    // a monster in its face: fight it (with a weapon or health to spare), else run; badly hurt in a tunnel there is
-    // nowhere to run (sonnet died fighting and fleeing in turns down a one-wide staircase). Wall it off if a block or
-    // two closes the tunnel; otherwise fight it out. Digging in with it at arm's length is death: it drops into the
-    // hole too, and three blocks down takes seconds of its hits (opus died two seconds into it, 11/2; on the test
-    // server at 7 health, a stone sword and no armour, digging in and walling off in the open died every time, and
-    // standing to fight lived)
-    // (not one it just fought without getting anywhere: a shambler right outside sonnet's wall was in reach but behind
-    // the blocks, and it swung at the wall for 3 minutes, a 15 s fight at a time; at home it's safe, so leave it)
-    if (h && (h.d < 3.2 || (hurtRecently && h.d < 6)) && !b.sealed() && !((this.leftAlone.get(h.id) ?? 0) > Date.now() && !hurtRecently)) {
-      const armed = !!b.bestWeapon();
-      const strong = b.strong();
-      // underground: under a roof that isn't one of the town's buildings (inside a cottage the roof counts as "covered",
-      // and haiku fought a shambler to the end in the house it had just moved into, 11/2). And the no-backing-off
-      // fight is only for one monster: against two, keep the bail and run
-      const indoors = footprints().some((r) => b.phys.x >= r.x0 && b.phys.x <= r.x1 + 1 && b.phys.z >= r.z0 && b.phys.z <= r.z1 + 1);
-      const below = b.covered() && !indoors && b.hostiles(10).length <= 1;
-      if (b.stats.hp < (strong ? 5 : 8) && below && b.canWallOff()) {
-        await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled it off to heal: ${await b.wallOff()}.`);
-        if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
-        return;
-      }
-      if ((h.key === "rattler" && !armed && h.d > 3) || (!armed && b.stats.hp < 8)) {
-        await this.reflex(`running from a ${h.key}`, async () => {
-          await b.flee(h.x, h.z, 90);
-          return `A ${h.key} came at you${armed ? "" : " and you had no weapon"}, so you ran.`;
-        });
-      } else {
-        // fight it, but not to the death: badly hurt, it breaks off and runs (shamblers are slow; opus fought one from
-        // 20 health to 0 without stopping)
-        // underground with no quick wall to put up, no backing off: there's nowhere to go
-        let res = "";
-        await this.reflex(`fighting a ${h.key}`, async () => {
-          res = await b.fight({ kind: "mob", id: h.id }, 15000, below && !b.canWallOff() ? 0 : strong ? 5 : 7);
-          return `A ${h.key} attacked you and you fought it (${res}).`;
-        });
-        if (/ran out of time|couldn't get to it|out of reach/.test(res)) this.leftAlone.set(h.id, Date.now() + 60000);
-        if (/backed off/.test(res) && !b.dead && b.covered()) {
-          await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${h.key} underground, so you walled it off to heal: ${await b.wallOff()}.`);
-          if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
-        } else if (/backed off/.test(res) && !b.dead) {
-          await this.reflex(`running from a ${h.key}, badly hurt`, async () => {
-            await b.flee(h.x, h.z, 140);
-            return `You were badly hurt fighting a ${h.key}, so you broke off and ran.`;
-          });
-        }
-      }
-      return;
-    }
-    // armed with a real sword or axe and healthy, a shambler or a skitter near it out in the open: go and kill it
-    // (Laith: "they make swords but do not fight mobs"; they only fought what was already on them). Not an archer
-    // (that has its own rule), not underground, not into a crowd, and never chased far from where it was
-    const prey = b.hostiles(12).find((m) => m.key !== "rattler" && !((this.leftAlone.get(m.id) ?? 0) > Date.now()));
-    const weapon = b.bestWeapon();
-    if (prey && weapon && (itemDef(weapon)?.tool?.damage ?? 0) >= 5 && b.stats.hp >= 16 && !b.covered() && !b.sealed() && b.hostiles(16).length <= 2 && Date.now() - this.lastHunt > 20000) {
-      this.lastHunt = Date.now();
-      let res = "";
-      await this.reflex(`going after a ${prey.key}`, async () => {
-        res = await b.fight({ kind: "mob", id: prey.id }, 15000, b.strong() ? 5 : 9, 16);
-        return `A ${prey.key} was ${Math.round(prey.d)} blocks away and you were armed and healthy, so you went after it (${res}).`;
-      });
-      if (/ran out of time|couldn't get to it|out of reach|let it go/.test(res)) this.leftAlone.set(prey.id, Date.now() + 60000);
-      return;
-    }
+    // monsters: shoot back, charge, take cover, pillar up, fight with technique, help the others, hunt (v13: combat())
+    if (await this.combat()) return;
     // a full bag loses whatever it crafts or mines next: make room (at most once a minute, never mid-fight)
     if (b.inv.filter(Boolean).length >= 33 && Date.now() - this.lastTidy > 60000 && !b.hostiles(10).length) {
       this.lastTidy = Date.now();
@@ -2769,9 +2692,256 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         // a bed already standing nearby (its own, in a house) is fine; a bed in its pocket is not put down in a hole
         const bed = b.findBlocks([0, 1, 2, 3, 4, 5, 6, 7].map((k) => B.RED_BED + k), 16, 1).length > 0;
         if (bed) await this.reflex("going to bed", async () => `Night caught you in the open, so you went to bed: ${await b.sleep()}.`);
-        else await this.reflex("digging in for the night", async () => `Night caught you in the open, so you dug in: ${await b.digIn()}.`);
+        // never with a walker or a crawler on its way: it gets there mid-dig and follows it down (the fight comes first)
+        else if (!b.hostiles(12).length) await this.reflex("digging in for the night", async () => `Night caught you in the open, so you dug in: ${await b.digIn()}.`);
       }
     } else this.nightOutSince = 0;
+  }
+
+  // ---------------------------------------------------------------- fighting (v13)
+
+  /** Monsters near it: what a good player does about them. True if a fight reflex ran. In order:
+   *  - an archer with it in sight: shoot back with the bow; else charge it if armed and fit (archers are weak up
+   *    close), never into a crowd at night; else cover (a wall between, the archer has to come round into reach), and
+   *    only then a hole;
+   *  - a walker or a crawler on it: badly hurt in a tunnel, wall it off; two or more of them, or hurt, and blocks to
+   *    spare: two blocks up a pillar, out of their reach, and fight from there; else fight with technique (charged
+   *    swings, sprint hits, critical hits, stepping back out of reach while the weapon recharges); badly hurt: home if
+   *    it's near, else the pillar, a wall or a run;
+   *  - another of the pack fighting near: go and help (two on one);
+   *  - armed and healthy with one about in the open: go after it (the hunt reflex). */
+  private async combat(): Promise<boolean> {
+    const b = this.body;
+    if (b.sealed()) return false;
+    const now = Date.now();
+    const hurtRecently = now - b.lastHurt.at < 2000;
+    const shot = hurtRecently && b.lastHurt.cause === "mob:rattler";
+    const left = (m: { id: number }) => (this.leftAlone.get(m.id) ?? 0) > now;
+    const hostile = b.hostiles(20);
+    const melee = hostile.filter((m) => m.key !== "rattler");
+    const archers = hostile.filter((m) => m.key === "rattler");
+    const weapon = b.bestWeapon();
+    const armed = !!weapon;
+    const dmg = itemDef(weapon)?.tool?.damage ?? 1;
+    const strong = b.strong();
+    const hp = b.stats.hp;
+    const night = b.isNight();
+    const bow = b.has(I.BOW) && b.has(I.ARROW);
+    // underground: under a roof that isn't one of the town's buildings (inside a cottage the roof counts as "covered",
+    // and haiku fought a shambler to the end in the house it had just moved into, 11/2)
+    const indoors = footprints().some((r) => b.phys.x >= r.x0 && b.phys.x <= r.x1 + 1 && b.phys.z >= r.z0 && b.phys.z <= r.z1 + 1);
+    const below = b.covered() && !indoors;
+
+    // ---- an archer that has it in sight (it shot, or it's on to it and close). Indoors (or asleep) only when it
+    // actually hits: one outside the window sees in through the glass, but its arrows stop on it
+    const sheltered = indoors || b.asleep || (!!b.home && b.atHome());
+    const r = archers.find((m) => m.d < 20 && (shot || (!sheltered && (m.flags & MF.AGGRO) !== 0 && m.d < 14 && b.seenBy(m))));
+    // (a walker or a crawler already at arm's length comes first: below)
+    const inFace = melee.some((m) => m.d < 3.6 && !left(m));
+    if (r && !inFace && !(left(r) && !shot)) {
+      if (shot) b.lastHurt.at = 0;
+      const meleeNear = melee.filter((m) => m.d < 7);
+      // with a bow: shoot back from where it stands (an archer at range is the bow's job)
+      if (bow && !meleeNear.some((m) => m.d < 5) && r.d >= 4 && hp >= (strong ? 5 : 7)) {
+        let res = "";
+        await this.reflex("shooting back at a rattler", async () => {
+          this.fighting(r);
+          res = await b.duel({ kind: "mob", id: r.id }, 25000, strong ? 4 : 6);
+          return `A rattler had you in its sights, so you shot back with your bow (${res}).`;
+        });
+        FIGHTS.delete(this.name);
+        if (/lost sight|got away/.test(res)) this.leftAlone.set(r.id, Date.now() + 20000);
+        if (/backed off/.test(res) && !b.dead) await this.reflex("taking cover from a rattler", async () => `You were hurt in the bow fight, so you took cover: ${await this.takeCover(r)}.`);
+        return true;
+      }
+      // without one: charge it if armed and it's close, or armoured (an archer is weak up close and backs off slowly).
+      // Across open ground unarmoured, no: it shoots every second or so for two hearts and each arrow knocks you back,
+      // so the gap never closed (the fight tests: 8 arrows in 7 s and never in reach). Cover first, and it comes round
+      // into reach. Only armoured into company: all three of season 7 died chasing rattlers past other monsters
+      const others = hostile.filter((m) => m.id !== r.id && m.d < 14).length;
+      // (and not again within half a minute of a charge that didn't kill it: it was a cycle of cover, charge, shot,
+      // cover, down to 3 health in the fight tests)
+      // (at arm's length it's no charge at all: hit it)
+      const pointBlank = r.d < 3.2;
+      const charge = armed && meleeNear.length <= (strong ? 2 : 0) && (strong ? hp >= 8 && r.d < 16 : pointBlank ? hp >= 6 : hp >= 12 && r.d < 4.5 && others === 0 && now - this.lastFailedCharge > 30000);
+      if (charge) {
+        let res = "";
+        await this.reflex("charging the rattler", async () => {
+          this.fighting(r);
+          res = await b.fight({ kind: "mob", id: r.id }, 20000, strong ? 5 : 10, 16);
+          return `A rattler was shooting at you and you charged it (${res}).`;
+        });
+        FIGHTS.delete(this.name);
+        if (!/dead or gone/.test(res)) this.lastFailedCharge = Date.now();
+        if (/ran out of time|couldn't get to it|out of reach|let it go/.test(res)) this.leftAlone.set(r.id, Date.now() + 30000);
+        if (/backed off|couldn't get to it|out of reach/.test(res) && !b.dead && !b.sealed()) await this.reflex("taking cover from a rattler", async () => `The rattler kept shooting, so you took cover: ${await this.takeCover(r)}.`);
+        return true;
+      }
+      // a shambler or a skitter close by as well: no digging in or walling (it follows into the hole, and three blocks
+      // down takes seconds of its hits: sonnet dug in from a rattler with a shambler near and died there, season 9), run
+      if (meleeNear.length) {
+        const mx = meleeNear.reduce((a, m) => a + m.x, 0) / meleeNear.length;
+        const mz = meleeNear.reduce((a, m) => a + m.z, 0) / meleeNear.length;
+        await this.reflex(`running from a rattler and a ${meleeNear[0].key}`, async () => {
+          if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40) return `A rattler was shooting at you with a ${meleeNear[0].key} close by, so you ran home: ${await b.goHome()}.`;
+          await b.flee(mx, mz, 140);
+          return `A rattler was shooting at you with a ${meleeNear[0].key} close by, so you ran instead of digging in.`;
+        });
+        return true;
+      }
+      // in its sights with no bow and too far to charge: break its line of sight before it shoots (it has to come round
+      // the wall, into reach)
+      await this.reflex("taking cover from a rattler", async () => `A rattler ${shot ? "was shooting at you" : "had you in its sights"}${!armed ? " and you had no weapon" : r.d >= 4.5 ? " from too far to charge across open ground" : " and charging it again so soon would only get you shot"}, so you took cover: ${await this.takeCover(r)}.`);
+      return true;
+    }
+
+    // ---- a walker or a crawler on it
+    // (indoors, not one on the other side of the wall: at home it's safe, and it swung at the wall for minutes)
+    const [ex, ey, ez] = b.eye();
+    const close = melee.filter((m) => (m.d < 3.6 || (hurtRecently && m.d < 6) || ((m.flags & MF.AGGRO) !== 0 && m.d < 4.5)) && (!left(m) || hurtRecently) && (hurtRecently || !sheltered || b.clearSight(ex, ey, ez, m.x, m.y + 1.2, m.z)));
+    const h = close[0];
+    if (h) {
+      const crowd = melee.filter((m) => m.d < 9).length;
+      // badly hurt in a tunnel it can close in a step or two: wall it off to heal (nowhere to run, and digging in with
+      // it at arm's length is death: it drops into the hole too)
+      if (hp < (strong ? 5 : 8) && below && hostile.filter((m) => m.d < 10).length <= 1 && b.canWallOff()) {
+        await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled it off to heal: ${await b.wallOff()}.`);
+        if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
+        return true;
+      }
+      // two or more at once, or hurt: up a pillar, out of their reach, and fight from there (not against a crawler, it
+      // climbs; not with an archer watching; not under a low roof)
+      if ((crowd >= 2 || hp < 10) && this.canPillarFight(melee, archers)) {
+        await this.reflex(`pillaring up out of the ${h.key}s' reach`, async () => {
+          this.fighting(h);
+          if (crowd >= 2) this.callForHelp(`${crowd} ${h.key}s`);
+          return `${crowd >= 2 ? `${crowd} ${h.key}s` : `A ${h.key}`} came at you${hp < 10 ? " while you were hurt" : ""}, so you went two blocks up a pillar where they couldn't reach you and fought from there: ${await b.pillarFight()}.`;
+        });
+        FIGHTS.delete(this.name);
+        return true;
+      }
+      if (!armed && hp < 8) {
+        await this.reflex(`running from a ${h.key}`, async () => this.runFrom(h, `A ${h.key} came at you and you had no weapon`));
+        return true;
+      }
+      if (crowd >= 2 || hp < 12) this.callForHelp(crowd >= 2 ? `${crowd} ${h.key}s` : `a ${h.key}, and I'm hurt`);
+      // fight it, but not to the death: badly hurt, it breaks off (shamblers are slow; opus fought one from 20 health
+      // to 0 without stopping). Underground with no quick wall to put up, no backing off: there's nowhere to go
+      let res = "";
+      await this.reflex(`fighting a ${h.key}`, async () => {
+        this.fighting(h);
+        res = await b.fight({ kind: "mob", id: h.id }, 15000, below && !b.canWallOff() ? 0 : strong ? 5 : 7);
+        return `A ${h.key} attacked you and you fought it (${res}).`;
+      });
+      FIGHTS.delete(this.name);
+      if (/ran out of time|couldn't get to it|out of reach/.test(res)) this.leftAlone.set(h.id, Date.now() + 60000);
+      if (/backed off/.test(res) && !b.dead) {
+        const homeNear = b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40;
+        if (below && !homeNear) {
+          await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${h.key} underground, so you walled it off to heal: ${await b.wallOff()}.`);
+          if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
+        } else if (!homeNear && this.canPillarFight(melee, archers)) {
+          await this.reflex(`badly hurt, pillaring up out of reach`, async () => `You were badly hurt fighting a ${h.key}, so you went up a pillar out of its reach: ${await b.pillarFight()}.`);
+        } else await this.reflex(`running from a ${h.key}, badly hurt`, async () => this.runFrom(h, `You were badly hurt fighting a ${h.key}`));
+      }
+      return true;
+    }
+
+    // ---- another of the pack fighting close by: go and help (two on one ends it twice as fast)
+    if (armed && dmg >= 4 && hp >= 12 && !below && !b.phys.inWater && !["dig_in", "sleep", "go_home"].includes(this.skill)) {
+      for (const [who, f] of FIGHTS) {
+        if (who === this.name || now - f.at > 45000) continue;
+        const m = b.mobs.get(f.id);
+        if (!m || m.flags & MF.DEAD || Math.hypot(m.x - b.phys.x, m.z - b.phys.z) > 28 || left(m)) continue;
+        if (f.key === "rattler" && !strong && !bow) continue;
+        let res = "";
+        await this.reflex(`helping ${who} with a ${f.key}`, async () => {
+          res = bow && f.key === "rattler" ? await b.duel({ kind: "mob", id: f.id }, 20000, 7) : await b.fight({ kind: "mob", id: f.id }, 20000, strong ? 5 : 8, 32);
+          return `${who} was fighting a ${f.key} near you, so you went to help (${res}).`;
+        });
+        if (/ran out of time|couldn't get to it|out of reach|let it go/.test(res)) this.leftAlone.set(f.id, Date.now() + 60000);
+        return true;
+      }
+    }
+
+    // ---- the hunt: armed with a real sword or axe and healthy, a shambler or a skitter near it out in the open: go and
+    // kill it (Laith: "they make swords but do not fight mobs"; they only fought what was already on them). Not an
+    // archer (that has its own rule above), not underground, not into a crowd, never at night without armour with
+    // company about, and never chased far from where it was
+    const armour = b.armor.reduce((n, s) => n + ((s && itemDef(s.id)?.armor?.points) || 0), 0);
+    const prey = melee.find((m) => m.d < 12 && !left(m));
+    if (prey && dmg >= 5 && hp >= 16 && !b.covered() && !b.phys.inWater && hostile.filter((m) => m.d < 16).length <= 2 && !(night && armour < 6 && hostile.length > 1) && now - this.lastHunt > 20000) {
+      this.lastHunt = now;
+      let res = "";
+      await this.reflex(`going after a ${prey.key}`, async () => {
+        this.fighting(prey);
+        res = await b.fight({ kind: "mob", id: prey.id }, 15000, strong ? 5 : 9, 16);
+        return `A ${prey.key} was ${Math.round(prey.d)} blocks away and you were armed and healthy, so you went after it (${res}).`;
+      });
+      FIGHTS.delete(this.name);
+      if (/ran out of time|couldn't get to it|out of reach|let it go/.test(res)) this.leftAlone.set(prey.id, Date.now() + 60000);
+      return true;
+    }
+    return false;
+  }
+
+  /** Up a pillar is right here: blocks to spare, room overhead, dry, no crawler about (it climbs) and no archer that can
+   *  see it (it would be a target up there). */
+  private canPillarFight(melee: { key: string; d: number }[], archers: (Seen & { d: number })[]): boolean {
+    const b = this.body;
+    if (b.fillerCount() < 2 || b.phys.inWater || !b.phys.onGround) return false;
+    if (melee.some((m) => m.key === "skitter" && m.d < 12)) return false;
+    if (archers.some((m) => m.d < 20 && b.seenBy(m))) return false;
+    const x = Math.floor(b.phys.x);
+    const y = Math.floor(b.phys.y + 0.1);
+    const z = Math.floor(b.phys.z);
+    return !SOLID[b.get(x, y + 2, z)] && !SOLID[b.get(x, y + 3, z)] && !SOLID[b.get(x, y + 4, z)];
+  }
+
+  /** Out of a fight it can't win: home if it's near (a door between), else away from it. */
+  private async runFrom(h: Seen, why: string): Promise<string> {
+    const b = this.body;
+    if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40) return `${why}, so you ran home: ${await b.goHome()}.`;
+    await b.flee(h.x, h.z, 140);
+    return `${why}, so you broke off and ran.`;
+  }
+
+  /** An archer it can't fight: a wall between them (it has to come round into reach), walled in if badly hurt, a hole
+   *  as the last resort (and never with a walker close: it follows into the hole). */
+  private async takeCover(r: Seen): Promise<string> {
+    const b = this.body;
+    // home close by: indoors is the best cover there is (and no dirt walls left standing about the town)
+    if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 30) return `ran home: ${await b.goHome()}`;
+    if (b.fillerCount() >= 2 && (await b.coverFrom(r.x, r.z))) {
+      if (b.stats.hp < 8 && b.canWallOff()) return `walled itself off from the rattler: ${await b.wallOff()}`;
+      return "put a wall up between you and the rattler (it has to come round it, into reach, to shoot)";
+    }
+    // no wall: out of its range at a run (its arrows go where you were, not where you're going: a runner is hard to
+    // hit). Never a hole with it shooting: digging in is seconds of standing still, and every arrow knocks you back
+    // out of the hole (Laith: "the digging in is too slow"; opus died digging in from a rattler with a shambler on it).
+    // Right up close with a weapon, finishing it is quicker than running
+    if (Math.hypot(r.x - b.phys.x, r.z - b.phys.z) < 3.5 && b.bestWeapon()) return `it was right there, so you fought it (${await b.fight({ kind: "mob", id: r.id }, 12000, 6)})`;
+    await b.flee(r.x, r.z, 120);
+    return "ran out of its range";
+  }
+
+  /** Telling the pack which monster it's fighting (a fight the others can join). */
+  private fighting(m: Seen & { key: string }): void {
+    FIGHTS.set(this.name, { id: m.id, key: m.key, x: m.x, z: m.z, at: Date.now() });
+  }
+
+  /** A shout for help when it's outnumbered or hurt, with another of the pack near enough to come (at most once a
+   *  minute and a half). */
+  private callForHelp(what: string): void {
+    const b = this.body;
+    if (Date.now() - this.lastHelpCall < 90000) return;
+    const near = [...b.others.values()].some((o) => !(o.flags & FLAG.DEAD) && Math.hypot(o.x - b.phys.x, o.z - b.phys.z) < 48);
+    if (!near) return;
+    this.lastHelpCall = Date.now();
+    const text = `${what} on me at ${Math.round(b.phys.x)} ${Math.round(b.phys.z)}, help!`;
+    b.send({ t: "chat", text });
+    this.emit("chat", { text });
+    this.log.push(`You called for help: "${text}"`);
   }
 
   /** While the next decision is being made: no standing frozen. It looks at whoever is near, or looks around. */

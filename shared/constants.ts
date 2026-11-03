@@ -21,10 +21,12 @@ export const DAY_TICKS = 24000; // one full day, 20 minutes
  *  agents, the client and the server all agree). A client or server with a different name is a different game. The
  *  old builder (protocol 4) sent no name at all; the server tells such a page to reload (server/src/main.ts). */
 export const PROTOCOL_NAME = "stevecraft";
-export const PROTOCOL_VERSION = 12; // $STEVE Craft survival (2026-10-30): the survival engine (its wire format as of v11: survival, night mobs, combat,
+export const PROTOCOL_VERSION = 13; // $STEVE Craft survival (2026-10-30): the survival engine (its wire format as of v11: survival, night mobs, combat,
 // farming, boats, villages and trading, the big spawn hub, proximity voice) under its own protocol name. 1-4 were the
 // builder (no protocol name), so the first survival version is 12: higher than any builder page knows, which makes an
 // old builder page reload into the new game.
+// 13 (clankersmp, 2026-11-03): enchanting. New blocks (obsidian 223, the enchanting table 224), items (book, lava
+// bucket, enchanted gear 400+), the agents' enchant message and two new effects; an older page reloads into it.
 /** Bump whenever terrain generation changes: saved worlds are diffs against the generated terrain. */
 export const WORLDGEN_VERSION = 4; // 4: the survival engine's spawn hub with its landmark (a fresh world, in its own world dir). clankersmp's monument
 // (shared/landmark.ts) replaced the landmark without a new version: the server builds the base world from this code at

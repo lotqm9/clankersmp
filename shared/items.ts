@@ -27,6 +27,16 @@ export interface Armor {
   points: number; // armour points (half a shirt icon each)
   tough: number; // armour toughness (diamond 2)
   durability: number;
+  /** v13: Protection's level (Java's enchantment protection factor: 4% less damage a level, all pieces together). */
+  prot?: number;
+}
+
+/** v13: what an enchanted item has on it (enchanted gear is its own item: the base item's stats, made better). */
+export type EnchKind = "sharpness" | "efficiency" | "protection";
+export interface Enchant {
+  kind: EnchKind;
+  level: number; // 1..3
+  base: number; // the plain item it was made from
 }
 
 export interface Food {
@@ -52,6 +62,8 @@ export interface ItemDef {
   drink?: boolean;
   /** v7: what stays in the crafting grid when it is used up (a milk bucket leaves its bucket). */
   remainder?: number;
+  /** v13: enchanted gear: the enchantment, its level and the plain item underneath. */
+  ench?: Enchant;
 }
 
 export interface Stack {
@@ -107,12 +119,18 @@ export const I = {
   COCONUT: 296,
   // v9: the fisher sells it (the only way to get one)
   SMOKED_FISH: 297,
+  // v13: books (paper and leather) for the enchanting table; lava from the smith's forge, which sets into obsidian
+  // where it meets water
+  BOOK: 298,
+  LAVA_BUCKET: 299,
   // tools: 300 + material * 4 + kind (pickaxe, axe, shovel, sword); materials wood, stone, iron, gold, diamond
   TOOL0: 300,
   // v7 hoes: 320 + material
   HOE0: 320,
   // v6 armour: 340 + material * 4 + slot (helmet, chestplate, leggings, boots); materials leather, iron, diamond
   ARMOR0: 340,
+  // v13 enchanted gear: 400 + ENCHANTABLE index * 3 + level - 1
+  ENCH0: 400,
 } as const;
 
 export const TOOL_KINDS: ToolKind[] = ["pickaxe", "axe", "shovel", "sword"];
@@ -258,6 +276,51 @@ for (let m = 0; m < 3; m++) {
     });
   }
 }
+
+// v13: books, the smith's lava, and enchanted gear
+item(I.BOOK, "book", "Book", TEX.book);
+// poured out it sets at once into obsidian, so it only goes where water is beside it (shard.ts); the bucket is left
+item(I.LAVA_BUCKET, "lava_bucket", "Lava Bucket", TEX.lava_bucket, { stack: 1, block: B.OBSIDIAN, remainder: I.BUCKET });
+
+/** v13: what the enchanting table takes, in id order (append only): swords and axes (Sharpness), pickaxes and
+ *  shovels (Efficiency), then every piece of armour (Protection). */
+export const ENCHANTABLE: number[] = [
+  ...[0, 1, 2, 3, 4].map((m) => toolId(m, 3)),
+  ...[0, 1, 2, 3, 4].map((m) => toolId(m, 1)),
+  ...[0, 1, 2, 3, 4].map((m) => toolId(m, 0)),
+  ...[0, 1, 2, 3, 4].map((m) => toolId(m, 2)),
+  ...[0, 1, 2].flatMap((m) => [0, 1, 2, 3].map((k) => armorId(m, k))),
+];
+export const ENCH_MAX = 3;
+export const ENCH_NAMES: Record<EnchKind, string> = { sharpness: "Sharpness", efficiency: "Efficiency", protection: "Protection" };
+const ROMAN = ["", "I", "II", "III"];
+/** The enchantment a plain item takes (or null). */
+export function enchKindOf(base: number): EnchKind | null {
+  const d = ITEMS[base];
+  if (!d || !ENCHANTABLE.includes(base)) return null;
+  if (d.armor) return "protection";
+  return d.tool?.kind === "sword" || d.tool?.kind === "axe" ? "sharpness" : "efficiency";
+}
+/** The enchanted item: `base` at `level` (1..3), or 0. */
+export function enchantedId(base: number, level: number): number {
+  const k = ENCHANTABLE.indexOf(base);
+  return k < 0 || level < 1 || level > ENCH_MAX ? 0 : I.ENCH0 + k * ENCH_MAX + level - 1;
+}
+ENCHANTABLE.forEach((base) => {
+  const d = ITEMS[base];
+  const kind = enchKindOf(base)!;
+  for (let level = 1; level <= ENCH_MAX; level++) {
+    const v: ItemDef = { ...d, id: enchantedId(base, level), key: `${d.key}_${kind}_${level}`, name: `${d.name} (${ENCH_NAMES[kind]} ${ROMAN[level]})`, ench: { kind, level, base } };
+    // Java 1.9+: Sharpness adds 0.5 x level + 0.5 damage; Efficiency adds level^2 + 1 to the mining speed; Protection
+    // takes 4% a level off what gets through (shared/combat.ts)
+    if (kind === "sharpness") v.tool = { ...d.tool!, damage: d.tool!.damage + 0.5 * level + 0.5 };
+    else if (kind === "efficiency") v.tool = { ...d.tool!, speed: d.tool!.speed + level * level + 1 };
+    else v.armor = { ...d.armor!, prot: level };
+    add(v);
+  }
+});
+/** The plain item under an enchanted one (itself if it isn't enchanted). */
+export const plainOf = (id: number) => itemDef(id)?.ench?.base ?? id;
 
 export function itemDef(id: number): ItemDef | undefined {
   return Number.isInteger(id) && id > 0 ? ITEMS[id] : undefined;

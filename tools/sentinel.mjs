@@ -103,7 +103,9 @@ for (;;) {
         const net = Math.hypot(min.at(-1).x - min[0].x, min.at(-1).z - min[0].z);
         if (jumps >= 10 && net < 6) say(a.name, 'bouncing', `${jumps} jumps and ${walked.toFixed(0)} blocks walked in a minute but only ${net.toFixed(1)} blocks of progress, "${action}"`);
         // (a staircase mine goes down and walks back up the same steps: that's work, not pacing)
-        if (walked > (/building/i.test(action) ? 70 : 25) && net < 3 && !/mining|stair|collectBlocks|digDown/i.test(action) && !IDLE.test(action)) say(a.name, 'pacing', `walked ${walked.toFixed(0)} blocks in a minute and ended ${net.toFixed(1)} from where it started, "${action}"`);
+        // (and a builder walks round its building all the time: sonnet did 78 blocks a minute on a cottage roof, 175 on a
+        // well, and finished both)
+        if (walked > (/building|upgrading/i.test(action) ? 160 : 25) && net < 3 && !/mining|stair|collectBlocks|digDown/i.test(action) && !IDLE.test(action)) say(a.name, 'pacing', `walked ${walked.toFixed(0)} blocks in a minute and ended ${net.toFixed(1)} from where it started, "${action}"`);
       }
       // hurt fast
       const h = (hpLog[a.name] ||= []);

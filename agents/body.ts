@@ -805,6 +805,13 @@ export class Body {
     const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z), y: gy });
     if (!s) return null;
     const i = s.reached >= 0 ? s.reached : s.closestTo(x, z, gy);
+    // out of reach: the spot nearest it, unless that is no nearer than where it stands. Two spots about as near as each
+    // other, and it walked from one to the other and back, replanning each time (up a hill it couldn't climb: 250
+    // blocks in 90 s for a goal 15 off)
+    if (s.reached < 0 && i > 0) {
+      const near = (k: number) => Math.hypot(s.pts[k].x + 0.5 - x, s.pts[k].z + 0.5 - z, gy === undefined ? 0 : s.pts[k].f - gy);
+      if (near(i) > near(0) - 0.7) return { path: [], boxed: s.pts.length < 8 };
+    }
     return { path: s.pathTo(i), boxed: s.pts.length < 8 };
   }
 
@@ -834,6 +841,7 @@ export class Body {
         if (unstuck || (this.isNight() && this.sealed())) break;
         unstuck = true;
         fails = 0;
+        this.halt();
         // shut in by a closed door (haiku slept in a village house's bed and couldn't get out in the morning): open it
         if (await this.openNearbyDoors()) continue;
         await this.nudge(x, z);
@@ -856,6 +864,9 @@ export class Body {
         await this.follow(p.path, x, z, arrived);
         continue;
       }
+      // (the legs still had the last step of the path in them: while it looked for a door or dug, it walked on, blind,
+      // off a hill's edge: a 10 block fall)
+      this.halt();
       // no step to take: it's as near as it can walk. The last bit (the point is in its cell or the next): small steps
       // over to it (a path ends at a block's middle, and a goal a little off it was "not there yet", every time)
       if (d < 2.5 && (await this.shuffle(x, z, 30, arrived))) continue;

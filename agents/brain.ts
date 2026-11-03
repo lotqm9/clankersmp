@@ -2151,12 +2151,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     return [pre, r].filter(Boolean).join("; ");
   }
 
-  /** Night: to bed (in its house), or sealed in underground mining till morning. */
+  /** Night: to bed in its house when it's there or out in the open near it; under cover elsewhere it stays put (no
+   *  walk home through the dark: wait shuts it in and mines from inside the sealed hole till dawn). */
   private async nightRound(): Promise<string> {
     const b = this.body;
-    if (b.home) return await b.goHome();
-    if (b.sealed()) return await this.exec("wait", { seconds: 30 });
-    return await b.digIn();
+    if (b.home && (b.atHome() || !b.covered())) {
+      const [mx, mz] = b.homeMiddle();
+      if (b.atHome() || Math.hypot(mx - b.phys.x, mz - b.phys.z) < 40) return await b.goHome();
+    }
+    return await this.exec("wait", { seconds: 30 });
   }
 
   /** Dawn: out of the house, fed, food from the pool when it carries little. */

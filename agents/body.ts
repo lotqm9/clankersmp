@@ -3132,7 +3132,9 @@ export class Body {
       const ny = down ? y - 1 : y;
       const cells: [number, number, number][] = [[nx, y + 1, nz], [nx, y, nz]];
       if (down) cells.push([nx, y - 1, nz]);
-      if (cells.some(([a, b, c]) => wetNear(a, b, c)) || this.get(nx, ny - 1, nz) === B.BEDROCK) break;
+      // (bedrock under a step down is the end of the way down; as the floor of a level tunnel it's just a floor: at the
+      // bottom of the world sonnet's night mining dug nothing, every time, and asked again every two seconds)
+      if (cells.some(([a, b, c]) => wetNear(a, b, c)) || (down && this.get(nx, ny - 1, nz) === B.BEDROCK)) break;
       let ok = true;
       for (const [a, b, c] of cells) {
         if (SOLID[this.get(a, b, c)] && !(await this.mine(a, b, c, false))) {

@@ -18,6 +18,7 @@ import { I, ITEMS, itemDef, type Stack } from "../shared/items.ts";
 import { MF, MOB_SPECS } from "../shared/mobs.ts";
 import { armorValue } from "../shared/combat.ts";
 import { collectObsidian, enchant as enchantGear, isObsidian, techText } from "./tech.ts";
+import { messiness, organize } from "./inventory.ts";
 import { SPECS as ANIMAL_SPECS } from "../shared/animals.ts";
 import { canHarvest } from "../shared/mining.ts";
 import { FLAG } from "../shared/protocol.ts";
@@ -25,7 +26,7 @@ import { FLAG } from "../shared/protocol.ts";
 /** What each AI is working toward and doing right now, as the others can see it (they all run in this process). */
 const BOARD = new Map<string, { goal: string; doing: string }>();
 /** v13: the monster each of them is fighting right now (the others come and help when they are near). */
-const FIGHTS = new Map<string, { id: number; key: string; x: number; z: number; at: number }>();
+const FIGHTS = new Map<string, { id: number; key: string; x: number; z: number; at: number; call: boolean }>();
 
 /** The pack's shared plan and base: one list all three work from, one place they build up together. */
 const PACK: {
@@ -250,7 +251,12 @@ export class Brain {
   private lastTidy = 0;
   private lastHunt = 0;
   private lastHelpCall = 0;
-  private lastFailedCharge = 0;
+  private lastSort = 0;
+  /** Fights it has gone to help with (the monster, till when it won't answer for it again), the last time it helped,
+   *  and the last time it said it was coming. */
+  private answered = new Map<number, number>();
+  private lastHelp = 0;
+  private lastHelpReply = 0;
   /** Mining a staircase out of its hole at night (the wait tool): the hole isn't sealed while it does. */
   private holeMining = false;
   /** What the running reflex is, so being shot can cut a walk short. */
@@ -1830,7 +1836,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // shot at in the middle of a walk (home, or out to build before dark): drop the walk so the archer gets dealt
     // with. A reflex used to run to its end first, and sonnet and haiku were both shot dead walking home at dusk
     // (not a fight already: v13's pillar, the hunt, helping another)
-    if (this.reflexing && !/rattler|fight|running|dig|wall|hurt|water|pillar|going after|helping/.test(this.reflexLabel) && Date.now() - b.lastHurt.at < 1500 && b.hostiles(16).some((m) => m.key === "rattler")) b.abort = true;
+    if (this.reflexing && !/rattler|fight|running|getting away|dig|wall|hurt|water|pillar|going after|helping/.test(this.reflexLabel) && Date.now() - b.lastHurt.at < 1500 && b.hostiles(16).some((m) => m.key === "rattler")) b.abort = true;
     if (this.reflexing || this.stopped || b.dead || b.closed) return;
     // armour it carries goes on (the server swaps each better piece in), checked every few seconds
     if (Date.now() - this.lastWear > 4000) {
@@ -1923,18 +1929,17 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     } else this.nightOutSince = 0;
   }
 
-  // ---------------------------------------------------------------- fighting (v13)
+  // ---------------------------------------------------------------- fighting (v14)
 
-  /** Monsters near it: what a good player does about them. True if a fight reflex ran. In order:
-   *  - an archer with it in sight: shoot back with the bow; else charge it if armed and fit (archers are weak up
-   *    close), never into a crowd at night; else cover (a wall between, the archer has to come round into reach), and
-   *    only then a hole;
-   *  - a walker or a crawler on it: badly hurt in a tunnel, wall it off; two or more of them, or hurt, and blocks to
-   *    spare: two blocks up a pillar, out of their reach, and fight from there; else fight with technique (charged
-   *    swings, sprint hits, critical hits, stepping back out of reach while the weapon recharges); badly hurt: home if
-   *    it's near, else the pillar, a wall or a run;
-   *  - another of the pack fighting near: go and help (two on one);
-   *  - armed and healthy with one about in the open: go after it (the hunt reflex). */
+  /** Monsters near it, the way a fighter handles them (Laith: "if they have a sword and armor, like they can fight,
+   *  like they should fight"). Ready to fight (a real weapon: a stone sword or better, or an axe; not badly hurt; not
+   *  clearly outnumbered) it takes on what's on it and finishes it: walkers and crawlers with technique (charged and
+   *  critical hits, stepping back on the recharge, circling), archers with the bow from range or a charge (armour takes
+   *  most of the sting out of arrows), then picks up the drops. No cover, no running and no walls just because a
+   *  monster showed up. It gives ground only unarmed, badly hurt or clearly outnumbered: up a pillar out of walkers'
+   *  reach, home if it's near and it's out in the open, else a sprint to a spot out of their reach and sight; never a
+   *  hole with a monster about. Outnumbered or hurt it calls the others, and one that's free comes and fights beside
+   *  it: once a fight, while that fight lasts. Then, armed and fit with one about in the open, the hunt. */
   private async combat(): Promise<boolean> {
     const b = this.body;
     if (b.sealed()) return false;
@@ -1946,162 +1951,145 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const melee = hostile.filter((m) => m.key !== "rattler");
     const archers = hostile.filter((m) => m.key === "rattler");
     const weapon = b.bestWeapon();
-    const armed = !!weapon;
-    const dmg = itemDef(weapon)?.tool?.damage ?? 1;
-    const strong = b.strong();
+    const tool = itemDef(weapon)?.tool;
+    // a real weapon: a stone sword or better, or an axe (a wooden sword or a pickaxe is not a fighting weapon)
+    const real = !!tool && (tool.kind === "axe" || (tool.kind === "sword" && tool.material >= 1));
+    const armour = b.armor.reduce((n, s) => n + ((s && itemDef(s.id)?.armor?.points) || 0), 0);
+    const armoured = armour >= 6;
     const hp = b.stats.hp;
-    const night = b.isNight();
     const bow = b.has(I.BOW) && b.has(I.ARROW);
     // underground: under a roof that isn't one of the town's buildings (inside a cottage the roof counts as "covered",
     // and haiku fought a shambler to the end in the house it had just moved into, 11/2)
     const indoors = footprints().some((r) => b.phys.x >= r.x0 && b.phys.x <= r.x1 + 1 && b.phys.z >= r.z0 && b.phys.z <= r.z1 + 1);
     const below = b.covered() && !indoors;
-
-    // ---- an archer that has it in sight (it shot, or it's on to it and close). Indoors (or asleep) only when it
-    // actually hits: one outside the window sees in through the glass, but its arrows stop on it
     const sheltered = indoors || b.asleep || (!!b.home && b.atHome());
-    const r = archers.find((m) => m.d < 20 && (shot || (!sheltered && (m.flags & MF.AGGRO) !== 0 && m.d < 14 && b.seenBy(m))));
-    // (a walker or a crawler already at arm's length comes first: below)
-    const inFace = melee.some((m) => m.d < 3.6 && !left(m));
-    if (r && !inFace && !(left(r) && !shot)) {
-      if (shot) b.lastHurt.at = 0;
-      const meleeNear = melee.filter((m) => m.d < 7);
-      // with a bow: shoot back from where it stands (an archer at range is the bow's job)
-      if (bow && !meleeNear.some((m) => m.d < 5) && r.d >= 4 && hp >= (strong ? 5 : 7)) {
-        let res = "";
-        await this.reflex("shooting back at a rattler", async () => {
-          this.fighting(r);
-          res = await b.duel({ kind: "mob", id: r.id }, 25000, strong ? 4 : 6);
-          return `A rattler had you in its sights, so you shot back with your bow (${res}).`;
-        });
-        FIGHTS.delete(this.name);
-        if (/lost sight|got away/.test(res)) this.leftAlone.set(r.id, Date.now() + 20000);
-        if (/backed off/.test(res) && !b.dead) await this.reflex("taking cover from a rattler", async () => `You were hurt in the bow fight, so you took cover: ${await this.takeCover(r)}.`);
-        return true;
-      }
-      // without one: charge it if armed and it's close, or armoured (an archer is weak up close and backs off slowly).
-      // Across open ground unarmoured, no: it shoots every second or so for two hearts and each arrow knocks you back,
-      // so the gap never closed (the fight tests: 8 arrows in 7 s and never in reach). Cover first, and it comes round
-      // into reach. Only armoured into company: all three of season 7 died chasing rattlers past other monsters
-      const others = hostile.filter((m) => m.id !== r.id && m.d < 14).length;
-      // (and not again within half a minute of a charge that didn't kill it: it was a cycle of cover, charge, shot,
-      // cover, down to 3 health in the fight tests)
-      // (at arm's length it's no charge at all: hit it)
-      const pointBlank = r.d < 3.2;
-      const charge = armed && meleeNear.length <= (strong ? 2 : 0) && (strong ? hp >= 8 && r.d < 16 : pointBlank ? hp >= 6 : hp >= 12 && r.d < 4.5 && others === 0 && now - this.lastFailedCharge > 30000);
-      if (charge) {
-        let res = "";
-        await this.reflex("charging the rattler", async () => {
-          this.fighting(r);
-          res = await b.fight({ kind: "mob", id: r.id }, 20000, strong ? 5 : 10, 16);
-          return `A rattler was shooting at you and you charged it (${res}).`;
-        });
-        FIGHTS.delete(this.name);
-        if (!/dead or gone/.test(res)) this.lastFailedCharge = Date.now();
-        if (/ran out of time|couldn't get to it|out of reach|let it go/.test(res)) this.leftAlone.set(r.id, Date.now() + 30000);
-        if (/backed off|couldn't get to it|out of reach/.test(res) && !b.dead && !b.sealed()) await this.reflex("taking cover from a rattler", async () => `The rattler kept shooting, so you took cover: ${await this.takeCover(r)}.`);
-        return true;
-      }
-      // a shambler or a skitter close by as well: no digging in or walling (it follows into the hole, and three blocks
-      // down takes seconds of its hits: sonnet dug in from a rattler with a shambler near and died there, season 9), run
-      if (meleeNear.length) {
-        const mx = meleeNear.reduce((a, m) => a + m.x, 0) / meleeNear.length;
-        const mz = meleeNear.reduce((a, m) => a + m.z, 0) / meleeNear.length;
-        await this.reflex(`running from a rattler and a ${meleeNear[0].key}`, async () => {
-          if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40) return `A rattler was shooting at you with a ${meleeNear[0].key} close by, so you ran home: ${await b.goHome()}.`;
-          await b.flee(mx, mz, 140);
-          return `A rattler was shooting at you with a ${meleeNear[0].key} close by, so you ran instead of digging in.`;
-        });
-        return true;
-      }
-      // in its sights with no bow and too far to charge: break its line of sight before it shoots (it has to come round
-      // the wall, into reach)
-      await this.reflex("taking cover from a rattler", async () => `A rattler ${shot ? "was shooting at you" : "had you in its sights"}${!armed ? " and you had no weapon" : r.d >= 4.5 ? " from too far to charge across open ground" : " and charging it again so soon would only get you shot"}, so you took cover: ${await this.takeCover(r)}.`);
-      return true;
-    }
-
-    // ---- a walker or a crawler on it
-    // (indoors, not one on the other side of the wall: at home it's safe, and it swung at the wall for minutes)
     const [ex, ey, ez] = b.eye();
-    const close = melee.filter((m) => (m.d < 3.6 || (hurtRecently && m.d < 6) || ((m.flags & MF.AGGRO) !== 0 && m.d < 4.5)) && (!left(m) || hurtRecently) && (hurtRecently || !sheltered || b.clearSight(ex, ey, ez, m.x, m.y + 1.2, m.z)));
-    const h = close[0];
-    if (h) {
-      const crowd = melee.filter((m) => m.d < 9).length;
-      // badly hurt in a tunnel it can close in a step or two: wall it off to heal (nowhere to run, and digging in with
-      // it at arm's length is death: it drops into the hole too)
-      if (hp < (strong ? 5 : 8) && below && hostile.filter((m) => m.d < 10).length <= 1 && b.canWallOff()) {
-        await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled it off to heal: ${await b.wallOff()}.`);
-        if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
+    // indoors, only what it can actually get at: one outside a window sees in through the glass, but nobody gets
+    // through it (haiku went for one through its window over and over, and every time it called sonnet over)
+    const reachable = (m: Seen) => !sheltered || hurtRecently || b.clearShot(ex, ey, ez, m.x, m.y + 1.2, m.z);
+    // what is on it: walkers and crawlers at arm's length (or that just hit it, or are coming on), and an archer that
+    // has it in its sights
+    const onIt = melee.filter((m) => (m.d < 3.6 || (hurtRecently && m.d < 6) || ((m.flags & MF.AGGRO) !== 0 && m.d < 5)) && (!left(m) || hurtRecently) && reachable(m));
+    const r = archers.find((m) => m.d < 20 && (shot || (!sheltered && (m.flags & MF.AGGRO) !== 0 && m.d < 14 && b.seenBy(m))) && !(left(m) && !shot));
+    const threats = hostile.filter((m) => m.d < 12 && reachable(m)).length;
+    const badlyHurt = hp < (armoured ? 6 : 8);
+    // clearly outnumbered: more than its kit can take on at once (three unarmoured, four in light armour, five in iron,
+    // six in iron with an iron sword)
+    const outnumbered = threats >= (armour >= 12 ? (b.strong() ? 6 : 5) : armoured ? 4 : 3);
+    const ready = real && !badlyHurt && !outnumbered;
+
+    if (onIt.length || r) {
+      if (shot) b.lastHurt.at = 0;
+      const h = onIt[0];
+      if (!ready) {
+        // ---- giving ground: unarmed, badly hurt or clearly outnumbered
+        // badly hurt in a tunnel with one walker, a block or two closing it: wall it off to heal (nowhere to run)
+        if (h && badlyHurt && below && hostile.filter((m) => m.d < 10).length <= 1 && b.canWallOff()) {
+          await this.reflex(`badly hurt underground, walling itself in`, async () => `A ${h.key} had you badly hurt underground, so you walled it off to heal: ${await b.wallOff()}.`);
+          return true;
+        }
+        // walkers only: two blocks up a pillar, out of their reach, and fight (or eat) from there
+        if (h && this.canPillarFight(melee, archers)) {
+          await this.reflex(`pillaring up out of the ${h.key}s' reach`, async () => {
+            this.fighting(h);
+            this.callForHelp(outnumbered ? `${threats} monsters` : `a ${h.key}, and I'm ${real ? "hurt" : "unarmed"}`, h);
+            return `${outnumbered ? `${threats} monsters were on you` : `A ${h.key} came at you while you were ${real ? "badly hurt" : "unarmed"}`}, so you went two blocks up a pillar where walkers can't reach and fought from there: ${await b.pillarFight()}.`;
+          });
+          FIGHTS.delete(this.name);
+          return true;
+        }
+        // just an archer, and a bow: shoot it from where it stands (a fight at range, not a retreat)
+        if (!h && r && bow && hp >= 6 && r.d >= 4) {
+          await this.reflex("shooting back at a rattler", async () => {
+            this.fighting(r);
+            return `A rattler had you in its sights, so you shot back with your bow (${await b.duel({ kind: "mob", id: r.id }, 25000, 5)}).`;
+          });
+          FIGHTS.delete(this.name);
+          return true;
+        }
+        const from = hostile.filter((m) => m.d < 14);
+        this.callForHelp(outnumbered ? `${threats} monsters` : `a ${(h ?? r)!.key}, and I'm ${real ? "hurt" : "unarmed"}`, h ?? r);
+        await this.reflex(`getting away, ${!real ? "unarmed" : badlyHurt ? "badly hurt" : "outnumbered"}`, async () => this.escape(from, `${outnumbered ? `${threats} monsters were on you` : `A ${(h ?? r)!.key} was on you`} and you were ${!real ? "unarmed" : badlyHurt ? "badly hurt" : "outnumbered"}`));
         return true;
       }
-      // two or more at once, or hurt: up a pillar, out of their reach, and fight from there (not against a crawler, it
-      // climbs; not with an archer watching; not under a low roof)
-      if ((crowd >= 2 || hp < 10) && this.canPillarFight(melee, archers)) {
-        await this.reflex(`pillaring up out of the ${h.key}s' reach`, async () => {
-          this.fighting(h);
-          if (crowd >= 2) this.callForHelp(`${crowd} ${h.key}s`);
-          return `${crowd >= 2 ? `${crowd} ${h.key}s` : `A ${h.key}`} came at you${hp < 10 ? " while you were hurt" : ""}, so you went two blocks up a pillar where they couldn't reach you and fought from there: ${await b.pillarFight()}.`;
-        });
-        FIGHTS.delete(this.name);
-        return true;
-      }
-      if (!armed && hp < 8) {
-        await this.reflex(`running from a ${h.key}`, async () => this.runFrom(h, `A ${h.key} came at you and you had no weapon`));
-        return true;
-      }
-      if (crowd >= 2 || hp < 12) this.callForHelp(crowd >= 2 ? `${crowd} ${h.key}s` : `a ${h.key}, and I'm hurt`);
-      // fight it, but not to the death: badly hurt, it breaks off (shamblers are slow; opus fought one from 20 health
-      // to 0 without stopping). Underground with no quick wall to put up, no backing off: there's nowhere to go
+
+      // ---- ready: take on what's on it and finish it. A walker in reach first (it's hitting), then the archer
+      const target = h ?? r!;
+      const archer = target.key === "rattler";
+      const crowd = hostile.filter((m) => m.d < 9).length;
+      if (crowd >= 2 || hp < 12) this.callForHelp(crowd >= 2 ? `${crowd} monsters` : `a ${target.key}, and I'm hurt`, target);
       let res = "";
-      await this.reflex(`fighting a ${h.key}`, async () => {
-        this.fighting(h);
-        res = await b.fight({ kind: "mob", id: h.id }, 15000, below && !b.canWallOff() ? 0 : strong ? 5 : 7);
-        return `A ${h.key} attacked you and you fought it (${res}).`;
+      // an archer at range without armour, and a bow: shoot it; otherwise at it (armoured, arrows do half or less)
+      const shoot = archer && bow && !armoured && target.d >= 6;
+      const label = archer ? (shoot ? "shooting back at a rattler" : "charging the rattler") : `fighting a ${target.key}`;
+      await this.reflex(label, async () => {
+        this.fighting(target);
+        // (with two archers on it, it breaks off earlier: the escape needs health to spare under their arrows)
+        const bail = armoured ? (archers.filter((m) => m.d < 18).length >= 2 ? 7 : 5) : 7;
+        res = shoot ? await b.duel({ kind: "mob", id: target.id }, 25000, bail) : await b.fight({ kind: "mob", id: target.id }, 25000, bail, archer ? 24 : 20);
+        if (/dead or gone/.test(res) && !b.hostiles(8).length) await b.pickUp(5, 3000); // the drops
+        return archer ? `A rattler had you in its sights and you ${shoot ? "shot it down with your bow" : "went at it"} (${res}).` : `A ${target.key} came at you and you fought it (${res}).`;
       });
       FIGHTS.delete(this.name);
-      if (/ran out of time|couldn't get to it|out of reach/.test(res)) this.leftAlone.set(h.id, Date.now() + 60000);
-      if (/backed off/.test(res) && !b.dead) {
+      if (/ran out of time|couldn't get to it|out of reach|let it go|lost sight|got away/.test(res)) this.leftAlone.set(target.id, Date.now() + 30000);
+      if (/backed off/.test(res) && !b.dead && !b.sealed()) {
+        // badly hurt mid-fight: give ground the way it does when it starts badly hurt
         const homeNear = b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40;
-        if (below && !homeNear) {
-          await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${h.key} underground, so you walled it off to heal: ${await b.wallOff()}.`);
-          if (!b.sealed() && !b.dead) await this.reflex(`fighting a ${h.key}, cornered`, async () => `You couldn't wall the ${h.key} off, so you fought it (${await b.fight({ kind: "mob", id: h.id }, 15000)}).`);
-        } else if (!homeNear && this.canPillarFight(melee, archers)) {
-          await this.reflex(`badly hurt, pillaring up out of reach`, async () => `You were badly hurt fighting a ${h.key}, so you went up a pillar out of its reach: ${await b.pillarFight()}.`);
-        } else await this.reflex(`running from a ${h.key}, badly hurt`, async () => this.runFrom(h, `You were badly hurt fighting a ${h.key}`));
+        if (below && !homeNear && b.canWallOff() && hostile.filter((m) => m.d < 10).length <= 1) {
+          await this.reflex(`badly hurt underground, walling itself in`, async () => `You were badly hurt fighting a ${target.key} underground, so you walled it off to heal: ${await b.wallOff()}.`);
+        } else if (!homeNear && !archer && this.canPillarFight(melee, archers)) {
+          await this.reflex(`badly hurt, pillaring up out of reach`, async () => `You were badly hurt fighting a ${target.key}, so you went up a pillar out of its reach: ${await b.pillarFight()}.`);
+        } else {
+          const from = b.hostiles(16);
+          await this.reflex(`getting away, badly hurt`, async () => this.escape(from, `You were badly hurt fighting a ${target.key}`));
+        }
       }
       return true;
     }
 
-    // ---- another of the pack fighting close by: go and help (two on one ends it twice as fast)
-    if (armed && dmg >= 4 && hp >= 12 && !below && !b.phys.inWater && !["dig_in", "sleep", "go_home"].includes(this.skill)) {
+    // ---- another of the pack is fighting: go and fight beside it. Once a fight, and only while it lasts (sonnet was
+    // pulled off its building 15 times in 20 minutes on season 13, by one fight after another that was already over or
+    // that it had answered): a monster it has helped against is never answered again, the caller must still be at it,
+    // and without a call only when it's close by
+    if (ready && hp >= 12 && !below && !b.phys.inWater && !["dig_in", "sleep", "go_home"].includes(this.skill)) {
       for (const [who, f] of FIGHTS) {
-        if (who === this.name || now - f.at > 45000) continue;
+        if (who === this.name || now - f.at > 30000 || (this.answered.get(f.id) ?? 0) > now) continue;
+        if (!/fight|charg|pillar|shoot|helping|going after|getting away/.test(BOARD.get(who)?.doing ?? "")) continue;
         const m = b.mobs.get(f.id);
-        if (!m || m.flags & MF.DEAD || Math.hypot(m.x - b.phys.x, m.z - b.phys.z) > 28 || left(m)) continue;
-        if (f.key === "rattler" && !strong && !bow) continue;
+        if (!m || m.flags & MF.DEAD) continue;
+        const d = Math.hypot(m.x - b.phys.x, m.z - b.phys.z);
+        if (d > (f.call ? 40 : 16) || (!f.call && now - this.lastHelp < 60000)) continue;
+        if (f.key === "rattler" && !armoured && !bow) continue;
+        this.answered.set(f.id, now + 300000);
+        this.lastHelp = now;
+        if (f.call && now - this.lastHelpReply > 60000) {
+          this.lastHelpReply = now;
+          const text = `coming, ${who}`;
+          b.send({ t: "chat", text });
+          this.emit("chat", { text });
+        }
         let res = "";
         await this.reflex(`helping ${who} with a ${f.key}`, async () => {
-          res = bow && f.key === "rattler" ? await b.duel({ kind: "mob", id: f.id }, 20000, 7) : await b.fight({ kind: "mob", id: f.id }, 20000, strong ? 5 : 8, 32);
-          return `${who} was fighting a ${f.key} near you, so you went to help (${res}).`;
+          res = bow && f.key === "rattler" && !armoured ? await b.duel({ kind: "mob", id: f.id }, 25000, 7) : await b.fight({ kind: "mob", id: f.id }, 25000, armoured ? 5 : 8, 44);
+          if (/dead or gone/.test(res) && !b.hostiles(8).length) await b.pickUp(5, 3000);
+          return `${who} was fighting a ${f.key}${f.call ? " and called for help" : " near you"}, so you went and fought it beside them (${res}).`;
         });
-        if (/ran out of time|couldn't get to it|out of reach|let it go/.test(res)) this.leftAlone.set(f.id, Date.now() + 60000);
         return true;
       }
     }
 
-    // ---- the hunt: armed with a real sword or axe and healthy, a shambler or a skitter near it out in the open: go and
-    // kill it (Laith: "they make swords but do not fight mobs"; they only fought what was already on them). Not an
-    // archer (that has its own rule above), not underground, not into a crowd, never at night without armour with
-    // company about, and never chased far from where it was
-    const armour = b.armor.reduce((n, s) => n + ((s && itemDef(s.id)?.armor?.points) || 0), 0);
-    const prey = melee.find((m) => m.d < 12 && !left(m));
-    if (prey && dmg >= 5 && hp >= 16 && !b.covered() && !b.phys.inWater && hostile.filter((m) => m.d < 16).length <= 2 && !(night && armour < 6 && hostile.length > 1) && now - this.lastHunt > 20000) {
+    // ---- the hunt: armed with a real weapon and fit, a walker or a crawler near it out in the open: go and kill it
+    // (Laith: "they make swords but do not fight mobs"). Armoured, an archer too. Not underground, not into a crowd,
+    // and never chased far from where it was
+    const prey = [...melee, ...(armoured ? archers : [])].filter((m) => m.d < 14 && !left(m) && reachable(m)).sort((p, q) => p.d - q.d)[0];
+    if (prey && ready && hp >= (armoured ? 12 : 16) && !b.covered() && !b.phys.inWater && hostile.filter((m) => m.d < 16).length <= (armoured ? 3 : 2) && now - this.lastHunt > 15000) {
       this.lastHunt = now;
       let res = "";
       await this.reflex(`going after a ${prey.key}`, async () => {
         this.fighting(prey);
-        res = await b.fight({ kind: "mob", id: prey.id }, 15000, strong ? 5 : 9, 16);
-        return `A ${prey.key} was ${Math.round(prey.d)} blocks away and you were armed and healthy, so you went after it (${res}).`;
+        res = await b.fight({ kind: "mob", id: prey.id }, 20000, armoured ? 6 : 9, 18);
+        if (/dead or gone/.test(res) && !b.hostiles(8).length) await b.pickUp(5, 3000);
+        return `A ${prey.key} was ${Math.round(prey.d)} blocks away and you were armed${armoured ? " and armoured" : ""}, so you went after it (${res}).`;
       });
       FIGHTS.delete(this.name);
       if (/ran out of time|couldn't get to it|out of reach|let it go/.test(res)) this.leftAlone.set(prey.id, Date.now() + 60000);
@@ -2123,42 +2111,25 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     return !SOLID[b.get(x, y + 2, z)] && !SOLID[b.get(x, y + 3, z)] && !SOLID[b.get(x, y + 4, z)];
   }
 
-  /** Out of a fight it can't win: home if it's near (a door between), else away from it. */
-  private async runFrom(h: Seen, why: string): Promise<string> {
+  /** Out of a fight it can't take: home if it's near and it's out in the open (a door between them), else a sprint to
+   *  a spot away from them and out of the archers' sight (body.runAway). Never a hole with monsters about. */
+  private async escape(from: (Seen & { d: number })[], why: string): Promise<string> {
     const b = this.body;
     if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 40) return `${why}, so you ran home: ${await b.goHome()}.`;
-    await b.flee(h.x, h.z, 140);
-    return `${why}, so you broke off and ran.`;
+    return `${why}, so you got away from them: ${await b.runAway(from)}.`;
   }
 
-  /** An archer it can't fight: a wall between them (it has to come round into reach), walled in if badly hurt, a hole
-   *  as the last resort (and never with a walker close: it follows into the hole). */
-  private async takeCover(r: Seen): Promise<string> {
-    const b = this.body;
-    // home close by: indoors is the best cover there is (and no dirt walls left standing about the town)
-    if (b.home && !b.atHome() && !b.covered() && Math.hypot(b.homeMiddle()[0] - b.phys.x, b.homeMiddle()[1] - b.phys.z) < 30) return `ran home: ${await b.goHome()}`;
-    if (b.fillerCount() >= 2 && (await b.coverFrom(r.x, r.z))) {
-      if (b.stats.hp < 8 && b.canWallOff()) return `walled itself off from the rattler: ${await b.wallOff()}`;
-      return "put a wall up between you and the rattler (it has to come round it, into reach, to shoot)";
-    }
-    // no wall: out of its range at a run (its arrows go where you were, not where you're going: a runner is hard to
-    // hit). Never a hole with it shooting: digging in is seconds of standing still, and every arrow knocks you back
-    // out of the hole (Laith: "the digging in is too slow"; opus died digging in from a rattler with a shambler on it).
-    // Right up close with a weapon, finishing it is quicker than running
-    if (Math.hypot(r.x - b.phys.x, r.z - b.phys.z) < 3.5 && b.bestWeapon()) return `it was right there, so you fought it (${await b.fight({ kind: "mob", id: r.id }, 12000, 6)})`;
-    await b.flee(r.x, r.z, 120);
-    return "ran out of its range";
-  }
-
-  /** Telling the pack which monster it's fighting (a fight the others can join). */
+  /** Telling the pack which monster it's fighting (a fight the others can join), and whether it called for help. */
   private fighting(m: Seen & { key: string }): void {
-    FIGHTS.set(this.name, { id: m.id, key: m.key, x: m.x, z: m.z, at: Date.now() });
+    const was = FIGHTS.get(this.name);
+    FIGHTS.set(this.name, { id: m.id, key: m.key, x: m.x, z: m.z, at: Date.now(), call: !!was?.call && was.id === m.id });
   }
 
   /** A shout for help when it's outnumbered or hurt, with another of the pack near enough to come (at most once a
-   *  minute and a half). */
-  private callForHelp(what: string): void {
+   *  minute and a half): the fight it's in is marked as a call, which the others answer from further off. */
+  private callForHelp(what: string, m?: Seen & { key: string }): void {
     const b = this.body;
+    if (m) FIGHTS.set(this.name, { id: m.id, key: m.key, x: m.x, z: m.z, at: Date.now(), call: true });
     if (Date.now() - this.lastHelpCall < 90000) return;
     const near = [...b.others.values()].some((o) => !(o.flags & FLAG.DEAD) && Math.hypot(o.x - b.phys.x, o.z - b.phys.z) < 48);
     if (!near) return;
@@ -2173,6 +2144,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   private async whileThinking(): Promise<void> {
     const b = this.body;
     b.halt();
+    // v14: a moment to put its inventory in order (a player sorts while thinking): hotbar out of place and nothing about
+    if (Date.now() - this.lastSort > 60000 && !b.hostiles(16).length && !b.phys.inWater && messiness(b) >= 2) {
+      this.lastSort = Date.now();
+      const r = await this.exclusive(() => organize(b));
+      this.log.push(r);
+    }
     let k = 0;
     while (this.thinking && !this.reflexing && !b.dead && !b.closed) {
       if (k % 14 === 0) {

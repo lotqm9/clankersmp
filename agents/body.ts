@@ -459,10 +459,12 @@ export class Body {
     if (this.inv.length - used() >= free) return "";
     // least useful first, and how many of each to keep
     const order: [RegExp, number][] = [
-      [/^rotten_flesh$|^poppy$|^dandelion$|flower|tulip|orchid|allium|bluet|daisy|^tall_grass$|^dead_bush$|_leaves$/, 0],
+      [/^spoiled_flesh$|^poppy$|^dandelion$|^bluebell$|flower|^tall_grass$|_leaves$/, 0],
       [/_sapling$/, 0],
-      [/^gravel$|^flint$/, 0],
-      [/^bone$|^string$|^feather$|^spider_eye$/, 0],
+      [/^gravel$/, 0],
+      // (v14: a few kept: string makes a bow, flint and feathers arrows, bones bone meal)
+      [/^flint$|^feather$/, 16],
+      [/^string$|^bone$/, 8],
       [/^sand$/, 0],
       [/^dirt$/, 32],
       [/^wheat_seeds$/, 16],
@@ -951,6 +953,12 @@ export class Body {
       return true;
     }
     if (!this.has(id)) return false;
+    // v14: into the spare place on the hotbar (8), so the weapon, the tools, the food and the blocks keep theirs
+    if (this.sel !== 8) {
+      this.sel = 8;
+      this.send({ t: "sel", s: 8 });
+      await this.nextTick();
+    }
     this.send({ t: "hold", id });
     for (let t = 0; t < 20 && this.heldId() !== id; t++) await this.nextTick();
     return this.heldId() === id;
@@ -1522,6 +1530,87 @@ export class Body {
     return false;
   }
 
+  private strafeDir = 1;
+  private strafeUntil = 0;
+
+  /** One tick of circling (x, z) sideways with its eyes on it, switching sides now and then or when the way is
+   *  blocked: what a fighter does while the weapon recharges, out of the other's reach. False if neither side is safe. */
+  strafeStep(x: number, z: number): boolean {
+    if (this.tick >= this.strafeUntil) {
+      this.strafeUntil = this.tick + 18 + Math.floor(Math.random() * 22);
+      if (Math.random() < 0.6) this.strafeDir = -this.strafeDir;
+    }
+    const at = (deg(Math.atan2(-(x - this.phys.x), z - this.phys.z)) + 360) % 360;
+    for (const dir of [this.strafeDir, -this.strafeDir]) {
+      // strafe +1 is to its left (A), 90 degrees from where it faces
+      if (!this.safeStep((at + (dir > 0 ? -90 : 90) + 360) % 360)) continue;
+      this.strafeDir = dir;
+      this.input.yaw = at;
+      this.input.forward = 0;
+      this.input.strafe = dir * 0.7;
+      this.input.sprint = false;
+      this.input.jump = false;
+      return true;
+    }
+    return false;
+  }
+
+  /** Away from a fight it can't take, the way a player gets out of one: at a sprint, to a spot well away from all of
+   *  them and (when there's one) out of every archer's sight, by a real path; again from there if they keep coming.
+   *  Never into water or off a drop. What it did. */
+  async runAway(threats: { x: number; y: number; z: number; kind: number }[], maxMs = 12000): Promise<string> {
+    const t0 = Date.now();
+    let legs = 0;
+    while (!this.abort && !this.dead && Date.now() - t0 < maxMs && legs < 3) {
+      const near = threats.map((m) => this.mobs.get((m as { id?: number }).id ?? -1) ?? m).filter((m) => Math.hypot(m.x - this.phys.x, m.z - this.phys.z) < 18);
+      if (!near.length) break;
+      const fy = Math.floor(this.phys.y + 0.1);
+      let best: [number, number, number] | null = null;
+      let bestScore = -Infinity;
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        for (const r of [10, 15]) {
+          const x = Math.floor(this.phys.x + Math.cos(a) * r);
+          const z = Math.floor(this.phys.z + Math.sin(a) * r);
+          // ground near its own height, dry, room to stand
+          let y = -1;
+          for (let dy = 3; dy >= -3; dy--) {
+            const yy = fy + dy;
+            if (SOLID[this.get(x, yy - 1, z)] && !IS_WATER[this.get(x, yy - 1, z)] && !SOLID[this.get(x, yy, z)] && !SOLID[this.get(x, yy + 1, z)] && !IS_WATER[this.get(x, yy, z)]) {
+              y = yy;
+              break;
+            }
+          }
+          if (y < 0 || this.waterNear(x, y, z, 1, 1)) continue;
+          // away from all of them (never past one), and out of the archers' sight
+          let score = Math.min(...near.map((m) => Math.hypot(m.x - x, m.z - z)));
+          const toward = near.some((m) => (m.x - this.phys.x) * (x - this.phys.x) + (m.z - this.phys.z) * (z - this.phys.z) > 0.2 * Math.hypot(m.x - this.phys.x, m.z - this.phys.z) * r);
+          if (toward) score -= 12;
+          for (const m of near) {
+            if (MOB_SPECS[m.kind]?.key !== "rattler") continue;
+            const h = MOB_SPECS[m.kind]?.h ?? 1.99;
+            if (this.clearSight(m.x, m.y + h * 0.85, m.z, x + 0.5, y + EYE_HEIGHT, z + 0.5)) score -= 6;
+          }
+          score -= Math.abs(y - fy) * 1.5;
+          if (score > bestScore) {
+            bestScore = score;
+            best = [x, y, z];
+          }
+        }
+      }
+      if (!best) break;
+      legs++;
+      const [x, y, z] = best;
+      await this.goto(x + 0.5, y, z + 0.5, 1.5, { maxMs: 6000 });
+    }
+    this.halt();
+    const still = threats.filter((m) => {
+      const q = this.mobs.get((m as { id?: number }).id ?? -1) ?? m;
+      return Math.hypot(q.x - this.phys.x, q.z - this.phys.z) < 10;
+    }).length;
+    return still ? `ran, but ${still} of them kept up` : "got away from them";
+  }
+
   /** Fight something until it is dead or gone, it gets away, or time runs out. v13, the way a good player does it:
    *  - a charged swing only (a spammed one does a fifth), at arm's length (3 blocks to its box);
    *  - from a few blocks out it sprints in, and the sprinting hit knocks the monster well back;
@@ -1607,9 +1696,16 @@ export class Body {
       };
       // backing off or running (an archer keeps its distance, and every hit knocks it further): chase it at a sprint
       const fleeing = archer || toward < -0.02;
-      if (theirs && since < cool - 3 && dh < theirs + 1.2) {
-        // recharging inside its reach: back off a step, facing it
-        if (!this.retreatStep(p.x, p.z)) this.halt();
+      // the other walkers and crawlers about: any of them can land a hit while it deals with this one
+      const crowd = t.kind === "mob" ? this.hostiles(7).filter((m) => m.id !== t.id && m.key !== "rattler") : [];
+      const inTheirReach = crowd.filter((m) => Math.hypot(m.x - this.phys.x, m.z - this.phys.z) < Math.sqrt(meleeReachSq(MOB_SPECS[m.kind]?.w ?? 0.6)) + 1.2);
+      if (since < cool - 3 && (inTheirReach.length || (theirs && dh < theirs + 1.2))) {
+        // recharging inside the reach of it (or of another one): back off a step from all of them, facing it
+        const from = [...inTheirReach, ...(theirs && dh < theirs + 1.2 ? [p] : [])];
+        if (!this.retreatStep(from.reduce((a, m) => a + m.x, 0) / from.length, from.reduce((a, m) => a + m.z, 0) / from.length)) this.halt();
+      } else if (theirs && since < cool - 3) {
+        // recharging out of its reach: circle it, side to side, eyes on it (a fighter never stands still)
+        if (!this.strafeStep(p.x, p.z)) this.halt();
       } else if (d > HIT_REACH - 0.25 && (since >= cool - 3 || !theirs)) {
         if (coming && d < 6) {
           // charged and it's on its way: stand and meet it; a jump as it comes into reach, so the swing lands on the
@@ -1622,6 +1718,8 @@ export class Body {
           // throw it six blocks off, out of reach again)
           this.steer(p.x, p.z, p.y, 0);
           this.input.sprint = this.stats.food > 6 && !this.phys.inWater;
+          // an archer's arrows go where you are, not where you're going: weave a little on the way in
+          if (archer && d > 4.8 && this.phys.onGround) this.input.strafe = Math.sin(this.tick / 5) > 0 ? 0.65 : -0.65;
           if (d < 4.8) critJump(true);
           if (air && this.phys.vy < 0 && d < 3.8) {
             this.input.sprint = false;
@@ -1639,7 +1737,21 @@ export class Body {
       } else this.halt();
       this.look(p.x, p.y + p.h * 0.6, p.z);
       const facing = Math.abs(angleDiff(this.wantYaw, this.yaw)) < 30;
-      if (d <= HIT_REACH && ready && facing) {
+      // charged with another one closer and in reach: that one gets the swing (whatever is about to hit it first)
+      // (its eyes stay on that one while it's the nearer threat, so they don't flick back and forth)
+      const closer = crowd.find((m) => {
+        const q = this.targetPos({ kind: "mob", id: m.id });
+        return !!q && this.boxDist(q) <= HIT_REACH && this.boxDist(q) < d - 0.4;
+      });
+      if (closer) {
+        const q = this.targetPos({ kind: "mob", id: closer.id })!;
+        this.look(q.x, q.y + q.h * 0.6, q.z);
+        if (ready && Math.abs(angleDiff(this.wantYaw, this.yaw)) < 30 && !(air && this.phys.vy > 0.01)) {
+          this.send({ t: "hit", id: closer.id, mob: true });
+          this.swing();
+          hits++;
+        }
+      } else if (d <= HIT_REACH && ready && facing) {
         // a jump on its way up: hold the swing for the fall (half as much again), unless it's about to land a hit
         const rising = air && this.phys.vy > 0.01;
         if (!rising || (theirs && dh < theirs + 0.5)) {

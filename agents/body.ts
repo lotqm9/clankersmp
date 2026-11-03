@@ -671,26 +671,78 @@ export class Body {
 
   // ---------------------------------------------------------------- walking
 
-  /** Steer the legs toward (x, z): turn first, then walk; jump up steps, sprint on long straight runs. */
-  private steer(x: number, z: number, floorY: number, far: number): void {
+  /** Steer the legs toward (x, z): turn first, then walk; jump up steps, sprint on long straight runs. Within half a
+   *  block of the point it only steps over to it, the eyes held where they are: the way to a point that close swings
+   *  right round with every step, and aimed at the spot under its own feet it walked in circles round it (900 degrees
+   *  in under three seconds, live, season 13). */
+  private steer(x: number, z: number, floorY: number, far: number, lookX = x, lookZ = z): void {
     const dx = x - this.phys.x;
     const dz = z - this.phys.z;
     const yaw = (deg(Math.atan2(-dx, dz)) + 360) % 360;
-    this.wantYaw = yaw;
-    this.wantPitch = clamp(this.wantPitch * 0.9 + 12 * 0.1, -30, 40); // eyes a little down, at the ground ahead
-    const off = Math.abs(angleDiff(yaw, this.yaw));
-    this.input.yaw = this.yaw;
-    this.input.forward = off < 80 ? 1 : off < 120 ? 0.35 : 0; // walk on through a turn, like a player curving round
-    this.input.strafe = 0;
     const d = Math.hypot(dx, dz);
+    this.wantPitch = clamp(this.wantPitch * 0.9 + 12 * 0.1, -30, 40); // eyes a little down, at the ground ahead
+    if (d < 0.5) {
+      this.input.yaw = yaw;
+      this.input.forward = Math.min(1, d * 2.5);
+      this.input.strafe = 0;
+      this.input.sprint = false;
+      this.input.jump = floorY - this.phys.y > 0.55 || (this.phys.collidedH && this.phys.onGround && this.stepAhead()) || this.phys.inWater;
+      if (!this.phys.inWater && (this.waterAhead() || this.dropAhead() > (this.stats.hp <= 6 ? 1 : 3))) this.input.forward = 0;
+      return;
+    }
+    // the eyes on the way ahead (`look`, a few nodes on), never more than 45 degrees off where the feet are going: up
+    // a step or round a zigzag they don't swing from block to block. The feet go straight at the spot while that is
+    // within 60 degrees of where it's looking; further round, it turns first and walks on through the turn
+    const ld = Math.hypot(lookX - this.phys.x, lookZ - this.phys.z);
+    const lyaw = ld > 1 ? (deg(Math.atan2(-(lookX - this.phys.x), lookZ - this.phys.z)) + 360) % 360 : yaw;
+    const lead = clamp(angleDiff(lyaw, yaw), -45, 45);
+    this.wantYaw = (yaw + lead + 360) % 360;
+    const off = Math.abs(angleDiff(yaw, this.yaw));
+    if (off < 60) {
+      this.input.yaw = yaw;
+      this.input.forward = 1;
+    } else {
+      this.input.yaw = this.yaw;
+      this.input.forward = off < 80 ? 1 : off < 120 ? 0.35 : 0; // walk on through a turn, like a player curving round
+    }
+    this.input.strafe = 0;
     this.input.jump = (floorY - this.phys.y > 0.55 && d < 1.8) || (this.phys.collidedH && this.phys.onGround && this.stepAhead()) || this.phys.inWater;
-    this.input.sprint = far > 7 && off < 20 && this.stats.food > 6 && !this.phys.inWater;
+    this.input.sprint = far > 7 && off < 20 && Math.abs(lead) < 20 && this.stats.food > 6 && !this.phys.inWater;
     // on dry land it never walks into water (ponds with steep banks are traps): only a swimmer swims; and never off a
     // ledge higher than it can take (a fall of more than 3 blocks hurts, and on low health any fall can kill)
     if (!this.phys.inWater && (this.waterAhead() || this.dropAhead() > (this.stats.hp <= 6 ? 1 : 3))) {
       this.input.forward = 0;
       this.input.sprint = false;
     }
+  }
+
+  /** Small steps over to a point close by, the eyes held where they are, the way a player sidesteps or settles onto a
+   *  spot without turning round. Never into water or off a ledge it can't take. True if it got there or nearer. */
+  private async shuffle(x: number, z: number, ticks: number, done?: () => boolean): Promise<boolean> {
+    const from = Math.hypot(x - this.phys.x, z - this.phys.z);
+    let closest = from;
+    let still = 0;
+    for (let k = 0; k < ticks && !this.abort && !this.dead && !done?.(); k++) {
+      const dx = x - this.phys.x;
+      const dz = z - this.phys.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.1) break;
+      // pressed against something: no use pushing on
+      if (d < closest - 0.02) {
+        closest = d;
+        still = 0;
+      } else if (++still > 6) break;
+      this.input.yaw = (deg(Math.atan2(-dx, dz)) + 360) % 360;
+      this.input.forward = Math.min(1, d * 2.5);
+      this.input.strafe = 0;
+      this.input.sprint = false;
+      this.input.sneak = false;
+      this.input.jump = this.phys.collidedH && this.phys.onGround && this.stepAhead();
+      if (!this.phys.inWater && (this.waterAhead() || this.dropAhead() > (this.stats.hp <= 6 ? 1 : 3))) this.input.forward = 0;
+      await this.nextTick();
+    }
+    this.halt();
+    return !!done?.() || Math.hypot(x - this.phys.x, z - this.phys.z) < from - 0.1;
   }
 
   /** A one-block step just ahead (a block at its feet with room for the body above it): the only bump worth a jump.
@@ -736,7 +788,9 @@ export class Body {
     return false;
   }
 
-  private plan(x: number, y: number, z: number): PathPoint[] | null {
+  /** The way toward a point: the path (empty when it is already as near as it can walk), and whether it is shut in (a
+   *  pit, a sealed hole: the search found next to nowhere to go). Null when it isn't standing anywhere. */
+  private plan(x: number, y: number, z: number): { path: PathPoint[]; boxed: boolean } | null {
     // around water, not through it (a swim is slow and ends in flooded holes), unless it's already swimming
     // room to find the way round a ridge or a ravine on a long walk home (5000 nodes in 40 blocks gave up at 38 out)
     const far = Math.hypot(x - this.phys.x, z - this.phys.z) > 24;
@@ -747,7 +801,7 @@ export class Body {
     const s = this.pf.search(this.phys.x, this.phys.y, this.phys.z, { hw: 0.3, h: 1.8, maxNodes: far ? 14000 : 5000, radius: far ? 64 : 40, water: this.phys.inWater, aim: true }, { x: Math.floor(x), z: Math.floor(z), y: gy });
     if (!s) return null;
     const i = s.reached >= 0 ? s.reached : s.closestTo(x, z, gy);
-    return s.pathTo(i);
+    return { path: s.pathTo(i), boxed: s.pts.length < 8 };
   }
 
   /** Walk to within `range` of a point (or until `done()`), replanning as it goes. False if it couldn't. */
@@ -758,6 +812,9 @@ export class Body {
     let best = Infinity;
     let fails = 0;
     let unstuck = false;
+    let pushes = 0;
+    let dugOut = false;
+    let climbs = 0;
     // setting off from inside its own house: open the doorway first (blocked up for the night, or a shut door), or
     // every way out is a wall it won't dig through
     if (this.home && this.atHome() && Math.hypot(x - this.homeMiddle()[0], z - this.homeMiddle()[1]) > 1.5) await this.openDoorway();
@@ -768,25 +825,65 @@ export class Body {
         best = d;
         fails = 0;
       } else if (++fails > 3) {
-        // the same spot four times over: shake loose once (dig through, step round, climb out), then give up
-        if (unstuck) break;
+        // the same spot four times over: shake loose once (dig through, step round, climb out), then give up (never
+        // out of its sealed hole at night)
+        if (unstuck || (this.isNight() && this.sealed())) break;
         unstuck = true;
         fails = 0;
         // shut in by a closed door (haiku slept in a village house's bed and couldn't get out in the morning): open it
         if (await this.openNearbyDoors()) continue;
         await this.nudge(x, z);
-        await this.unstick();
+        await this.unstick(x, z);
         continue;
       }
       // the path search only starts from somewhere it can stand: out of the water first
-      if (this.phys.inWater && !this.plan(x, y, z)?.length) await this.escapeWater(200);
-      const path = this.plan(x, y, z);
-      if (!path || !path.length) {
-        // nowhere to stand (mid-air, swimming) or boxed in: push straight at it for a moment
-        if (!(await this.walkStraight(x, z, 30, arrived))) await this.unstick();
+      if (this.phys.inWater && !this.plan(x, y, z)?.path.length) await this.escapeWater(200);
+      const p = this.plan(x, y, z);
+      if (!p) {
+        // nowhere to stand (mid-air, swimming): push straight at it for a moment, and shake loose only if that got it
+        // nowhere, never because it got there (it arrived on a stair, then jumped round in all four directions)
+        if (!(await this.walkStraight(x, z, 30, arrived)) && !arrived()) await this.unstick(x, z);
         continue;
       }
-      await this.follow(path, x, z, arrived);
+      if (p.path.length) {
+        await this.follow(p.path, x, z, arrived);
+        continue;
+      }
+      // no step to take: it's as near as it can walk. The last bit (the point is in its cell or the next): small steps
+      // over to it (a path ends at a block's middle, and a goal a little off it was "not there yet", every time)
+      if (d < 2.5 && (await this.shuffle(x, z, 30, arrived))) continue;
+      // under the ground, and where it's going is a place up on it: no way there through the tunnel or the cave, so up
+      // and out first rather than pace the rock (opus paced its hole for a minute and a half on its way home, twice).
+      // By day only (out of its hole at night is where the archers are), never up through a building's floor, and
+      // not for a block it's after (ore in the rock is the tunnel's job, not a walk to the surface)
+      if (!dugOut && !this.outing && !this.isNight() && y - this.phys.y > 4 && d > 4 && this.standable(x, y, z) && this.underRock()) {
+        dugOut = true;
+        await this.digOut();
+        continue;
+      }
+      // shut in: a door first; out of its own night hole or the pocket it walled itself into the way it came, up (the
+      // roof off, a block or two under its feet, a step cut where it has to: digOut), by day only: at night it stays
+      // shut in, and the caller hears it couldn't go (a crafting table outside its hole had it pillar out into the
+      // dark). Anything else: a hop out of the corner it's in
+      if (p.boxed && climbs++ < 3) {
+        if (await this.openNearbyDoors()) continue;
+        if (this.sealed()) {
+          if (this.isNight() || dugOut || this.outing) break;
+          dugOut = true;
+          await this.digOut();
+          continue;
+        }
+        await this.unstick(x, z);
+        continue;
+      }
+      // the rest of the way is through something: a door to open, or soft ground to dig through (a block or three, a
+      // bush, a bank). Otherwise that's as near as it gets: a step aside is no use once the path search has found no
+      // way round. (It used to push straight at it and jump round in all four directions, eight or nine times over,
+      // before giving up: spinning on the spot at the foot of a tree, at a shut house, at a tunnel's end.)
+      if (pushes++ >= 3) break;
+      if ((await this.openNearbyDoors()) || (await this.nudge(x, z, false))) continue;
+      // nothing to open or dig: a moment, then look again (a door it has just opened may not show open yet)
+      await this.wait(6);
     }
     this.halt();
     return arrived();
@@ -796,24 +893,16 @@ export class Body {
    *  dry stretch), so it runs in smooth lines and curves instead of hopping from block to block; nodes that need a
    *  jump or a drop are taken one at a time. */
   private async follow(path: PathPoint[], gx: number, gz: number, arrived: () => boolean): Promise<void> {
+    // the path's length from each node to its end: progress is how much of it is left, not how near the next node is
+    const rest: number[] = new Array(path.length).fill(0);
+    for (let k = path.length - 2; k >= 0; k--) rest[k] = rest[k + 1] + Math.hypot(path[k + 1].x - path[k].x, path[k + 1].z - path[k].z);
     let i = 0;
     let best = Infinity;
     let since = this.tick;
     let nudges = 0;
     while (i < path.length) {
       if (this.abort || this.dead || arrived()) return;
-      // past the nodes it has reached (or walked by)
-      while (i < path.length) {
-        const n = path[i];
-        const d = Math.hypot(n.x + 0.5 - this.phys.x, n.z + 0.5 - this.phys.z);
-        const nn = path[i + 1];
-        const nearer = nn && Math.hypot(nn.x + 0.5 - this.phys.x, nn.z + 0.5 - this.phys.z) < d && Math.abs(nn.f - n.f) < 0.6;
-        if ((d < 0.55 && this.phys.y > n.f - 0.6) || (nearer && d < 1.4)) {
-          i++;
-          best = Infinity;
-          since = this.tick;
-        } else break;
-      }
+      i = this.passed(path, i);
       if (i >= path.length) break;
       // look ahead along a level stretch for the farthest node in a clear straight line
       let j = i;
@@ -822,11 +911,15 @@ export class Body {
         j = k;
       }
       const t = path[j];
-      const di = Math.hypot(path[i].x + 0.5 - this.phys.x, path[i].z + 0.5 - this.phys.z);
-      this.steer(t.x + 0.5, t.z + 0.5, path[i].f, Math.hypot(gx - this.phys.x, gz - this.phys.z));
-      // stuck on the node it's working toward: let the caller replan
-      if (di < best - 0.05) {
-        best = di;
+      // the path's last node holds the goal itself: straight to the point, not to the block's middle and then over
+      const end = j === path.length - 1 && Math.floor(gx) === t.x && Math.floor(gz) === t.z;
+      // and the eyes a few nodes on, where the path is going
+      const ahead = path[Math.min(path.length - 1, Math.max(j, i + 3))];
+      this.steer(end ? gx : t.x + 0.5, end ? gz : t.z + 0.5, path[i].f, Math.hypot(gx - this.phys.x, gz - this.phys.z), ahead.x + 0.5, ahead.z + 0.5);
+      // stuck: no nearer the end of the path for over a second
+      const togo = Math.hypot(path[i].x + 0.5 - this.phys.x, path[i].z + 0.5 - this.phys.z) + rest[i];
+      if (togo < best - 0.05) {
+        best = togo;
         since = this.tick;
       } else if (this.tick - since > 24) {
         // up against something: dig through soft blocks or step round, then carry on along the same path
@@ -839,6 +932,44 @@ export class Body {
         return;
       }
       await this.nextTick();
+    }
+  }
+
+  /** The first node of a path it hasn't passed yet: one it reached (within half a block, on its level), walked by (the
+   *  next one is nearer and this one close) or cut past (a later node on its own level is nearer than this one, close
+   *  by, with nothing in between). Looking ahead it heads for the farthest node it can walk straight to, so it cuts
+   *  corners; a node it cut past a block and a half off never counted as reached, and it went on measuring itself
+   *  against that node behind it. Walking on looked like no progress (so it stepped aside), and it looked ahead from
+   *  that node: with the straight line back to the node after it blocked by a house, it turned round and walked back
+   *  to it, then forward again (back and forth on Mossford's road, live), and at the end of the path it circled the
+   *  last node standing on it. */
+  private passed(path: PathPoint[], i: number): number {
+    const px = this.phys.x;
+    const pz = this.phys.z;
+    const py = this.phys.y;
+    for (;;) {
+      while (i < path.length) {
+        const n = path[i];
+        const d = Math.hypot(n.x + 0.5 - px, n.z + 0.5 - pz);
+        const nn = path[i + 1];
+        const nearer = nn && Math.hypot(nn.x + 0.5 - px, nn.z + 0.5 - pz) < d && Math.abs(nn.f - n.f) < 0.6;
+        if ((d < 0.55 && py > n.f - 0.6) || (nearer && d < 1.4)) i++;
+        else break;
+      }
+      if (i >= path.length) return i;
+      let k = -1;
+      let dk = Math.min(1.3, Math.hypot(path[i].x + 0.5 - px, path[i].z + 0.5 - pz));
+      for (let m = i + 1; m < Math.min(path.length, i + 8); m++) {
+        const n = path[m];
+        if (Math.abs(n.f - py) > 0.6) continue; // up or down a step it hasn't taken yet
+        const d = Math.hypot(n.x + 0.5 - px, n.z + 0.5 - pz);
+        if (d < dk && this.clearLine(n.x + 0.5, n.z + 0.5, n.f)) {
+          dk = d;
+          k = m;
+        }
+      }
+      if (k < 0) return i;
+      i = k;
     }
   }
 
@@ -874,9 +1005,9 @@ export class Body {
   }
 
   /** Blocked on the way to (tx, tz): dig through what's in the way if it's quick to break (leaves, dirt, sand, wood,
-   *  stone with a pickaxe), the way a player does; otherwise back off a step and slide to the side with room. True if
-   *  it changed something. */
-  private async nudge(tx: number, tz: number): Promise<boolean> {
+   *  stone with a pickaxe), the way a player does; otherwise (`aside`) back off a step and slide to the side with
+   *  room. True if it changed something. */
+  private async nudge(tx: number, tz: number, aside = true): Promise<boolean> {
     const dx = tx - this.phys.x;
     const dz = tz - this.phys.z;
     const d = Math.hypot(dx, dz) || 1;
@@ -895,37 +1026,78 @@ export class Body {
         if (t >= 0 && t <= 40 && (await this.mine(cx, y, cz, false))) dug = true;
       }
     }
-    if (dug) return true;
-    // back off and slide sideways, toward whichever side has room for a body
+    if (dug || !aside) return dug;
+    // back off and step aside, toward whichever side has room for a body: the side it stepped to last time first (a
+    // player going round something keeps to one side; picked at random each time, it stepped left, then right, then
+    // left), and a sidestep with its eyes kept ahead (turning round to walk there swung its head 150 degrees each way)
     const free = (x: number, z: number) => !SOLID[this.get(Math.floor(x), fy, Math.floor(z))] && !SOLID[this.get(Math.floor(x), fy + 1, Math.floor(z))] && SOLID[this.get(Math.floor(x), fy - 1, Math.floor(z))] === 1;
     const sides: [number, number][] = [[-uz, ux], [uz, -ux]];
-    sides.sort(() => Math.random() - 0.5);
+    const first = Date.now() - this.sideAt < 8000 ? this.side : Math.random() < 0.5 ? 0 : 1;
     const x0 = this.phys.x;
     const z0 = this.phys.z;
-    for (const [px, pz] of sides) {
-      const sx = x0 - ux * 0.7 + px * 1.2;
-      const sz = z0 - uz * 0.7 + pz * 1.2;
+    for (const s of [first, 1 - first]) {
+      const sx = x0 - ux * 0.7 + sides[s][0] * 1.2;
+      const sz = z0 - uz * 0.7 + sides[s][1] * 1.2;
       if (!free(sx, sz)) continue;
-      await this.walkStraight(sx, sz, 16, () => Math.hypot(sx - this.phys.x, sz - this.phys.z) < 0.4);
-      if (Math.hypot(this.phys.x - x0, this.phys.z - z0) > 0.6) return true;
+      await this.shuffle(sx, sz, 16, () => Math.hypot(sx - this.phys.x, sz - this.phys.z) < 0.4);
+      if (Math.hypot(this.phys.x - x0, this.phys.z - z0) > 0.6) {
+        this.side = s;
+        this.sideAt = Date.now();
+        return true;
+      }
     }
     return false;
   }
 
-  /** Out of a hole or a corner: jump around, else build up under itself. */
-  async unstick(): Promise<void> {
-    for (const a of [0, 90, 180, 270]) {
-      if (this.abort || this.dead) return;
-      const x = this.phys.x;
-      const z = this.phys.z;
-      this.input.yaw = this.wantYaw = (this.yaw + a) % 360;
-      this.input.forward = 1;
-      this.input.jump = true;
-      await this.wait(12);
-      this.halt();
-      if (Math.hypot(this.phys.x - x, this.phys.z - z) > 1.2) return;
+  /** The side nudge last stepped to (0 or 1), and when. */
+  private side = 0;
+  private sideAt = 0;
+
+  /** Out of a pit or a corner it's caught in. In a pit (walls all round at head height): build up out of it. Otherwise
+   *  a hop the one way there's room to stand, the way nearest where it's going. (It used to turn through all four
+   *  sides in turn with a jump each, whatever was there: from outside, spinning on the spot, and over and over, at the
+   *  foot of every tree it cut and on every stair of a staircase. The path search had already found no way to walk.) */
+  async unstick(tx?: number, tz?: number): Promise<void> {
+    if (this.abort || this.dead) return;
+    if (this.inHole()) {
+      // a block at a time, no higher than it takes: four up whatever the pit left it on a pole over a pocket two high,
+      // with a drop on every side it won't take
+      for (let k = 0; k < 5 && this.inHole() && !this.abort && !this.dead; k++) if ((await this.pillarUp(1)) < 1) break;
+      return;
     }
-    if (this.inHole()) await this.pillarUp(4);
+    const x = Math.floor(this.phys.x);
+    const y = Math.floor(this.phys.y + 0.1);
+    const z = Math.floor(this.phys.z);
+    const room = (cx: number, cy: number, cz: number) => !SOLID[this.get(cx, cy, cz)] && !IS_WATER[this.get(cx, cy, cz)];
+    const toward = tx !== undefined && tz !== undefined && Math.hypot(tx - this.phys.x, tz - this.phys.z) > 0.3 ? (deg(Math.atan2(-(tx - this.phys.x), tz - this.phys.z)) + 360) % 360 : this.yaw;
+    const ways: { yaw: number; off: number; up: boolean }[] = [];
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const cx = x + dx;
+      const cz = z + dz;
+      // across a corner only with room on both sides of it
+      if (dx && dz && !(room(cx, y, z) && room(cx, y + 1, z) && room(x, y, cz) && room(x, y + 1, cz))) continue;
+      // level (or a step down) with room for its body, or a step up with room over it and over its own head
+      const level = room(cx, y, cz) && room(cx, y + 1, cz) && (SOLID[this.get(cx, y - 1, cz)] === 1 || SOLID[this.get(cx, y - 2, cz)] === 1);
+      const up = !(dx && dz) && SOLID[this.get(cx, y, cz)] === 1 && room(cx, y + 1, cz) && room(cx, y + 2, cz) && room(x, y + 2, z);
+      if (!level && !up) continue;
+      const yaw = (deg(Math.atan2(-dx, dz)) + 360) % 360;
+      ways.push({ yaw, off: Math.abs(angleDiff(yaw, toward)), up });
+    }
+    ways.sort((a, b) => a.off - b.off);
+    for (const w of ways.slice(0, 2)) {
+      if (this.abort || this.dead) return;
+      const x0 = this.phys.x;
+      const z0 = this.phys.z;
+      this.wantYaw = w.yaw;
+      for (let t = 0; t < 14 && !this.abort && !this.dead && Math.hypot(this.phys.x - x0, this.phys.z - z0) < 1; t++) {
+        this.input.yaw = w.yaw;
+        this.input.forward = 1;
+        this.input.jump = w.up || (this.phys.collidedH && this.phys.onGround);
+        await this.nextTick();
+      }
+      this.halt();
+      if (Math.hypot(this.phys.x - x0, this.phys.z - z0) > 0.8) return;
+    }
   }
 
   /** Walls all round at head height: a pit. */
@@ -2207,6 +2379,19 @@ export class Body {
   /** Back to the surface, wherever it is underground: out of the pit it is in, then a staircase dug up through the
    *  rock in a straight line, one step at a time, until there is open sky over its head. */
   async digOut(): Promise<string> {
+    if (this.outing) return "already on its way up";
+    this.outing = true;
+    try {
+      return await this.climbToSky();
+    } finally {
+      this.outing = false;
+    }
+  }
+
+  /** Climbing out to the sky (digOut): the walks it takes on the way never set off another climb out. */
+  private outing = false;
+
+  private async climbToSky(): Promise<string> {
     const startY = this.phys.y;
     // caves usually lead somewhere higher: walk up them first, as far as they go
     for (let k = 0; k < 6 && !this.abort && !this.dead && !this.outInTheOpen(); k++) if (!(await this.walkUp())) break;
@@ -2316,6 +2501,27 @@ export class Body {
       if (SOLID[id] && id !== B.OAK_LEAVES && id !== B.BIRCH_LEAVES && id !== B.PALM_LEAVES) return false;
     }
     return true;
+  }
+
+  /** A spot a body can stand at: room for it, something under it. */
+  standable(x: number, y: number, z: number): boolean {
+    if (!Number.isFinite(y)) return false;
+    const fx = Math.floor(x);
+    const fy = Math.floor(y + 0.1);
+    const fz = Math.floor(z);
+    return !SOLID[this.get(fx, fy, fz)] && !SOLID[this.get(fx, fy + 1, fz)] && SOLID[this.get(fx, fy - 1, fz)] === 1;
+  }
+
+  /** Under the ground: the first solid block over its head is natural ground or rock (not a roof or a floor somebody
+   *  built, not a tree's leaves). */
+  underRock(): boolean {
+    const x = Math.floor(this.phys.x);
+    const z = Math.floor(this.phys.z);
+    for (let y = Math.floor(this.phys.y + 0.1) + 2; y < 128; y++) {
+      const id = this.get(x, y, z);
+      if (SOLID[id]) return GROUND.has(id) || !!BLOCKS[id]?.key?.endsWith("_ore");
+    }
+    return false;
   }
 
   /** Open sky over a cell: nothing solid above it but a tree's leaves and trunk. */
@@ -2750,9 +2956,15 @@ export class Body {
     if (caveAt) this.debug(`stairMine: broke into a cave at ${caveAt}, closed it and stopped`);
     const got = have() - start;
     const depth = fy0 - Math.floor(this.phys.y + 0.1);
-    // and back up the same stairs
+    // and back up the same stairs: in one walk (it stopped on every step and set off again for the next), and a step
+    // at a time only if that didn't get it to the top
     this.action = "walking back up the stairs";
-    for (let k = stairs.length - 2; k >= 0 && !this.abort && !this.dead; k--) {
+    const [tx, ty, tz] = stairs[0];
+    const atTop = () => Math.hypot(tx + 0.5 - this.phys.x, tz + 0.5 - this.phys.z) < 0.9 && Math.abs(this.phys.y - ty) < 0.6;
+    if (stairs.length > 1 && !this.abort && !this.dead) await this.goto(tx + 0.5, ty, tz + 0.5, 0.8, { maxMs: 3000 + 1200 * stairs.length, done: atTop });
+    // (from the step it got to)
+    const on = stairs.reduce((best, [a, b, c], k) => (Math.hypot(a + 0.5 - this.phys.x, b - this.phys.y, c + 0.5 - this.phys.z) < Math.hypot(stairs[best][0] + 0.5 - this.phys.x, stairs[best][1] - this.phys.y, stairs[best][2] + 0.5 - this.phys.z) ? k : best), stairs.length - 1);
+    for (let k = Math.min(on, stairs.length - 1) - 1; k >= 0 && !atTop() && !this.abort && !this.dead; k--) {
       const [a, b, c] = stairs[k];
       await this.goto(a + 0.5, b, c + 0.5, 0.5, { maxMs: 4000 });
     }
@@ -3355,7 +3567,8 @@ export class Body {
           if (this.reachTo(x, y, z) > REACH) await this.goto(x + 0.5, y, z + 0.5, 2, { maxMs: 4000, done: () => this.reachTo(x, y, z) <= REACH });
           await this.lookAt(x + 0.5, y + 0.5, z + 0.5, 10);
           this.send({ t: "use", x, y, z });
-          for (let k = 0; k < 10 && this.get(x, y, z) === id; k++) await this.nextTick();
+          // (a busy server can take a second to say the door opened: half of that and it walked off, "shut in")
+          for (let k = 0; k < 24 && this.get(x, y, z) === id; k++) await this.nextTick();
           if (this.get(x, y, z) !== id) opened = true;
         }
     return opened;

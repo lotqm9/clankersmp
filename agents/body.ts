@@ -1674,7 +1674,10 @@ export class Body {
           await this.goto(this.phys.x + Math.cos(a) * 3, this.phys.y, this.phys.z + Math.sin(a) * 3, 1, { maxMs: 4000 });
         }
       }
-      if (!this.tableInReach()) return { made: 0, why: "that needs a crafting table and there is none here (craft one: crafting_table)" };
+      if (!this.tableInReach()) {
+        const wood = this.count(B.OAK_PLANKS) + this.count(B.BIRCH_PLANKS) + this.count(B.OAK_LOG) + this.count(B.BIRCH_LOG);
+        return { made: 0, why: near || wood ? "that needs a crafting table and there is none here (craft one: crafting_table)" : "that needs a crafting table: there's none within 20 blocks and no wood in your bag to make one (a log makes 4 planks): get a log first, or go back to a table" };
+      }
     }
     const got = new Promise<number>((res) => {
       this.crafted = res;
@@ -2414,7 +2417,12 @@ export class Body {
       if (this.abort || this.dead) return "interrupted";
       const id = this.get(x, y0 - k, z);
       if (IS_WATER[id]) return "water below, can't dig in here";
-      if (id !== B.AIR && !(await this.mine(x, y0 - k, z, false))) return "couldn't dig down here";
+      // bedrock (or rock it can't break) underfoot: under rock already, it shuts itself in where it stands. Sonnet,
+      // mining at y=3 on season 16's first night, was told "couldn't dig down here" four times in six seconds
+      if (id === B.BEDROCK || (id !== B.AIR && !(await this.mine(x, y0 - k, z, false)))) {
+        if (!this.covered()) return "couldn't dig down here";
+        break;
+      }
       if (!(await this.dropInto(x, y0 - k, z))) return "dug a hole but couldn't get into it";
     }
     for (let k = 0; k < 30 && !this.fillerBlock(); k++) await this.nextTick(); // the dirt it fell onto gets picked up
@@ -2423,7 +2431,7 @@ export class Body {
     for (let k = 0; k < 4 && !this.abort && !this.dead && this.openGaps() > this.fillerCount(); k++) {
       const fx = Math.floor(this.phys.x), fy = Math.floor(this.phys.y + 0.1), fz = Math.floor(this.phys.z);
       const below = this.get(fx, fy - 1, fz);
-      if (IS_WATER[below] || !SOLID[below] || !(await this.mine(fx, fy - 1, fz, false)) || !(await this.dropInto(fx, fy - 1, fz))) break;
+      if (IS_WATER[below] || !SOLID[below] || below === B.BEDROCK || !(await this.mine(fx, fy - 1, fz, false)) || !(await this.dropInto(fx, fy - 1, fz))) break;
       for (let t = 0; t < 10; t++) await this.nextTick();
     }
     if (!this.fillerBlock()) return "dug down but has nothing to close the roof with";

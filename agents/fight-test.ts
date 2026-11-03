@@ -231,6 +231,9 @@ async function trial(scen: string, k: number, names: string[], at: { x: number; 
       void (br as unknown as { guard: () => Promise<void> }).guard();
     }, 250),
   );
+  // and, as in play, each one's line on the board every second (what it's doing: the others answer a call for help
+  // only while the caller is still at it)
+  const beats = brains.map((br) => setInterval(() => (br as unknown as { beat?: () => void }).beat?.(), 1000));
   let calm = 0;
   const minHp = team.map((b) => b.stats.hp);
   const lastHp = team.map((b) => b.stats.hp);
@@ -256,6 +259,7 @@ async function trial(scen: string, k: number, names: string[], at: { x: number; 
     if (calm > 12 && seen.size) break;
   }
   timers.forEach(clearInterval);
+  beats.forEach(clearInterval);
   brains.forEach((br) => br.stop());
   await sleep(500);
   return team.map((b, j) => ({

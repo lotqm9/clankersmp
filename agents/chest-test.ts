@@ -34,13 +34,13 @@ if (!spot || !(await b.place(B.CHEST, ...spot))) {
 const [cx, cy, cz] = spot;
 console.log("chest at", cx, cy, cz, "carrying cobblestone", b.count(B.COBBLESTONE), "logs", b.count(B.OAK_LOG));
 const put = await b.chestPut(cx, cy, cz, (id, have) => (id === B.COBBLESTONE ? have : id === B.OAK_LOG ? Math.floor(have / 2) : 0));
-console.log("put:", name(put), "| now carrying cobblestone", b.count(B.COBBLESTONE), "logs", b.count(B.OAK_LOG), "torches", b.count(B.TORCH));
+console.log("put:", name(put?.put ?? null), "| now carrying cobblestone", b.count(B.COBBLESTONE), "logs", b.count(B.OAK_LOG), "torches", b.count(B.TORCH));
 const inside = await b.chestContents(cx, cy, cz);
 console.log("in the chest:", name(inside));
 const took = await b.chestTake(cx, cy, cz, new Map([[B.COBBLESTONE, 40]]));
-console.log("took:", name(took), "| now carrying cobblestone", b.count(B.COBBLESTONE));
+console.log("took:", name(took?.got ?? null), "| now carrying cobblestone", b.count(B.COBBLESTONE));
 const after = await b.chestContents(cx, cy, cz);
 console.log("left in the chest:", name(after));
-const ok = (put?.get(B.COBBLESTONE) ?? 0) === 100 && b.count(B.TORCH) === 5 && (took?.get(B.COBBLESTONE) ?? 0) >= 40 && (after?.get(B.COBBLESTONE) ?? 0) + b.count(B.COBBLESTONE) === 100;
+const ok = (put?.put.get(B.COBBLESTONE) ?? 0) === 100 && b.count(B.TORCH) === 5 && (took?.got.get(B.COBBLESTONE) ?? 0) >= 40 && (took?.inside.get(B.COBBLESTONE) ?? -1) === (after?.get(B.COBBLESTONE) ?? -2) && (after?.get(B.COBBLESTONE) ?? 0) + b.count(B.COBBLESTONE) === 100;
 console.log(ok ? "PASS" : "FAIL");
 process.exit(ok ? 0 : 1);

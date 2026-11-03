@@ -51,8 +51,17 @@ export interface Street {
   ring?: number;
 }
 
-/** The town's streets round a centre: the four main streets, then the four sides of the ring. */
+/** The town's streets round a centre: the four main streets, then the sides of the rings (worked out once per centre). */
+const streetCache = new Map<string, Street[]>();
 export function streetsOf(c: Point): Street[] {
+  const key = `${c.x},${c.z}`;
+  const hit = streetCache.get(key);
+  if (hit) return hit;
+  const made = makeStreets(c);
+  streetCache.set(key, made);
+  return made;
+}
+function makeStreets(c: Point): Street[] {
   const out: Street[] = ARMS.map((d, arm) => ({ o: c, d, t0: PLAZA_HALF + 1, t1: REACH, join: PLAZA_HALF + 1, name: `the ${DIRS[arm]} street`, arm }));
   // each ring's sides, run clockwise from a corner, crossed by a main street in the middle
   RINGS.forEach((R, ri) => {
@@ -73,6 +82,8 @@ export interface Lot extends Rect {
   out: number;
   /** In words, for the AIs: "on the east street". */
   where: string;
+  /** Set back this much further from the street than the one cell for the door step. */
+  back?: number;
 }
 
 /** Where each kind belongs: how far out from the plaza (near to far), which main streets it likes best (none: any),
@@ -141,14 +152,17 @@ export function lotsFor(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, length
       const [sx, sz] = sizeFacing(kind, face);
       const al = dx !== 0 ? sx : sz;
       const deep = dx !== 0 ? sz : sx;
-      const c0 = STREET_HALF + 2;
-      const c1 = STREET_HALF + 1 + deep;
-      for (let t = s.t0 + (s.arm >= 0 ? 1 : 0); t + al - 1 <= s.t1; t++) {
-        const pts: [number, number][] = [];
-        for (const a of [t, t + al - 1]) for (const k of [c0, c1]) pts.push([s.o.x + dx * a + px * side * k, s.o.z + dz * a + pz * side * k]);
-        const r = box(pts);
-        out.push({ ...r, face, street: si, side, t, out: outOf(c, r), where: `on ${s.name}` });
-      }
+      // a step back from the street (the door step and the path), or set back a little further where the ground
+      // right by the street won't take it (the path to the door runs straight out to the street all the same)
+      for (const back of [0, 2, 4])
+        for (let t = s.t0 + (s.arm >= 0 ? 1 : 0); t + al - 1 <= s.t1; t++) {
+          const c0 = STREET_HALF + 2 + back;
+          const c1 = STREET_HALF + 1 + deep + back;
+          const pts: [number, number][] = [];
+          for (const a of [t, t + al - 1]) for (const k of [c0, c1]) pts.push([s.o.x + dx * a + px * side * k, s.o.z + dz * a + pz * side * k]);
+          const r = box(pts);
+          out.push({ ...r, face, street: si, side, t, out: outOf(c, r) + back, where: `on ${s.name}`, back });
+        }
     }
     const kept = HEADS[kind];
     if (dist.head && s.arm >= 0 && (!kept || kept.arm === s.arm)) {
@@ -197,7 +211,10 @@ export function keptLots(c: Point, builds: Building[]): Rect[] {
  *  the streets and the plaza, on ground that `fits` (flat enough, dry, no trees), nearest the plaza of its district.
  *  `fits` gives the floor height for a rectangle, or -1. `wall`: the wall's distance out once it is planned (nothing
  *  goes across its line). Null when no lot along the streets will do. */
-export function chooseLot(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, builds: Building[], avoid: Rect[], fits: (r: Rect) => number, wall = WALL): (Lot & { y: number }) | null {
+export function chooseLot(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, builds: Building[], avoid: Rect[], fits: (r: Rect) => number, wall = WALL, why?: Record<string, number>): (Lot & { y: number }) | null {
+  const no = (k: string) => {
+    if (why) why[k] = (why[k] ?? 0) + 1;
+  };
   const dist = DISTRICT[kind];
   const streets = streetsOf(c);
   const caps = armCaps(c, builds);
@@ -217,18 +234,34 @@ export function chooseLot(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, buil
   const all = [...builds.filter((b) => b.kind !== "road" && b.kind !== "wall").map((b) => b as Rect), ...avoid, ...keptLots(c, builds).filter((r) => !lots.some((l) => l.side === 0 && l.x0 === r.x0 && l.z0 === r.z0))];
   for (const l of lots) {
     if (l.side === 2) {
-      if (all.some((r) => overlaps(l, r, 1))) continue;
+      if (all.some((r) => overlaps(l, r, 1))) {
+        no("taken");
+        continue;
+      }
       const y = fits(l);
       if (y >= 0) return { ...l, y };
+      no("ground");
       continue;
     }
     const s = streets[l.street];
-    if (overlaps(l, plaza, 1)) continue;
+    if (overlaps(l, plaza, 1)) {
+      no("plaza");
+      continue;
+    }
     // a main street ends where something stands across it: no lots out past that
-    if (s.arm >= 0 && l.side !== 0 && l.t + Math.max(l.x1 - l.x0, l.z1 - l.z0) > caps[s.arm]) continue;
-    if (s.arm >= 0 && l.side === 0 && l.t > caps[s.arm] + 1) continue;
+    if ((s.arm >= 0 && l.side !== 0 && l.t + Math.max(l.x1 - l.x0, l.z1 - l.z0) > caps[s.arm]) || (s.arm >= 0 && l.side === 0 && l.t > caps[s.arm] + 1)) {
+      no("past the street's end");
+      continue;
+    }
     // a side of a ring is reached from the main street that crosses it: not if that street ends short of the ring
-    if (s.ring && caps[(l.street - 4) % 4] < s.ring + STREET_HALF) continue;
+    if (s.ring && caps[(l.street - 4) % 4] < s.ring + STREET_HALF) {
+      no("ring cut off");
+      continue;
+    }
+    if (all.some((r) => overlaps(l, r, 1))) {
+      no("taken");
+      continue;
+    }
     // never across the wall's line, never on a street or the cell beside one (its paths and lamp posts)
     let clash = false;
     for (let x = l.x0; x <= l.x1 && !clash; x++)
@@ -241,10 +274,15 @@ export function chooseLot(kind: Exclude<Plain, "plaza" | "lamp">, c: Point, buil
           if (other) clash = true;
         }
       }
-    if (clash) continue;
-    if (all.some((r) => overlaps(l, r, 1))) continue;
+    if (clash) {
+      no("street or wall");
+      continue;
+    }
     const y = fits(l);
-    if (y < 0) continue;
+    if (y < 0) {
+      no("ground");
+      continue;
+    }
     return { ...l, y };
   }
   return null;
@@ -259,7 +297,8 @@ export function streetOf(c: Point, b: Building): [number, number] | null {
   for (let si = 0; si < streets.length; si++) {
     const s = streets[si];
     const t = along(s, d[0], d[1]);
-    if (t >= s.t0 && t <= s.t1 && Math.abs(across(s, d[0], d[1])) <= STREET_HALF + 3) return [si, t];
+    // (within reach of a lot set back from the street too)
+    if (t >= s.t0 && t <= s.t1 && Math.abs(across(s, d[0], d[1])) <= STREET_HALF + 6) return [si, t];
   }
   return null;
 }
@@ -387,6 +426,25 @@ export function streetPlan(c: Point, builds: Building[], ground: (x: number, z: 
  *  gates the middle of each side, where the main streets go through. */
 export function wallRadius(): number {
   return WALL;
+}
+
+/** How far out from the plaza a kind belongs at most (its district's far edge). */
+export function districtFar(kind: Kind): number {
+  return kind in DISTRICT ? DISTRICT[kind as keyof typeof DISTRICT].far : 24;
+}
+
+/** How many lots near a centre (out to `out`) the ground would take, up to `cap`: how good a spot it is for a town. */
+export function lotRoom(c: Point, fits: (r: Rect) => number, out = 24, cap = 30): number {
+  let n = 0;
+  const taken: Rect[] = [];
+  for (const l of lotsFor("house", c)) {
+    if (l.side !== 1 && l.side !== -1) continue;
+    if (l.out > out || l.back || taken.some((r) => overlaps(l, r, 1))) continue;
+    if (fits(l) < 0) continue;
+    taken.push(l);
+    if (++n >= cap) break;
+  }
+  return n;
 }
 
 /** The district of a kind, in words. */

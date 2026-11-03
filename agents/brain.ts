@@ -1269,6 +1269,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           // minutes (the prompt says so, but on season 9's first night haiku and opus just waited: "hiding"). A
           // staircase down from the hole, so the roof stays shut; not when hurt, and not under the town's buildings
           const tool = b.bestToolFor(B.STONE);
+          // (not with three stacks of cobblestone already in the bag: every wait went another staircase further down
+          // for more, and season 16's third dawn found opus at y=4 and haiku at y=7 with 577 cobblestone, a long climb
+          // out before any work. Ore is still worth going down for: collect asks for it by name)
+          const plenty = b.count(B.COBBLESTONE) >= 192;
+          if (b.isNight() && b.sealed() && b.covered() && plenty) {
+            for (let k = 0; k < Math.max(2, Math.min(30, Number(i.seconds) || 5)) * 20 && !b.abort && !b.dead; k++) await b.nextTick();
+            return `it's night and you're sealed in underground with ${b.count(B.COBBLESTONE)} cobblestone already, so you waited (no more digging down for stone: collect iron_ore, coal_ore or diamond_ore from the hole if you want ore, or wait till dawn)`;
+          }
           if (b.isNight() && b.sealed() && b.covered() && b.stats.hp >= 12 && tool && canHarvest(B.STONE, tool) && !(PACK.base && b.phys.y > PACK.base.y - 3)) {
             const plan = miningPlan("cobblestone")!;
             const before = plan.gets.reduce((n, id) => n + b.count(id), 0);

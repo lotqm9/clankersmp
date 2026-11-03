@@ -237,6 +237,8 @@ export class Brain {
   private leftAlone = new Map<number, number>();
   private lastTidy = 0;
   private lastHunt = 0;
+  /** Mining a staircase out of its hole at night (the wait tool): the hole isn't sealed while it does. */
+  private holeMining = false;
   /** What the running reflex is, so being shot can cut a walk short. */
   private reflexLabel = "";
   private lastEat = 0;
@@ -651,9 +653,39 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
 
   // ---------------------------------------------------------------- skills
 
+  /** Why a tool would take it out across open ground at night, or "" if it's fine. Archers come out in the dark and
+   *  shoot from range, and the shamblers come in numbers: sonnet left its hole on season 12's first night to look
+   *  for sheep, walked a ravine in the dark and was shot. Nights are for the house or the hole. */
+  private outInTheDark(name: string, i: Record<string, unknown>): string {
+    const b = this.body;
+    const why = "it's night: archers come out in the dark and shoot from range. Stay in till dawn: sleep, wait (sealed in a hole it mines round you), craft or smelt";
+    const far = (x: number, z: number) => Math.hypot(x - b.phys.x, z - b.phys.z) > 16;
+    switch (name) {
+      case "explore": return `${why}; explore by day`;
+      case "go_to": return Number.isFinite(Number(i.x)) && Number.isFinite(Number(i.z)) && far(Number(i.x), Number(i.z)) ? `${why}; go there by day` : "";
+      case "go_to_player":
+      case "follow_player":
+      case "give": {
+        const o = [...b.others.values()].find((p) => p.name === String(i.name ?? i.player ?? "").toLowerCase());
+        return o && far(o.x, o.z) ? `${why}; meet up by day` : "";
+      }
+      case "attack": return ANIMAL_SPECS.some((a) => a.key === String(i.target ?? "").toLowerCase()) ? `${why}; hunt by day` : "";
+      case "collect": {
+        const plan = miningPlan(String(i.item ?? ""));
+        if (!plan) return "";
+        // stone and ore come out of the rock from under cover; trees, sand, dirt and the rest are out in the open
+        const rock = plan.blocks.includes(B.STONE) || plan.blocks.every((id) => BLOCKS[id]?.key?.endsWith("_ore"));
+        return rock && b.covered() ? "" : `${why}; ${rock ? "mine from under cover" : "trees and open ground by day"}`;
+      }
+    }
+    return "";
+  }
+
   private async exec(name: string, i: Record<string, unknown>): Promise<string> {
     const b = this.body;
     try {
+      const dark = b.isNight() ? this.outInTheDark(name, i) : "";
+      if (dark) return dark;
       switch (name) {
         case "collect": return await this.collect(String(i.item ?? ""), Math.max(1, Math.min(32, Number(i.count) || 1)));
         case "craft": {
@@ -838,7 +870,18 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
             const plan = miningPlan("cobblestone")!;
             const before = plan.gets.reduce((n, id) => n + b.count(id), 0);
             b.action = "mining round its hole for the night";
-            const r = await b.stairMine(plan.gets, 12);
+            // the first step opens the hole, and an open hole at night with a house set the home reflex off: it cut
+            // the staircase short and opus paced its hole for a minute trying to walk home through the rock (season
+            // 12's first night). Back at the top it shuts the staircase off again, so the hole is sealed for the
+            // night and the next wait digs a new staircase another way
+            this.holeMining = true;
+            let r = "";
+            try {
+              r = await b.stairMine(plan.gets, 12);
+              if (!b.sealed()) await b.sealIn();
+            } finally {
+              this.holeMining = false;
+            }
             const got = plan.gets.reduce((n, id) => n + b.count(id), 0) - before;
             return `it's night and you're sealed in underground, so instead of waiting you mined round you: ${got ? `got ${got} cobblestone` : r}`;
           }
@@ -1856,7 +1899,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return;
     }
     if (b.home && !b.atHome() && tod >= 11600 && tod < 23000 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
-      && !b.sealed() && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill) && (!b.isNight() || homeFar < 40)
+      && !b.sealed() && !this.holeMining && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill) && (!b.isNight() || homeFar < 40)
       && Date.now() - b.homeFailAt > 5 * 60000) {
       this.lastHomeTrip = Date.now();
       await this.reflex("heading home for the night", async () => `It was getting dark, so you went home: ${await b.goHome()}.`);

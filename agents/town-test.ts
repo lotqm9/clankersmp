@@ -11,7 +11,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Body } from "./body.ts";
-import { DESIGNS, KINDS, cellTarget, itemOf, planFor, sizeFacing, wallPlan, type Plain } from "./civ.ts";
+import { BLUEPRINTS, DESIGNS, KINDS, cellTarget, itemOf, planFor, sizeFacing, wallPlan, type Plain } from "./civ.ts";
 import "./catalog.ts";
 import { B, BLOCKS } from "../shared/blocks.ts";
 import { I, itemDef } from "../shared/items.ts";
@@ -173,7 +173,14 @@ async function run(name: string, mine: (Plain | "wall")[], cx: number, cz: numbe
         const mx = Math.floor((site.x0 + site.x1) / 2);
         const mz = Math.floor((site.z0 + site.z1) / 2);
         if (kind !== "wall" && kind !== "lamp" && kind !== "tower") await b.goto(mx + 0.5, site.y, mz + 0.5, 0.8, { maxMs: 20000 });
-        const r = await b.buildCells(cells, 150, `building ${kind} tier ${tier}`, site.y);
+        // (a floor above goes in once the rest is up, roof and all, the way the build job does it: brain.buildTown)
+        const bp = design ? BLUEPRINTS[design] : undefined;
+        const up = bp?.floors?.length ? Math.min(...bp.floors) : -1;
+        const em = bp?.eaves ?? 0;
+        const held = (c: [number, number, number, string]) => up >= 0 && !!bp && c[1] >= site.y + up && c[1] < site.y + bp.walls && c[0] > site.x0 + em && c[0] < site.x1 - em && c[2] > site.z0 + em && c[2] < site.z1 - em;
+        const rest = cells.filter((c) => !held(c));
+        const first = up >= 0 && check(b, rest).bad.length > 0 && rounds < 10;
+        const r = await b.buildCells(first ? rest : cells, 150, `building ${kind} tier ${tier}`, site.y);
         console.log(name, kind, `tier ${tier} round ${rounds}:`, JSON.stringify({ placed: r.placed, left: r.left, outOf: r.outOf, why: r.why, short: [...r.short].map(([id, n]) => `${itemDef(id)?.key} ${n}`) }));
         if (b.dead || b.closed) throw new Error(`${name} ${b.dead ? `died: ${b.deathMsg}` : `was disconnected: ${b.kicked}`}`);
       }

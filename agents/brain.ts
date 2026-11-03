@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { Body, NIGHT_END, NIGHT_START, inHub, type PlanCell, type Rect, type Seen, type Target } from "./body.ts";
 import { SPAWN_X, SPAWN_Z } from "../shared/constants.ts";
 import { HUB_R } from "../shared/hub12.ts";
-import { DESIGNS, KINDS, ONCE, STAGES, UP_EXTRA, cellTarget, doorStep, faceToward, farmPlan, homeOf, itemOf, label as civLabel, materialsFor, maxTier, needText, planFor, progress, sizeFacing, wallPlan, type Building, type Kind, type Plain } from "./civ.ts";
+import { DESIGNS, KINDS, ONCE, STAGES, UP_EXTRA, cellTarget, designOf, doorStep, faceToward, farmPlan, homeOf, itemOf, label as civLabel, materialsFor, maxTier, needText, planFor, progress, sizeFacing, wallPlan, type Building, type Kind, type Plain } from "./civ.ts";
 import { KIND_INFO, catalogSize } from "./catalog.ts";
 import { HEADS, STREET_STYLES, chooseLot, designFor, districtFar, districtOf, keptLots, lotRoom, plazaRect, streetAt, streetPlan, streetSpots, streetsOf, styleOf, wallRadius, STREET_HALF, WALL, type Point } from "./town.ts";
 import { CLAIM_MS, ROLES, assignRoles, jobText, pickJob, planJobs, rawIn, rawOf, slotOf, slotText, type Job, type Raw, type Role, type Slot, type TownState } from "./board.ts";
@@ -1614,6 +1614,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       }
     }
     const left = () => req.filter((c) => b.needsWork(c)).length;
+    // a floor above (a townhouse's, an inn's) and the room on it go in only once the rest is up, roof and all: till
+    // then the room is open to the roof, and the pillar a builder climbs to reach the roof's middle stands on the floor
+    // below (the agents climb no ladders); with nothing more going in without it, the floor goes in all the same
+    const bpx = designOf(s);
+    const upper = bpx?.floors?.length ? Math.min(...bpx.floors) : -1;
+    const em = bpx?.eaves ?? 0;
+    const held = new Set(upper < 0 || !bpx ? [] : cells.filter(([x, y, z]) => y >= s.y + upper && y < s.y + bpx.walls && x > s.x0 + em && x < s.x1 - em && z > s.z0 + em && z < s.z1 - em));
+    let withhold = held.size > 0 && req.some((c) => !held.has(c) && b.needsWork(c));
     // one job, start to finish: short of something, it goes and gets it (mines stone, chops oak, smelts, crafts the
     // stairs and the door), comes back to the middle and carries on; it only hands back when the building is up, the
     // time is up, or something it can't get by itself is missing
@@ -1646,9 +1654,14 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         await b.digOut();
       }
       await toMiddle();
-      r = await b.buildCells(cells, kind === "wall" || kind === "road" ? 64 : 120, `${upgrade ? "upgrading" : "building"} ${what}`, s.y);
+      r = await b.buildCells(withhold ? cells.filter((c) => !held.has(c)) : cells, kind === "wall" || kind === "road" ? 64 : 120, `${upgrade ? "upgrading" : "building"} ${what}`, s.y);
       placed += r.placed;
       if (!b.abort && !b.dead) tried = true;
+      // (the rest is up, or nothing more goes in without the floor: the floor next, straight away)
+      if (withhold && (!r.placed || !req.some((c) => !held.has(c) && b.needsWork(c)))) {
+        withhold = false;
+        if (!b.abort && !b.dead) continue;
+      }
       // out of reach for want of a few spare blocks to stand on (the pillar it climbs is built of them): dig some dirt
       // and go again (sonnet tried a cottage's last six roof blocks turn after turn with none)
       if (!r.placed && !r.outOf && b.scaffoldNeed > 0 && !dirtTried) {

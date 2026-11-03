@@ -75,7 +75,8 @@ function ingest(ev) {
         case 'goal': a.goal = ev.text; bump(ev.agent, 3); break;
         case 'reflex': bump(ev.agent, /fought|ran|dug in|starving/i.test(ev.text) ? 6 : 1); break;
         case 'death': a.alive = false; a.death = ev.message; a.deathAt = ev.t; bump(ev.agent, 60); break;
-        case 'civ': state.civ = { stage: ev.stage, name: ev.name, stages: ev.stages, next: ev.next, built: ev.built, trades: ev.trades, open: ev.open, last: ev.text || state.civ?.last || '', t: ev.t, board: ev.board ?? state.civ?.board ?? null, tiers: ev.tiers ?? state.civ?.tiers ?? null, queue: ev.queue ?? state.civ?.queue ?? null, jobs: ev.jobs ?? state.civ?.jobs ?? null, catalog: ev.catalog ?? state.civ?.catalog ?? null, styles: ev.styles ?? state.civ?.styles ?? null }; if (ev.text) bump(ev.agent, 8); break;
+        // (three brains flush their own events: an older snapshot that lands late keeps only its line)
+        case 'civ': if (state.civ?.t && ev.t && ev.t < state.civ.t) { if (ev.text) { state.civ.last = ev.text; bump(ev.agent, 8); } break; } state.civ = { stage: ev.stage, name: ev.name, stages: ev.stages, next: ev.next, built: ev.built, trades: ev.trades, open: ev.open, last: ev.text || state.civ?.last || '', t: ev.t, board: ev.board ?? state.civ?.board ?? null, tiers: ev.tiers ?? state.civ?.tiers ?? null, queue: ev.queue ?? state.civ?.queue ?? null, jobs: ev.jobs ?? state.civ?.jobs ?? null, catalog: ev.catalog ?? state.civ?.catalog ?? null, styles: ev.styles ?? state.civ?.styles ?? null }; if (ev.text) bump(ev.agent, 8); break;
     }
     if (ev.type !== 'status') {
         events.push(ev);

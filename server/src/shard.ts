@@ -149,6 +149,8 @@ export interface Player {
   voice: VoiceState;
   /** clankersmp: one of the AIs (opus, sonnet, haiku). */
   agent?: boolean;
+  /** v14: an AI with its inventory screen open (its watchers see it). */
+  invOpen?: boolean;
   /** clankersmp spectators (Shard.specs, never in `players`): the AI they watch, and the last HUD sent for it. */
   follow?: string;
   folSent?: string;
@@ -711,8 +713,18 @@ export class Shard {
         if (!p.agent || typeof msg.r !== "string") break;
         const n = this.survival.craft(p, msg.r, Math.max(1, Math.min(64, Math.floor(Number(msg.n) || 1))));
         this.send(p, { t: "crafted", r: msg.r.slice(0, 40), n });
+        // v14: its watchers see it at the crafting grid
+        if (n) this.toFollowers(p, { t: "fcraft", r: msg.r.slice(0, 40), n });
         break;
       }
+      case "aswap":
+        // v14: an AI sorting its inventory: one stack onto another slot (merged into a stack of the same, else swapped)
+        if (p.agent && Number.isInteger(msg.a) && Number.isInteger(msg.b)) this.survival.agentSwap(p, msg.a as number, msg.b as number);
+        break;
+      case "ainv":
+        // v14: an AI with its inventory screen open (sorting it): its watchers see the screen too
+        if (p.agent) p.invOpen = msg.open === true;
+        break;
       case "place":
         this.onPlace(p, msg);
         break;
@@ -1938,6 +1950,8 @@ export class Shard {
     return {
       t: "fol", name, id: q.id, online: true, dead: s.dead, ...(death ? { msg: death } : {}),
       stats: this.survival.stats(q), sel: s.sel, hot: s.inv.inv.slice(0, 9).map(toWire), armor: s.inv.armor.map(toWire),
+      // v14: the rest of its inventory (E opens it for the watcher), and whether it has its own inventory open
+      bag: s.inv.inv.slice(9).map(toWire), ...(q.invOpen ? { open: true } : {}),
     };
   }
 

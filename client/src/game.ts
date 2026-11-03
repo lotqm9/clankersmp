@@ -28,6 +28,7 @@ import { BoatView } from "./render/boats.ts";
 import { hydratedAt } from "../../shared/farming.ts";
 import { FLAG, OP, decodeBlocks, decodePlayers, encodeMove, readBlockEntries, type C2S, type GameMode, type PlayerInfo, type S2C, type ShardInfo, type Stats, type WindowKind } from "../../shared/protocol.ts";
 import { Menu, newPlayerInv, type Click, type Items, type PlayerInv } from "../../shared/inventory.ts";
+import { RECIPES, layoutFor, recipeNeeds, recipeSize } from "../../shared/recipes.ts";
 import { I, enchKindOf, fromWire, isHoe, itemDef, itemName, plainOf, type Stack } from "../../shared/items.ts";
 import { waterBeside } from "../../shared/enchanting.ts";
 import { MF, MOB_SPECS, OP_MOBS, OP_MOBS_GONE } from "../../shared/mobs.ts";
@@ -258,6 +259,11 @@ export class Game {
   private embed = this.spec !== null && embedded();
   private folId = 0; // its player id (0: not in the world)
   private fol: Extract<S2C, { t: "fol" }> | null = null;
+  /** v14: the watched AI's inventory screen, opened because the AI opened its own (it closes with it), and the craft
+   *  being shown in its grid (timers). */
+  private folInvAuto = false;
+  private craftShow: ReturnType<typeof setTimeout>[] = [];
+  private folGrid: Items | null = null;
   private folDeath = "";
   private folDig: Dig | null = null;
   private folEat = -1; // ticks it has been eating (-1: it isn't)
@@ -358,6 +364,8 @@ export class Game {
 
   private openInventory(): void {
     this.cancelDrawing();
+    // v14: watching, E opens the AI's own inventory (read-only)
+    if (this.spec) return this.openFolInventory(false);
     if (this.gm === "creative") return this.openPicker();
     this.state = "inventory";
     this.keys.clear();
@@ -373,6 +381,7 @@ export class Game {
   private closeInventory(fromServer = false): void {
     const w = this.win;
     if (!w) return;
+    if (this.spec) return this.closeFolInventory();
     if (!fromServer) this.net?.send({ t: "close", w: w.w });
     w.menu.close(this.cursor);
     this.win = null;
@@ -385,7 +394,7 @@ export class Game {
   /** A click in a window: predicted here with the shared rules, then sent; the server's answer replaces ours. */
   private windowClick(c: Click): void {
     const w = this.win;
-    if (!w) return;
+    if (!w || this.spec) return; // a watcher only looks
     this.unlockAudio();
     const n = ++this.clickSeq;
     w.menu.click(c, this.cursor);
@@ -1122,6 +1131,9 @@ export class Game {
       case "fol":
         this.onFol(m);
         break;
+      case "fcraft":
+        this.onFcraft(m);
+        break;
       case "fdig":
         this.onFdig(m);
         break;
@@ -1729,10 +1741,26 @@ export class Game {
       this.unlockAudio();
       if (!this.embed) void this.music.start();
     });
+    // v14: E opens the AI's inventory (read-only), E or Esc closes it
+    const toggleInv = (open?: boolean) => {
+      if (this.dead || this.state === "loading") return;
+      if (this.win && open !== true) this.closeFolInventory();
+      else if (!this.win && open !== false) this.openFolInventory(false);
+    };
+    document.addEventListener("keydown", (e) => {
+      if (e.repeat || this.ui.chatOpen) return;
+      if (e.code === "KeyE") toggleInv();
+      else if (e.code === "Escape" && this.win) toggleInv(false);
+    });
     window.addEventListener("message", (e) => {
-      const d = e.data as { type?: unknown; name?: unknown; mode?: unknown } | null;
+      const d = e.data as { type?: unknown; name?: unknown; mode?: unknown; open?: unknown } | null;
       if (d && typeof d === "object" && d.type === "view") {
         this.view = d.mode === "third" ? 1 : 0; // through its eyes, or from behind it
+        return;
+      }
+      // v14: the site's page forwards its E key (the game sits in an iframe there)
+      if (d && typeof d === "object" && d.type === "inventory") {
+        toggleInv(typeof d.open === "boolean" ? d.open : undefined);
         return;
       }
       if (!d || typeof d !== "object" || d.type !== "follow" || typeof d.name !== "string") return;
@@ -1751,6 +1779,7 @@ export class Game {
     // an AI that isn't in the world comes without its HUD: nothing of the one watched before stays on screen
     this.stats = m.stats ?? { ...this.stats, hp: m.dead ? 0 : this.stats.hp };
     for (let k = 0; k < 9; k++) this.inv.inv[k] = fromWire(m.hot?.[k]);
+    for (let k = 0; k < 27; k++) this.inv.inv[9 + k] = fromWire(m.bag?.[k]); // v14: the rest of its inventory
     for (let k = 0; k < 4; k++) this.inv.armor[k] = fromWire(m.armor?.[k]);
     this.slot = m.sel ?? this.slot;
     if (this.heldId() !== held) this.ui.selectSlot(this.slot, this.heldId()); // its name over the hotbar for a moment
@@ -1759,6 +1788,90 @@ export class Game {
     if (m.msg) this.folDeath = m.msg;
     this.watchDead(m.dead);
     this.ui.setClickToPlay(!m.online && !m.dead, `${m.name} is offline`);
+    // v14: the AI opened its inventory (sorting it): its screen opens here too, and closes with it
+    if (m.open && !this.win && this.state === "play" && !this.dead) this.openFolInventory(true);
+    else if (!m.open && this.folInvAuto && this.win && !this.craftShow.length) this.closeFolInventory();
+    else if (this.win) this.invUI.render();
+  }
+
+  /** v14: the watched AI's inventory, read-only: E (or the AI opening its own) shows it, as it is now. */
+  private openFolInventory(auto: boolean): void {
+    if (this.win || this.dead) return;
+    this.state = "inventory";
+    this.keys.clear();
+    this.mouse = 0;
+    document.exitPointerLock?.();
+    const menu = new Menu("player", this.inv);
+    this.win = { w: 0, kind: "player", menu };
+    this.folInvAuto = auto;
+    this.invUI.open("player", `${this.spec ?? ""}'s inventory`, menu, this.cursor);
+  }
+
+  private closeFolInventory(): void {
+    for (const t of this.craftShow.splice(0)) clearTimeout(t);
+    this.inv.craft.fill(null);
+    this.folGrid = null;
+    this.win = null;
+    this.folInvAuto = false;
+    this.invUI.close();
+    this.refreshHotbar();
+    if (this.state === "inventory") this.afterOverlayClosed();
+  }
+
+  /** v14: the watched AI crafted: its screen shows the recipe going into the grid, a piece at a time, the result
+   *  coming up, and taken (the real items arrive with its inventory). A 3 x 3 recipe at a crafting table's grid. */
+  private onFcraft(m: Extract<S2C, { t: "fcraft" }>): void {
+    if (!this.spec || this.dead || this.state === "loading") return;
+    const r = RECIPES.find((x) => x.id === m.r);
+    if (!r) return;
+    const [w, h] = recipeSize(r);
+    const size = w > 2 || h > 2 ? 3 : 2;
+    const have = new Map<number, number>();
+    for (const st of this.inv.inv) if (st) have.set(st.id, (have.get(st.id) ?? 0) + st.n);
+    for (const [ing] of recipeNeeds(r)) if (!ing.some((id) => have.has(id))) have.set(ing[0], 1);
+    const layout = layoutFor(r, size, have);
+    if (!layout) return;
+    for (const t of this.craftShow.splice(0)) clearTimeout(t);
+    // the screen: its own inventory (2 x 2) or a crafting table's (3 x 3), opened for the moment if it wasn't
+    const wasOpen = !!this.win;
+    if (this.win && (size === 3) !== (this.win.kind === "crafting")) this.closeFolInventory();
+    let grid: Items;
+    if (size === 3) {
+      if (!this.win || !this.folGrid) {
+        this.folGrid = new Array(9).fill(null);
+        const menu = new Menu("crafting", this.inv, this.folGrid);
+        this.state = "inventory";
+        this.keys.clear();
+        document.exitPointerLock?.();
+        this.win = { w: 0, kind: "crafting", menu };
+        this.invUI.open("crafting", `${this.spec}: crafting`, menu, this.cursor);
+      }
+      grid = this.folGrid!;
+    } else {
+      if (!this.win) this.openFolInventory(false);
+      grid = this.inv.craft;
+    }
+    this.folInvAuto = this.folInvAuto || !wasOpen;
+    const cells = layout.map((id, k) => [id, k] as const).filter(([id]) => id);
+    const step = 130;
+    cells.forEach(([id, k], j) =>
+      this.craftShow.push(setTimeout(() => {
+        grid[k] = { id, n: 1, d: 0 };
+        this.win?.menu.updateResult();
+        this.invUI.render();
+        this.sound.click();
+      }, step * (j + 1))),
+    );
+    // the result taken, then the screen closes if it was only opened for this
+    this.craftShow.push(setTimeout(() => {
+      grid.fill(null);
+      this.win?.menu.updateResult();
+      this.invUI.render();
+    }, step * (cells.length + 1) + 700));
+    this.craftShow.push(setTimeout(() => {
+      this.craftShow = [];
+      if (this.folInvAuto && !this.fol?.open) this.closeFolInventory();
+    }, step * (cells.length + 1) + 1500));
   }
 
   /** The AI died (or, off hardcore, came back): the game-over screen. The camera stays where it fell. */

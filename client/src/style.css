@@ -69,7 +69,7 @@ body {
 .embed .debug,
 .embed .serverinfo,
 .embed .notice,
-.embed .screen:not(.dead),
+.embed .screen:not(.dead):not(.inv-screen), /* v14: the AI's inventory screen still shows */
 .embed .tablist,
 .embed .nowplaying,
 .embed .zonetoast,

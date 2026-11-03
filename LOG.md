@@ -140,3 +140,86 @@ flat open arenas at night, a fresh body and kit each trial; "damage" is all dama
 Tech test (agents/tech-test.ts): 4 lava buckets -> 4 obsidian (buckets back), a book, the table crafted and put up
 with 10 bookshelves, a sword to Sharpness III (7 rubies) and a worn chestplate to Protection II, the enchanted sword's
 charged hit 7.9, 11.8 as a critical (a plain iron sword 5.9), a smith selling lava. Unit tests: tests/enchanting.test.ts.
+
+## 2026-11-03: fights they finish, a tidy inventory, deep trips for diamonds (agents v14)
+
+Laith: way better fighting, a tidy inventory, and "I want them to aim for better resources, diamonds etc". Branch
+`tech`. No protocol bump: the new messages (agent inventory moves, the watcher's view of them) are additions to 13.
+
+Fighting (agents/brain.ts combat(), agents/body.ts fight):
+- Armed (a stone sword or better, or an axe) and armoured (6 points or more), it takes on what is on it and finishes
+  it: shamblers, skitters, and rattlers too (charged). It gives ground only unarmed, badly hurt (under 6 health
+  armoured, 8 without) or clearly outnumbered (3 monsters unarmoured, 4 armoured, 5 in iron, 6 in iron with an iron
+  sword); then it gets away at a sprint across an archer's line of fire, home if home is near, never down a hole
+  with a monster about.
+- An archer is never run from in its sights (haiku, season 13 day 11, shot dead in iron while "taking cover"):
+  armoured, it closes in and kills it with whatever it has; otherwise it breaks the line of sight with blocks.
+  Across water it never swims at one (a swimmer is a sitting target): the bow from the bank, or out of its sight.
+- Technique: eyes on the target, charged swings, jump crits, circling out of reach while the weapon recharges,
+  stepping back from everything in reach, a weave on the way in at an archer, the drops picked up after.
+- Help: a fight is answered once (season 13: sonnet answered one fight 15 times in 20 minutes), only while the
+  caller is still at it, from 40 blocks for a call and 16 without; "coming, <name>" in chat; they fight it together.
+- No meal stood still for in an archer's sight unless starving.
+
+Inventory (agents/inventory.ts; server aswap and ainv; client):
+- A fixed hotbar: 1 weapon, 2 pickaxe, 3 axe, 4 shovel, 5 food, 6 torches, 7 and 8 building blocks, 9 the bow or a
+  spare. Part stacks merged. Anything else taken in hand goes to 9, so the rest stay put. Junk (spoiled flesh, flint,
+  feathers, string and bones past a few) goes when the bag is full.
+- It sorts with its inventory screen open, a move at a time. A spectator following an AI presses E to see its whole
+  inventory (read only); the screen opens by itself while the AI sorts, and its crafts show in the grid.
+
+The way to diamonds (agents/mine.ts, the mine_trip tool; agents/tech.ts):
+- The tech line points every step at how to get it: iron near the surface or by the stack on a trip, then diamonds
+  and rubies from a mine_trip, with what a trip still needs. A morning with the kit, the turn says it's time for one.
+- A mine_trip: mornings only (dawn to time 5000), and only armoured, with an iron pickaxe, a real weapon, 8 torches,
+  food and 16 spare blocks. From open ground outside the town (never under the streets, the hub or a village): a
+  staircase down to the diamond layer (y 11), aimed at the diamonds it knows of, quarter turns only, never toward
+  water overhead, on through any cave it meets with the cave's openings blocked up round it; a torch every 7 blocks
+  (more crafted from the coal it mines). Then a tunnel through the rock to the nearest diamonds (rubies and iron
+  after), every ore its walls show mined with its vein, floor holes filled back in. A stone pickaxe digs the stone,
+  the iron one is kept for the ores. It heads back at time 8000 (or full, out of torches or blocks, hurt, the pick
+  worn), up the way it came (out of a hole by pillaring, the long way round, a staircase dug up last and never
+  through water), and puts the haul in the storehouse, keeping the iron and diamonds its own next gear needs and
+  its rubies. Water in the way down near the top: it starts again 20 blocks off. Cut short by a fight it carries
+  on when called again; left below late, a reflex climbs it out. The y 30 floor of everyday mining and every night
+  rule stay as they were; the dusk reflexes (house, home, the storehouse round) leave a trip alone.
+
+Fight tests (agents/fight-test.ts: the agents' own reflexes, no Claude calls, a fresh body and kit each trial, open
+arenas at night). Before = main as it ran in season 13 (a8f879f), after = this branch merged with main (the nav
+branch's walking included); each on a fresh copy of the same world, so every trial has the same arena; 8 trials a
+scenario (a_help: two agents a trial):
+    scenario | before: lived   dmg   low  all dead  gave ground | after: lived   dmg   low  all dead  gave ground
+    a_sh2    |          8/8   12.7  16.3      8/8        5/8     |         8/8    4.4  17.7      8/8        0/8
+    a_sk2    |          8/8   10.5  18.5      8/8        0/8     |         8/8    3.5  18.5      8/8        0/8
+    a_ra1    |          8/8   15.0  15.3      5/8        8/8     |         8/8   16.2  14.3      8/8        0/8
+    ip_ra1   |          8/8   19.4  16.7      2/8        8/8     |         8/8   20.4  16.2      6/8        4/8
+    a_mix    |          8/8   12.8  16.8      1/8        7/8     |         8/8   19.8  14.2      8/8        0/8
+    i_ra2    |          8/8   18.1  17.4      6/8        5/8     |         8/8   20.9  17.7      5/8        2/8
+    i_mix    |          8/8   17.5  17.7      4/8        4/8     |         8/8   19.6  18.1      7/8        2/8
+    a_help   |        16/16    7.9  16.9     8/16      14/16     |       16/16    8.3  17.0     16/16       0/16
+    ra1nobow |          8/8    9.4  14.5      6/8        7/8     |         8/8   21.0  11.9      7/8        2/8
+    sh2low   |          8/8    8.3  10.3      8/8        8/8     |         8/8    3.4  11.0      8/8        0/8
+    tunnel   |          7/8    3.8   6.9      7/8        7/8     |         8/8    0.0   8.0      8/8        0/8
+    In all: deaths 1 -> 0 of 96, gave ground 73 -> 10, every monster dead 63 -> 89, damage taken 11.9 -> 12.1 a
+    trial (standing and fighting takes the hits running used to; the lowest health stays where it was).
+    (a = a stone sword and leather, i = full iron and an iron sword, ip = haiku's kit when it died: an iron helmet,
+    chestplate and boots, no sword; sh shamblers, sk skitters, ra rattlers; mix = a shambler (two in iron), a rattler
+    and a skitter; a_help = one attacked by two shamblers and a rattler, another of the pack 14 blocks off; ra1nobow =
+    a stone sword, nothing else; sh2low = 10 health against two; tunnel = 7 health, one coming at it down a mine.
+    "Gave ground" = took cover, ran, walled or dug in, pillared up, or broke the line of sight. Most misses left are a
+    rattler across water when the minute ran out.)
+Help (each agent's board line posted every second, as in play): help2 (one attacked by two shamblers at 14 health,
+another 14 blocks off) every monster dead 14/16 -> 16/16, gave ground 8/16 -> 0/16, 24 s -> 11 s a fight; the call
+answered 12 times in 8 fights before (the same fight again and again), 7 after (once, or not at all when it was over).
+
+Mining trips (agents/mine-test.ts: the brain's mine_trip and its reflexes, no Claude calls; a fresh test world with
+monsters on and its clock running from dawn; four trips at a time at spots spread over the island, two rounds; the
+least kit a trip allows: an iron chestplate, a stone sword, iron and stone pickaxes, 12 torches, 6 bread, 24
+cobblestone): 8 trips, all 8 lived (no damage taken), a diamond in 7 of 8, the first after 126 to 332 s (median
+243 s: about four minutes after setting off at dawn), 85 diamonds in all (1 to 24 a trip), 7 raw iron and 8 rubies a
+trip, 8 minutes a trip. Back at the surface 6 of 8 (5 before dusk); the other two were still in their tunnels at
+nightfall, alive, after the way back up was lost (a flooded patch, a fall). The trip without a diamond met water
+at y 45 and gave up (the start-again-elsewhere came after that round).
+Inventory test (agents/inventory-test.ts) all passed; unit tests (combat, survival, enchanting, trades, mobs,
+world blocks, the server) 60/60; after the last merge of main, a fight smoke run (tunnel, a_ra1, a_mix, sh2low, 4
+each): 16/16 lived, 0 gave ground, 14 cleared.

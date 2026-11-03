@@ -282,7 +282,8 @@ export function planJobs(s: TownState): Job[] {
     }
   });
   // the wood economy: a tree farm near the town before the oak runs out, then its trees cut and the saplings planted again
-  if (s.stage >= 0 && !s.trees.farms) add({ id: "build:treefarm:1", kind: "build", k: "treefarm", text: "build a tree farm near the town (oak saplings that grow back: wood without the long trips)", role: "woodcutter", pri: 22 });
+  // (from the camp on: an oak-poor start has its wood from it before the first oaks round the town are gone)
+  if (!s.trees.farms) add({ id: "build:treefarm:1", kind: "build", k: "treefarm", text: "build a tree farm near the town (oak saplings that grow back: wood without the long trips)", role: "woodcutter", pri: 22 });
   if (s.trees.grown >= 2 && s.trees.at) add({ id: `harvest:${s.trees.at}`, kind: "harvest", k: "treefarm", at: s.trees.at, n: s.trees.grown, text: `cut the ${s.trees.grown} grown trees in the tree farm ${where(s.trees.at)} and plant the saplings again`, role: "woodcutter", pri: 26 });
   // what the jobs at the top are short of, into the storehouse
   for (const [raw, n] of Object.entries(s.short) as [Raw, number][])

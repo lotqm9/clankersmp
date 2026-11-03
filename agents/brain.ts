@@ -1551,7 +1551,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     // ore in the rock can't start here, so say so (opus asked for iron_ore three times running in town, season 16)
     const oreOnly = plan.blocks.every((id) => BLOCKS[id]?.key?.endsWith("_ore"));
     if (!tried && oreOnly && offLimits(b.phys.x, b.phys.z)) return `no ${item} in sight, and you're on the town's ground, where nobody mines: walk 30 or more blocks out past the buildings (go_to), then collect ${item} again (a staircase down from there finds it in the rock)`;
-    if (!tried) return `no ${item} within 32 blocks${plan.blocks.includes(B.STONE) ? " (dig_down to reach stone)" : " (explore to find some)"}`;
+    if (!tried) return `no ${item} within 32 blocks${trees && trips ? ` (and the logging trip${trips > 1 ? "s" : ""} out to ${trips > 1 ? "64 and 160" : "64"} blocks found none it could get to)` : ""}${plan.blocks.includes(B.STONE) ? " (dig_down to reach stone)" : " (explore to find some)"}`;
     return `got ${got} of ${count} ${item}`;
   }
 
@@ -1767,6 +1767,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     const s = site;
     if (others(s)) return `${s.busy!.by} is working on ${nameOf(kind)} right now: help another way (bring them blocks with give, build something else, or gather what the next stage needs)`;
+    if (tier === 1 && !s.done) this.woodFor(s);
     s.busy = { by: this.name, at: Date.now() };
     if (!s.by.includes(this.name)) s.by.push(this.name);
     const what = `${designName(s)}${tier > 1 ? ` (tier ${tier})` : ""}`;
@@ -2879,10 +2880,20 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
   private async stockJob(job: Job): Promise<string> {
     const raw = job.k as Raw;
     if (raw === "food") return await this.farmJob();
-    const what = raw === "stone" ? "cobblestone" : raw === "wood" ? "town_log" : raw === "birch" ? "birch_log" : raw === "sand" ? "sand" : raw === "coal" ? "coal_ore" : raw === "iron" ? "iron_ore" : "";
+    let what = raw === "stone" ? "cobblestone" : raw === "wood" ? "town_log" : raw === "birch" ? "birch_log" : raw === "sand" ? "sand" : raw === "coal" ? "coal_ore" : raw === "iron" ? "iron_ore" : "";
     if (!what) return "nothing to stock";
+    // a young town (before a homestead) with no oak round it and birch there: the birch, now, rather than a long
+    // logging trip for oak (its first houses go up in birch: woodFor)
+    const near = (ids: number[]) => this.body.findBlocks(ids, 32, 2).length > 0;
+    if (raw === "wood" && progress(civCount).stage < 1 && !near([B.OAK_LOG, B.PALM_LOG]) && near([B.BIRCH_LOG])) what = "log";
     this.body.action = job.text;
-    const got = await this.collect(what, Math.max(8, Math.min(32, job.n ?? 24)));
+    const n = Math.max(8, Math.min(32, job.n ?? 24));
+    const logs = () => this.body.count(B.OAK_LOG) + this.body.count(B.BIRCH_LOG) + this.body.count(B.PALM_LOG);
+    const had = logs();
+    let got = await this.collect(what, n);
+    // the town's oak gone from round it (an oak-poor start: season 16's camp, six oaks in 32 blocks): the nearest wood
+    // of any kind rather than none, so the pool has wood and a house not begun goes up in it (woodFor)
+    if (raw === "wood" && logs() - had < n / 2 && !this.body.dead && !this.body.abort) got = `${got}; then any wood: ${await this.collect("log", n - (logs() - had))}`;
     if (this.body.dead || this.body.abort) return got;
     return [got, await this.deliver()].filter(Boolean).join("; ");
   }
@@ -2916,6 +2927,35 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const again = await this.buildTown("treefarm", false, { ...job, kind: "plant", at: [mx, mz] });
     const dl = this.storehouse() ? await this.toStore() : "";
     return `cut the tree farm's trees: ${got} logs${r.left ? ` (${r.left} blocks of them out of reach)` : ""}; ${again}${dl ? `; ${dl}` : ""}`;
+  }
+
+  /** A building not begun yet goes up in the wood the town can get: an oak design with too little oak for it (in the
+   *  pool, on it, growing within 48 blocks) and the birch for it there, the same design in birch, the whole building
+   *  one wood (an oak-poor start: season 16's camp had six oaks in 32 blocks and its first house stalled on planks). */
+  private woodFor(s: Building): void {
+    const d = s.design;
+    if (!d || !d.includes("oak-")) return;
+    const alt = d.replace("oak-", "birch-");
+    if (!DESIGNS[alt] || DESIGNS[alt].kind !== DESIGNS[d]?.kind) return;
+    const b = this.body;
+    // begun already: it stays what it is
+    for (const c of this.planOf(s, 1).cells) {
+      const t = cellTarget(c[3]);
+      if (t && !t.optional && (BLOCKS[t.id]?.key ?? "").startsWith("oak") && !b.needsWork(c)) return;
+    }
+    const bag = stock();
+    for (const st of b.inv) if (st) bag.set(st.id, (bag.get(st.id) ?? 0) + st.n);
+    const mx = Math.round((s.x0 + s.x1) / 2);
+    const mz = Math.round((s.z0 + s.z1) / 2);
+    const near = (ids: number[]) => b.findBlocks(ids, 48, 600).filter(([x, , z]) => Math.hypot(x - mx, z - mz) <= 48).length;
+    const oak = rawIn(bag, "wood") + near([B.OAK_LOG, B.PALM_LOG]);
+    const birch = rawIn(bag, "birch") + near([B.BIRCH_LOG]);
+    const needOak = rawOf(materialsFor(d, 1)).get("wood") ?? 0;
+    const needBirch = rawOf(materialsFor(alt, 1)).get("birch") ?? 0;
+    if (oak >= needOak || birch < needBirch * 0.75) return;
+    s.design = alt;
+    savePack();
+    this.log.push(`${designName(s)} instead of oak: there is too little oak near (${oak} of the ${needOak} logs it takes) and birch enough (${birch})`);
   }
 
   /** A tree cut down whole from the log it found: every log of it, lowest first from the ground, then the ones out

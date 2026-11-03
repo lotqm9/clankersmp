@@ -3541,21 +3541,15 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     this.log.push(`You called for help: "${text}"`);
   }
 
-  /** While the next decision is being made: no standing frozen. It looks at whoever is near, or looks around. */
+  /** While the next decision is being made: no standing frozen, and no looking wildly about either (a new random
+   *  direction every 0.7 s was the spinning in circles): a glance now and then, or at whoever is near. */
   private async whileThinking(): Promise<void> {
     const b = this.body;
     b.halt();
+    const ahead = b.yaw;
     let k = 0;
     while (this.thinking && !this.reflexing && !b.dead && !b.closed) {
-      if (k % 14 === 0) {
-        const near = [...b.others.values()].filter((o) => !(o.flags & FLAG.DEAD)).map((o) => ({ o, d: b.distTo(o.x, o.y, o.z) })).sort((p, q) => p.d - q.d)[0];
-        if (near && near.d < 14) b.look(near.o.x, near.o.y + 1.5, near.o.z);
-        else {
-          const a = Math.random() * Math.PI * 2;
-          b.look(b.phys.x + Math.sin(a) * 6, b.phys.y + 1.2, b.phys.z + Math.cos(a) * 6);
-        }
-      }
-      k++;
+      b.idleLook(k++, ahead);
       await b.nextTick();
     }
   }

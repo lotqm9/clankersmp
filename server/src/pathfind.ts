@@ -33,6 +33,9 @@ export interface SearchOpts {
   /** v9: head for the goal first (A*, an octile-distance estimate that never overestimates: the same best path,
    *  far fewer nodes on open ground). Villagers use it for their long walks home. */
   aim?: boolean;
+  /** The deepest drop it walks off (default MAX_DROP). The AIs take up to 5 when healthy: a fall does no harm until
+   *  it is more than SAFE_FALL (6), and at 3 a steep hillside was a wall to them. */
+  drop?: number;
 }
 
 interface Cand {
@@ -210,7 +213,7 @@ export class PathFinder {
         let chosen: Cand | null = null;
         for (const c of this.column(nx, nz)) {
           const d = c.f - p.f;
-          if (d > MAX_RISE || d < -MAX_DROP) continue;
+          if (d > MAX_RISE || d < -(o.drop ?? MAX_DROP)) continue;
           if (diag && Math.abs(d) > STEP) continue;
           if (c.water && !o.water && !p.water) continue;
           if (!this.edge(p.x, p.z, p.f, nx, nz, c.f)) continue;
@@ -222,6 +225,7 @@ export class PathFinder {
         let cost = diag ? 1.414 : 1;
         if (d > STEP) cost += 1.2;
         if (d < -0.6) cost += -d * 0.4;
+        if (d < -MAX_DROP) cost += (-d - MAX_DROP) * 2; // a drop past the usual only where there's no gentler way
         if (chosen.water) cost += 5;
         const g = s.cost[i] + cost;
         const key = nodeKey(nx, nz, chosen.f);

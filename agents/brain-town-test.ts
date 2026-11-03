@@ -4,7 +4,7 @@
 // craft and smelt everything itself (planks, stairs, a door, fences, glass panes, stone bricks, lanterns), and the
 // town text has to point at the next thing to do.
 //   AGENT_SECRET=... AT=x,z node agents/brain-town-test.ts [ws://127.0.0.1:8789]
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Body } from "./body.ts";
@@ -41,7 +41,7 @@ writeFileSync(join(dir, "pack.json"), JSON.stringify({ plan: "", by: "", base: {
 process.env.AGENT_STATE_DIR = dir;
 const { Brain } = await import("./brain.ts");
 const brain = new Brain(name, b, "test", "http://127.0.0.1:9", "http://127.0.0.1:9") as unknown as {
-  load(): void; exec(n: string, i: Record<string, unknown>): Promise<string>; civText(): string; auditTown(): void;
+  load(): void; exec(n: string, i: Record<string, unknown>): Promise<string>; civText(): string; auditTown(): void; boardText(): string;
 };
 brain.load();
 
@@ -55,12 +55,18 @@ for (const [tool, what] of steps) {
   b.send({ t: "chat", text: "/time 2000" });
   b.send({ t: "chat", text: "/hunger 20" });
   for (let k = 0; k < 4; k++) {
-    const r = await brain.exec(tool, { what });
+    // the tool's own argument: what to build, what to do with the storehouse (put, take, look)
+    const r = await brain.exec(tool, tool === "storehouse" ? { action: what } : tool === "work" ? {} : { what });
     console.log(`[${Math.round((Date.now() - t0) / 1000)}s] ${tool} ${what}: ${r}`);
-    if (/^(finished|upgraded|moved)/.test(r) || /couldn't|no flat|there is no|already/.test(r)) break;
+    if (tool === "storehouse" || tool === "work" || /^(finished|upgraded|moved)/.test(r) || /couldn't|no flat|there is no|already/.test(r)) break;
     // what an AI would do between calls: top up what the job says it couldn't get by itself
     if (/coal/.test(r)) give("coal", 8);
   }
 }
 console.log("\n" + brain.civText());
+console.log("\n" + brain.boardText());
+// where everything went on the town plan
+const pack = JSON.parse(readFileSync(join(dir, "pack.json"), "utf8"));
+console.log(`\nthe town's centre: ${JSON.stringify(pack.centre)}`);
+for (const x of pack.builds) console.log(`  ${x.kind} at ${x.x0},${x.z0}..${x.x1},${x.z1} facing ${x.face ?? 0}, ${x.done ? `done, tier ${x.tier ?? 1}` : "not done"}`);
 process.exit(0);

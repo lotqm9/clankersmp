@@ -4,6 +4,8 @@
 //   node tools/sentinel.mjs
 const RELAY = process.env.RELAY || 'https://engine-production-08c9.up.railway.app';
 const FAIL = /couldn|can.t|^no |nothing|still|failed|got 0 |missing|isn.t|don.t|there is no|out of|stopped|interrupted|hole isn.t/i;
+// progress isn't failure, even with "still needed" in it (a build goes up a few blocks a turn)
+const PROGRESS = /^placed [1-9]|^finished|^upgraded|^got [1-9]|^crafted|^smelted|something else came up/i; // (and a job cut short by a reflex isn't a failure either)
 const IDLE = /asleep|bed|sleep|home|smelt|stay|wait|idle/i;
 const seen = new Map(); // `${agent}:${kind}` -> last time it was reported
 const track = {}; // agent -> [{t, x, y, z}]
@@ -115,10 +117,10 @@ for (;;) {
       if (top - a.hp >= 8) say(a.name, 'hurt', `lost ${top - a.hp} health in 15s (now ${a.hp}), "${action}"`);
       // the same thing failing over and over
       const res = events.filter((e) => e.agent === a.name && e.type === 'result').slice(-8);
-      const fails = res.filter((e) => FAIL.test(e.text));
+      const fails = res.filter((e) => (FAIL.test(e.text) && !PROGRESS.test(e.text)));
       if (res.length >= 6 && fails.length >= 5) say(a.name, 'failing', `${fails.length} of its last ${res.length} actions failed; latest: ${fails.at(-1).text.slice(0, 160)}`);
       const last3 = res.slice(-3).map((e) => e.text.replace(/\d+/g, '#'));
-      if (last3.length === 3 && last3.every((t) => t === last3[0]) && FAIL.test(last3[0])) say(a.name, 'repeat', `the same failure 3 times running: ${res.at(-1).text.slice(0, 160)}`);
+      if (last3.length === 3 && last3.every((t) => t === last3[0]) && (FAIL.test(last3[0]) && !PROGRESS.test(last3[0]))) say(a.name, 'repeat', `the same failure 3 times running: ${res.at(-1).text.slice(0, 160)}`);
     }
     // the town not growing for a long while (only counts when someone is alive)
     const cv = s.state?.civ;

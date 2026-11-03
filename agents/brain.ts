@@ -1250,6 +1250,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const lacking = new Set<string>();
     let first = true;
     let dirtTried = false;
+    let tried = false; // the blocks went to the site at least once without being cut short
     for (let round = 0; round < 8 && !b.abort && !b.dead && Date.now() < deadline && left() > 0; round++) {
       s.busy = { by: this.name, at: Date.now() };
       const need = this.billOf(cells);
@@ -1269,6 +1270,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       await toMiddle();
       r = await b.buildCells(cells, kind === "wall" || kind === "road" ? 64 : 120, `${upgrade ? "upgrading" : "building"} ${what}`, s.y);
       placed += r.placed;
+      if (!b.abort && !b.dead) tried = true;
       // out of reach for want of a few spare blocks to stand on (the pillar it climbs is built of them): dig some dirt
       // and go again (sonnet tried a cottage's last six roof blocks turn after turn with none)
       if (!r.placed && !r.outOf && b.scaffoldNeed > 0 && !dirtTried) {
@@ -1301,7 +1303,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     // a spot where nothing will go in, turn after turn (on a roof, walled off, out of reach): give up on it, so the
     // next build picks a better one instead of everyone trying the same blocks forever
-    s.stuck = placed ? 0 : (s.stuck ?? 0) + 1;
+    // (only a real try counts: a build cut short by a reflex isn't the spot's fault. Season 12's first cottage was
+    // given up as "a bad spot" after dusk sent opus home three times on its way back with the oak, and the same
+    // ground was picked again straight after)
+    s.stuck = placed ? 0 : tried ? (s.stuck ?? 0) + 1 : s.stuck ?? 0;
     if (!upgrade && s.stuck >= 3 && !r.outOf && !s.done && kind !== "wall" && kind !== "road") {
       PACK.builds = PACK.builds.filter((x) => x !== s);
       savePack();
@@ -1309,6 +1314,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     savePack();
     const still = short.length ? ` Still needed: ${short.join(", ")}${lacking.size ? ` (${[...lacking].join("; ")})` : ""}.` : "";
+    if (!placed && !tried) return `stopped work on ${what} at ${where(s)} before a block went in (${b.dead ? "you died" : "something else came up"}); ${missing} blocks to go.${still}`;
     if (!placed) return `couldn't ${upgrade ? "upgrade" : "build"} ${what} at ${where(s)}: ${r.outOf ? "out of materials" : r.why || "in the way, or out of reach"}; ${missing} blocks to go.${still}`;
     return `placed ${placed} blocks on ${what} at ${where(s)}: ${missing} to go.${still}`;
   }
@@ -1900,6 +1906,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
     if (b.home && !b.atHome() && tod >= 11600 && tod < 23000 && Date.now() - this.lastHomeTrip > 60000 && !/home|bed|asleep/.test(b.action)
       && !b.sealed() && !this.holeMining && !["dig_out", "dig_in", "go_home", "sleep", "build_house"].includes(this.skill) && (!b.isNight() || homeFar < 40)
+      // once it's dark, only from out in the open: under cover it stays and works (underground at night, opus set off
+      // for a house 19 blocks away through the rock and paced its tunnel for a minute and a half, twice)
+      && !(b.isNight() && b.covered())
       && Date.now() - b.homeFailAt > 5 * 60000) {
       this.lastHomeTrip = Date.now();
       await this.reflex("heading home for the night", async () => `It was getting dark, so you went home: ${await b.goHome()}.`);

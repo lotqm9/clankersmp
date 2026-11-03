@@ -236,6 +236,7 @@ export class Brain {
   /** Monsters it fought without getting anywhere (behind a wall, across a gap): left alone for a minute. */
   private leftAlone = new Map<number, number>();
   private lastTidy = 0;
+  private lastHunt = 0;
   /** What the running reflex is, so being shot can cut a walk short. */
   private reflexLabel = "";
   private lastEat = 0;
@@ -862,6 +863,24 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     }
   }
 
+  /** An axe in the bag: a stone one (3 cobblestone, 2 sticks), else a wooden one (3 planks, 2 sticks), making the
+   *  planks and sticks from a log if it has to. Quiet: if it can't, it chops as before. */
+  private async ensureAxe(): Promise<void> {
+    const b = this.body;
+    const axe = () => b.inv.some((st) => st && itemDef(st.id)?.tool?.kind === "axe");
+    if (axe()) return;
+    const planks = () => b.count(B.OAK_PLANKS) + b.count(B.BIRCH_PLANKS);
+    const logs = () => b.count(B.OAK_LOG) + b.count(B.BIRCH_LOG) + b.count(B.PALM_LOG);
+    const stone = b.count(B.COBBLESTONE) >= 3;
+    if (!b.has(I.STICK, 2) && planks() < 2 + (stone ? 0 : 3) && logs()) {
+      for (const p of ["oak_planks", "birch_planks"]) if (planks() < 5 && logs()) await b.craft(p, 2);
+    }
+    if (!b.has(I.STICK, 2) && planks() >= 2) await b.craft("sticks", 1);
+    if (!b.has(I.STICK, 2)) return;
+    if (stone && (await b.craft("stone_axe", 1)).made) return;
+    if (planks() >= 3) await b.craft("wooden_axe", 1);
+  }
+
   private async collect(item: string, count: number): Promise<string> {
     const b = this.body;
     const plan = miningPlan(item);
@@ -881,6 +900,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     let trips = 0;
     let trip: { x: number; z: number; had: number } | null = null;
     const trees = plan.blocks.some((id) => BLOCKS[id]?.key?.endsWith("_log"));
+    // wood comes faster with an axe (Laith: "no one uses axes"; they chopped every tree by hand or with a pickaxe, and
+    // wood is what the town runs short of): a stone one if there's cobblestone, else a wooden one
+    if (trees) await this.ensureAxe();
     // stone comes out of the ground away from the town: never the town's own walls (the nearest "cobblestone" was
     // the town hall's, so they took its lower walls apart for a house), and never a village's houses
     const stone = plan.blocks.includes(B.STONE);
@@ -1782,6 +1804,21 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           });
         }
       }
+      return;
+    }
+    // armed with a real sword or axe and healthy, a shambler or a skitter near it out in the open: go and kill it
+    // (Laith: "they make swords but do not fight mobs"; they only fought what was already on them). Not an archer
+    // (that has its own rule), not underground, not into a crowd, and never chased far from where it was
+    const prey = b.hostiles(12).find((m) => m.key !== "rattler" && !((this.leftAlone.get(m.id) ?? 0) > Date.now()));
+    const weapon = b.bestWeapon();
+    if (prey && weapon && (itemDef(weapon)?.tool?.damage ?? 0) >= 5 && b.stats.hp >= 16 && !b.covered() && !b.sealed() && b.hostiles(16).length <= 2 && Date.now() - this.lastHunt > 20000) {
+      this.lastHunt = Date.now();
+      let res = "";
+      await this.reflex(`going after a ${prey.key}`, async () => {
+        res = await b.fight({ kind: "mob", id: prey.id }, 15000, b.strong() ? 5 : 9, 16);
+        return `A ${prey.key} was ${Math.round(prey.d)} blocks away and you were armed and healthy, so you went after it (${res}).`;
+      });
+      if (/ran out of time|couldn't get to it|out of reach|let it go/.test(res)) this.leftAlone.set(prey.id, Date.now() + 60000);
       return;
     }
     // a full bag loses whatever it crafts or mines next: make room (at most once a minute, never mid-fight)

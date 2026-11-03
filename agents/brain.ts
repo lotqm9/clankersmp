@@ -1000,9 +1000,17 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         case "attack": return await this.attack(String(i.target ?? ""));
         case "dig_in": {
           // not with a monster on it: digging in is seconds of standing still, and it hits (or shoots) you out of the
-          // hole halfway through. Fight it or run first
+          // hole halfway through. It deals with the monster first, armed it fights, unarmed it runs, and digs in once
+          // it's clear (only refusing, sonnet asked to dig in again and again with a shambler 5 blocks off)
           const m = b.hostiles(8)[0];
-          if (m) return `a ${m.key} is ${Math.round(m.d)} blocks away: digging in takes seconds and it would knock you out of the hole. Fight it (attack) or run (flee) first`;
+          if (m) {
+            const weapon = b.bestWeapon();
+            const armed = !!weapon && (itemDef(weapon)?.tool?.damage ?? 0) >= 4 && b.stats.hp >= 8;
+            const res = armed ? await b.fight({ kind: "mob", id: m.id }, 15000, 6) : (await b.flee(m.x, m.z, 100), "ran from it");
+            const still = b.hostiles(8)[0];
+            if (still) return `a ${m.key} was ${Math.round(m.d)} blocks away, so before digging in you ${armed ? `fought it (${res})` : "ran from it"}; a ${still.key} is still ${Math.round(still.d)} blocks off: ${armed ? "finish it (attack)" : "keep away (flee)"}, then dig_in`;
+            return `a ${m.key} was on you, so you ${armed ? `fought it first (${res})` : "ran from it first"}, then dug in: ${await b.digIn()}`;
+          }
           return await b.digIn();
         }
         case "dig_out": return await b.digOut();

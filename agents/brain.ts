@@ -29,7 +29,7 @@ import { FLAG } from "../shared/protocol.ts";
 
 /** What each AI is working toward and doing right now, as the others can see it (they all run in this process), and
  *  what it has to offer the board's roles (its best pickaxe, an axe, a hoe or seeds, its food, where it is). */
-const BOARD = new Map<string, { goal: string; doing: string; pick?: number; axe?: boolean; farm?: boolean; food?: number; x?: number; z?: number; at?: number }>();
+const BOARD = new Map<string, { goal: string; doing: string; pick?: number; axe?: boolean; farm?: boolean; food?: number; bag?: [number, number][]; x?: number; z?: number; at?: number }>();
 /** v13: the monster each of them is fighting right now (the others come and help when they are near). */
 const FIGHTS = new Map<string, { id: number; key: string; x: number; z: number; at: number; call: boolean }>();
 
@@ -532,7 +532,7 @@ export class Brain {
   }
 
   /** What it has to offer the board's roles, for the others to see (they all run in this process). */
-  private kit(): { pick: number; axe: boolean; farm: boolean; food: number } {
+  private kit(): { pick: number; axe: boolean; farm: boolean; food: number; bag: [number, number][] } {
     const b = this.body;
     let pick = 0;
     for (const s of b.inv) {
@@ -544,6 +544,8 @@ export class Brain {
       axe: b.inv.some((s) => s && itemDef(s.id)?.tool?.kind === "axe"),
       farm: b.inv.some((s) => s && (key(s.id).endsWith("_hoe") || s.id === I.WHEAT_SEEDS)),
       food: b.inv.reduce((n, s) => n + (s && itemDef(s.id)?.food ? s.n : 0), 0),
+      // what it carries, so the board counts the pack's bags as well as the storehouse
+      bag: [...b.inv.reduce((m, s) => (s ? m.set(s.id, (m.get(s.id) ?? 0) + s.n) : m), new Map<number, number>())],
     };
   }
 
@@ -2664,8 +2666,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const bill = project ? this.projectBill(project) : new Map<number, number>();
     const raw = rawOf(bill);
     const have = stock();
-    const builderWas = Object.entries(bd.roles).find(([, r]) => r === "builder")?.[0];
-    if (builderWas === this.name) for (const st of this.body.inv) if (st) have.set(st.id, (have.get(st.id) ?? 0) + st.n);
+    // and what every one of them carries (it gets handed over): haiku was the mason all day 6 "stocking the
+    // storehouse" with 792 cobblestone in its bag, because only the builder's bag was counted
+    for (const n of alive) {
+      const bag = n === this.name ? this.kit().bag : BOARD.get(n)?.bag ?? [];
+      for (const [id, c] of bag) have.set(id, (have.get(id) ?? 0) + c);
+    }
     const short = new Map<Raw, number>();
     for (const [k, n] of raw) {
       const left = n - rawIn(have, k);

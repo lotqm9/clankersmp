@@ -744,7 +744,13 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         }
         case "eat": return await b.eat();
         case "attack": return await this.attack(String(i.target ?? ""));
-        case "dig_in": return await b.digIn();
+        case "dig_in": {
+          // not with a monster on it: digging in is seconds of standing still, and it hits (or shoots) you out of the
+          // hole halfway through. Fight it or run first
+          const m = b.hostiles(8)[0];
+          if (m) return `a ${m.key} is ${Math.round(m.d)} blocks away: digging in takes seconds and it would knock you out of the hole. Fight it (attack) or run (flee) first`;
+          return await b.digIn();
+        }
         case "dig_out": return await b.digOut();
         case "dig_down": return await this.digDown(Math.max(1, Math.min(8, Number(i.blocks) || 3)));
         case "go_to_player": {
@@ -906,7 +912,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
           b.halt();
           // out at night and not shut in anywhere: shut in first. Standing there "waiting" is how opus died on season
           // 12's third night (a rattler shot it from across a ravine while it waited near the top)
-          if (b.isNight() && !b.sealed() && !b.atHome()) {
+          if (b.isNight() && !b.sealed() && !b.atHome() && !b.hostiles(8).length) {
             const d = await b.digIn();
             if (!b.sealed()) return `it's night and you weren't shut in anywhere, so you tried to dig in: ${d}`;
           }
@@ -1902,7 +1908,7 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
         const bed = b.findBlocks([0, 1, 2, 3, 4, 5, 6, 7].map((k) => B.RED_BED + k), 16, 1).length > 0;
         if (bed) await this.reflex("going to bed", async () => `Night caught you in the open, so you went to bed: ${await b.sleep()}.`);
         // never with a walker or a crawler on its way: it gets there mid-dig and follows it down (the fight comes first)
-        else if (!b.hostiles(12).some((m) => m.key !== "rattler")) await this.reflex("digging in for the night", async () => `Night caught you in the open, so you dug in: ${await b.digIn()}.`);
+        else if (!b.hostiles(12).length) await this.reflex("digging in for the night", async () => `Night caught you in the open, so you dug in: ${await b.digIn()}.`);
       }
     } else this.nightOutSince = 0;
   }
@@ -2126,12 +2132,12 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       return "put a wall up between you and the rattler (it has to come round it, into reach, to shoot)";
     }
     // no wall: out of its range at a run (its arrows go where you were, not where you're going: a runner is hard to
-    // hit), rather than three blocks of digging with it shooting all the while; a hole only when it's right there
-    if (Math.hypot(r.x - b.phys.x, r.z - b.phys.z) > 6 && b.stats.food > 6) {
-      await b.flee(r.x, r.z, 120);
-      return "ran out of its range";
-    }
-    return `dug in: ${await b.digIn()}`;
+    // hit). Never a hole with it shooting: digging in is seconds of standing still, and every arrow knocks you back
+    // out of the hole (Laith: "the digging in is too slow"; opus died digging in from a rattler with a shambler on it).
+    // Right up close with a weapon, finishing it is quicker than running
+    if (Math.hypot(r.x - b.phys.x, r.z - b.phys.z) < 3.5 && b.bestWeapon()) return `it was right there, so you fought it (${await b.fight({ kind: "mob", id: r.id }, 12000, 6)})`;
+    await b.flee(r.x, r.z, 120);
+    return "ran out of its range";
   }
 
   /** Telling the pack which monster it's fighting (a fight the others can join). */

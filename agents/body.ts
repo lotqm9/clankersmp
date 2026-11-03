@@ -638,6 +638,28 @@ export class Body {
     this.wantPitch = clamp(-deg(Math.atan2(y - ey, Math.hypot(dx, dz))), -89, 89);
   }
 
+  /** Looking about while it stands still (thinking what to do next): the eyes mostly where they were, now and then a
+   *  glance a little to one side and back, or a look at someone close by, the way a person stands and thinks. Call it
+   *  every tick: `k` counts the ticks, `ahead` is where it faced when it stopped. (While Claude answered it used to
+   *  pick a new direction at random every 0.7 s: up to 180 degrees two or three times a second, 6,500 degrees a
+   *  minute, standing still. That was the spinning in circles Laith saw between moves.) */
+  idleLook(k: number, ahead: number): void {
+    if (k === 0) this.wantPitch = clamp(this.pitch, -10, 15);
+    const beat = k % 80;
+    if (beat === 30) {
+      const near = [...this.others.values()]
+        .filter((o) => !(o.flags & FLAG.DEAD))
+        .map((o) => ({ o, d: Math.hypot(o.x - this.phys.x, o.z - this.phys.z) }))
+        .filter((e) => e.d < 14 && e.d > 0.5)
+        .sort((p, q) => p.d - q.d)[0];
+      if (near && Math.random() < 0.6) this.look(near.o.x, near.o.y + 1.5, near.o.z);
+      else {
+        this.wantYaw = (ahead + (Math.random() < 0.5 ? -1 : 1) * (15 + Math.random() * 30) + 360) % 360;
+        this.wantPitch = clamp(this.pitch + (Math.random() - 0.5) * 10, -10, 15);
+      }
+    } else if (beat === 65) this.wantYaw = ahead;
+  }
+
   /** Look at a point and wait until the eyes are there (or close enough). */
   async lookAt(x: number, y: number, z: number, maxTicks = 20): Promise<void> {
     for (let k = 0; k < maxTicks && !this.abort; k++) {

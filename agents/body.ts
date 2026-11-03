@@ -3118,6 +3118,12 @@ export class Body {
       if (up < 0) return false;
       for (const c of todo.slice(i)) {
         if (this.abort || this.dead || placed >= max) break;
+        // a kept-clear cell up here (the canopy of a tree on the lot): out with it
+        const c0 = c[3].split("|")[0];
+        if ((c0 === "a" || c0 === "o") && missing(c) && this.reachTo(c[0], c[1], c[2]) <= REACH) {
+          await this.mine(c[0], c[1], c[2], false);
+          continue;
+        }
         const w = this.wantFor(c[3]);
         if (!w || !missing(c) || this.reachTo(c[0], c[1], c[2]) > REACH) continue;
         const here = this.get(c[0], c[1], c[2]);
@@ -3135,8 +3141,22 @@ export class Body {
       if (!missing(todo[i])) continue;
       const k0 = k.split("|")[0];
       if (k0 === "a" || k0 === "o") {
-        // leaves, a trunk, dirt or a leftover block inside the building, in a window or the doorway: dig it out
-        if (!(await this.mine(x, y, z))) misses++;
+        // leaves, a trunk, dirt or a leftover block inside the building, in a window or the doorway: dig it out; one
+        // out of reach from the ground (the canopy of a tree on the lot) from up a pillar, like a block going in
+        if (await this.mine(x, y, z)) continue;
+        if (this.reachTo(x, y, z) > REACH && lifts < 12 && !inHub(x, z) && !this.abort && !this.dead) {
+          lifts++;
+          if ((await fromPillar(i)) && !missing(todo[i])) {
+            misses = 0;
+            continue;
+          }
+        }
+        misses++;
+        // (and say what won't come out: a plaza given up as "a bad spot" with no reason, season 13)
+        if (!why && missing(todo[i])) {
+          const id = this.get(x, y, z);
+          why = `${BLOCKS[id]?.name ?? "a block"} at x=${x} y=${y} z=${z} won't come out (${inHub(x, z) ? "it is inside the spawn hub, where nothing is dug" : this.reachTo(x, y, z) > REACH ? "out of reach" : KEEP(id) ? "somebody's things" : "it won't break"})`;
+        }
         continue;
       }
       if (k0 === "p" || k0 === "?p") {

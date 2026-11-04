@@ -91,7 +91,9 @@ for (;;) {
       const old = tr.find((p) => now - p.t >= 3 * 60000);
       if (old) {
         const moved = Math.max(...tr.filter((p) => p.t >= old.t).map((p) => Math.hypot(p.x - old.x, p.z - old.z)));
-        if (moved < 2.5 && !IDLE.test(action)) say(a.name, 'stuck', `within 2.5 blocks of x=${Math.round(a.x)} y=${Math.round(a.y)} z=${Math.round(a.z)} for 3+ min while "${action}"`);
+        // (not at night: shut in a hole or a house till dawn is where it should be, whatever the last action says)
+        const nightIn = (c.time ?? 0) > 12500 && (c.time ?? 0) < 23500;
+        if (moved < 2.5 && !IDLE.test(action) && !nightIn) say(a.name, 'stuck', `within 2.5 blocks of x=${Math.round(a.x)} y=${Math.round(a.y)} z=${Math.round(a.z)} for 3+ min while "${action}"`);
       }
       // bouncing: lots of up and down and walking, little net progress, over the last minute
       const min = tr.filter((p) => now - p.t <= 60000);

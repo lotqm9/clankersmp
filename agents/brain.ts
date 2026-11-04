@@ -2816,7 +2816,10 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       later: STAGES.slice(pr.stage + 2).flatMap((s) => s.needs.map(([k, n, t]) => ({ k, n, tier: t ?? 1 }))),
       buildings: PACK.builds.filter((x) => !isHome(x) && x.kind !== "road" && x.kind !== "farm" && x.kind !== "lamp").map((x) => ({ kind: x.kind, design: x.design, name: designName(x), at: mid(x), tier: tierOf(x), max: topOf(x), done: x.done, fix: !!x.fix, up: x.up, next: upOf(x, (x.up ?? tierOf(x)) + 1) || undefined })),
       short: PACK.board?.short ?? {},
-      stock: Object.fromEntries(raws.map((r) => [r, rawIn(st, r)])),
+      // the pool: the storehouse and what each of them carries (handed over when it's needed). Not the storehouse
+      // alone: sonnet was sent 250 blocks out "stocking the storehouse" with 64 cobblestone the town hadn't built yet,
+      // the pack holding over a thousand
+      stock: Object.fromEntries(raws.map((r) => [r, rawIn(st, r) + (r === "food" ? 0 : rawIn(this.bagsOfAll(), r))])),
       roads: { doors: rc[2] ?? 0, joined: rc[0] ?? 0, paved: rc[1] ?? 0 },
       lamps: { have: count("lamp"), want: Math.min(64, Math.floor(streetCells / 21)) },
       furniture: { bench: count("bench"), flowerbed: count("flowerbed"), want: Math.min(24, Math.floor(streetCells / 60)) },
@@ -2964,6 +2967,16 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
     const again = await this.buildTown("treefarm", false, { ...job, kind: "plant", at: [mx, mz] });
     const dl = this.storehouse() ? await this.toStore() : "";
     return `cut the tree farm's trees: ${got} logs${r.left ? ` (${r.left} blocks of them out of reach)` : ""}; ${again}${dl ? `; ${dl}` : ""}`;
+  }
+
+  /** What the pack's living members carry, all told (each one's bag as last put on the board, its own as it is). */
+  private bagsOfAll(): Map<number, number> {
+    const m = new Map<number, number>();
+    for (const [n, e] of BOARD) {
+      const bag = n === this.name ? this.kit().bag : e.bag ?? [];
+      for (const [id, c] of bag) m.set(id, (m.get(id) ?? 0) + c);
+    }
+    return m;
   }
 
   /** Before a hamlet's four homes are up: the first homes are small (town.ts's EARLY_SIZES). */

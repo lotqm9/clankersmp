@@ -3,6 +3,8 @@
 //   site   <- GET  /events              server-sent events: a snapshot, then everything live, plus the director's cuts
 //             GET  /state, /usage       the same as JSON; Claude spend over the last N minutes
 //             GET  /clanker             the game server's own view of the AIs (alive, health, where)
+//   viewers <- GET  /chat, /chat/stream    the site's chat: the last messages, then each one live (relay/chat.mjs)
+//           -> POST /chat                one message from a viewer: { nick, text }
 //             GET  /play/...            the game client; ?follow=opus&embed=1 is an AI's first-person view
 //             WS   /ws                  the game server's WebSocket (spectators join it from /play)
 // The auto-director scores what each AI is going through and picks whose view is on the main stage.
@@ -12,6 +14,7 @@ import net from 'node:net';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createChat, clientAddr } from './chat.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8090);
@@ -34,6 +37,10 @@ for (const a of AGENTS) state.agents[a] = blank(a);
 const events = [];
 const usage = []; // { t, model, in, out, cache_read, cache_write }
 const sse = new Set();
+// the viewers' chat (relay/chat.mjs): kept apart from the agents' events, and never sent to the agents
+const chat = createChat();
+const chatSse = new Set();
+chat.subscribe((m) => { for (const res of chatSse) send(res, { type: 'viewer', ...m }); });
 const interest = Object.fromEntries(AGENTS.map((a) => [a, 0]));
 let focus = { agent: AGENTS[0], since: Date.now(), reason: 'start' };
 
@@ -133,7 +140,7 @@ setInterval(() => {
 }, 5000).unref();
 
 // keep event-stream connections alive through proxies
-setInterval(() => { for (const res of sse) res.write(': ping\n\n'); }, 15000).unref();
+setInterval(() => { for (const res of [...sse, ...chatSse]) res.write(': ping\n\n'); }, 15000).unref();
 
 function readBody(req, limit = 2 * 1024 * 1024) {
     return new Promise((resolve, reject) => {
@@ -191,6 +198,26 @@ const server = http.createServer(async (req, res) => {
             const body = JSON.parse((await readBody(req)).toString('utf8') || '[]');
             for (const ev of Array.isArray(body) ? body : [body]) ingest(ev);
             res.writeHead(204); return res.end();
+        }
+        if (path === '/chat' && req.method === 'POST') {
+            let body;
+            try { body = JSON.parse((await readBody(req, 4096)).toString('utf8') || '{}'); } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end('{"ok":false,"error":"bad-request"}'); }
+            const r = chat.post({ addr: clientAddr(req), nick: body?.nick, text: body?.text });
+            const head = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+            if (r.body.retryIn) head['Retry-After'] = String(Math.ceil(r.body.retryIn / 1000));
+            res.writeHead(r.status, head);
+            return res.end(JSON.stringify(r.body));
+        }
+        if (path === '/chat') {
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            return res.end(JSON.stringify({ messages: chat.history(), open: chat.open() }));
+        }
+        if (path === '/chat/stream') {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
+            chatSse.add(res);
+            send(res, { type: 'chat-snapshot', t: Date.now(), open: chat.open(), messages: chat.history() });
+            req.on('close', () => chatSse.delete(res));
+            return;
         }
         if (path === '/events') {
             res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });

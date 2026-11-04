@@ -3627,8 +3627,8 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       if (better) b.wearBest();
     }
     // stuck swimming (a flooded hole, a pond with steep banks): out of the water before anything else (not a swim it set
-    // out on: a walk with no dry way crosses the water)
-    if (b.phys.inWater && !b.sealed() && !b.swimming) {
+    // out on: a walk with no dry way crosses the water; not dig_out, which walls the water off and climbs its own stair)
+    if (b.phys.inWater && !b.sealed() && !b.swimming && !b.outing) {
       if (!this.inWaterSince) this.inWaterSince = Date.now();
       else if (Date.now() - this.inWaterSince > 3000) {
         this.inWaterSince = 0;

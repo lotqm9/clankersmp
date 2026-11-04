@@ -695,7 +695,10 @@ export class Body {
       this.input.strafe = 0;
       this.input.sprint = false;
       this.input.jump = floorY - this.phys.y > 0.55 || (this.phys.collidedH && this.phys.onGround && this.stepAhead()) || this.phys.inWater;
-      if (!this.phys.inWater && ((!this.swimming && this.waterAhead()) || this.dropAhead() > this.maxDrop())) this.input.forward = 0;
+      // (a swimmer goes off a bank into the water here too: on the bank's edge right over the first node in the water
+      // it stood still, and gave up "couldn't get further" at the shore)
+      const fall = this.dropAhead();
+      if (!this.phys.inWater && (this.swimming ? fall !== 99 && fall > this.maxDrop() : this.waterAhead() || fall > this.maxDrop())) this.input.forward = 0;
       return;
     }
     let lead = 0;
@@ -1037,15 +1040,18 @@ export class Body {
     const px = this.phys.x;
     const pz = this.phys.z;
     const py = this.phys.y;
+    // swimming: a path through deep water runs along its bed, and it swims over the top (it floated over a node on
+    // a lake's bed, never "there", and gave up at the shore: sonnet "stopped at x=86 z=99", season 16)
+    const swim = (n: PathPoint) => n.water && this.phys.inWater && py > n.f - 0.6;
     for (;;) {
       while (i < path.length) {
         const n = path[i];
         const d = Math.hypot(n.x + 0.5 - px, n.z + 0.5 - pz);
         const nn = path[i + 1];
-        const nearer = nn && Math.hypot(nn.x + 0.5 - px, nn.z + 0.5 - pz) < d && Math.abs(nn.f - n.f) < 0.6;
+        const nearer = nn && Math.hypot(nn.x + 0.5 - px, nn.z + 0.5 - pz) < d && (Math.abs(nn.f - n.f) < 0.6 || (swim(n) && nn.water));
         // (reached on its level: half a block off a node five blocks down, still on the ledge above it, was "there",
         // and the path ended at the top of the drop)
-        if ((d < 0.55 && py > n.f - 0.6 && py < n.f + 1.3) || (nearer && d < 1.4)) i++;
+        if ((d < 0.55 && py > n.f - 0.6 && (py < n.f + 1.3 || swim(n))) || (nearer && d < 1.4)) i++;
         else break;
       }
       if (i >= path.length) return i;
@@ -1053,9 +1059,10 @@ export class Body {
       let dk = Math.min(1.3, Math.hypot(path[i].x + 0.5 - px, path[i].z + 0.5 - pz));
       for (let m = i + 1; m < Math.min(path.length, i + 8); m++) {
         const n = path[m];
-        if (Math.abs(n.f - py) > 0.6) continue; // up or down a step it hasn't taken yet
+        const sw = swim(n); // (over the water, any height: it swam past the first node in and turned back for it)
+        if (!sw && Math.abs(n.f - py) > 0.6) continue; // up or down a step it hasn't taken yet
         const d = Math.hypot(n.x + 0.5 - px, n.z + 0.5 - pz);
-        if (d < dk && this.clearLine(n.x + 0.5, n.z + 0.5, n.f)) {
+        if (d < dk && (sw || this.clearLine(n.x + 0.5, n.z + 0.5, n.f))) {
           dk = d;
           k = m;
         }
@@ -2615,18 +2622,21 @@ export class Body {
   }
 
   /** The nearest dry spot to stand on within r blocks that a swimmer can climb onto (its floor at most about a block
-   *  over the water). */
+   *  over the water). Under the rock none lower than its feet: down a flooded stair the nearest bank was always a step
+   *  or two down, and each way out of the water left it lower (haiku, season 16: "still underground" at y 27, 23, 19,
+   *  14, 8). */
   findBank(r: number): [number, number, number] | null {
     const fx = Math.floor(this.phys.x);
     const fz = Math.floor(this.phys.z);
     const top = this.phys.y + 1.3;
+    const low = this.covered() ? Math.floor(this.phys.y) : Math.floor(this.phys.y) - 2;
     let best: [number, number, number] | null = null;
     let bd = Infinity;
     for (let dz = -r; dz <= r; dz++)
       for (let dx = -r; dx <= r; dx++) {
         const x = fx + dx;
         const z = fz + dz;
-        for (let y = Math.floor(top); y >= Math.floor(this.phys.y) - 2; y--) {
+        for (let y = Math.floor(top); y >= low; y--) {
           const below = this.get(x, y - 1, z);
           if (!SOLID[below] || IS_WATER[this.get(x, y, z)] || SOLID[this.get(x, y, z)] || SOLID[this.get(x, y + 1, z)]) continue;
           const d = Math.hypot(dx, dz);
@@ -2880,14 +2890,26 @@ export class Body {
     }
   }
 
-  /** Climbing out to the sky (digOut): the walks it takes on the way never set off another climb out. */
-  private outing = false;
+  /** Climbing out to the sky (digOut): the walks it takes on the way never set off another climb out, and the brain's
+   *  "stuck in the water" reflex leaves it to it. */
+  outing = false;
 
   private async climbToSky(): Promise<string> {
     const startY = this.phys.y;
+    // in the water under the rock (a flooded cave, a stair the water came down): walls in round it first, the water
+    // shut off at its feet, its head and over it, then a dry stair of its own; walking or swimming the cave, it went
+    // down with the water
+    if (this.phys.inWater && this.covered() && this.fillerBlock()) {
+      // on the floor first: walled in while it sank, the walls went in three blocks over its head
+      for (let t = 0; t < 60 && !this.phys.onGround && !this.abort && !this.dead; t++) await this.nextTick();
+      await this.center(Math.floor(this.phys.x), Math.floor(this.phys.z), 12);
+      await this.sealIn();
+      for (let t = 0; t < 40 && this.phys.inWater && !this.abort && !this.dead; t++) await this.nextTick();
+    }
     // caves usually lead somewhere higher: walk up them first, as far as they go
     for (let k = 0; k < 6 && !this.abort && !this.dead && !this.outInTheOpen(); k++) if (!(await this.walkUp())) break;
-    let dir = -1; // the staircase keeps going the same way
+    // the staircase keeps going the same way, from the start the way that comes out soonest and stays dry
+    let dir = this.stairWays()[0];
     let walls = 0;
     const tried = new Set<string>(); // the walls it has gone to, to cut a stair into
     for (let k = 0; k < 140 && !this.abort && !this.dead && !this.outInTheOpen(); k++) {
@@ -2956,6 +2978,9 @@ export class Body {
       if (s.pts[best].f < y0 + 1.5) return false;
     }
     const top = s.pts[best];
+    // never through the water: up a flooded stair it swam, was carried down, climbed out lower, and paced the cave
+    // (haiku, season 16, at 109 12 112); a dry stair of its own is the way then
+    if (top.water || s.pathTo(best).some((n) => n.water)) return false;
     // on the spot at its height (a block off and a block down, the step it wanted, was "there" at 1.2 across, and it
     // cut a new step into the rock beside its own stair)
     const there = () => Math.hypot(top.x + 0.5 - this.phys.x, top.z + 0.5 - this.phys.z) < 0.8 && Math.abs(this.phys.y - top.f) < 0.6;
@@ -3071,31 +3096,102 @@ export class Body {
     return !this.inHole() && !SOLID[this.get(x, y + 2, z)];
   }
 
-  /** One step of a staircase up: clear over its head and the two cells over the block beside it, then jump up onto
-   *  that block (with no block there, put one down if it can). Tries `prefer` (a direction index) first; returns the
-   *  direction it climbed, or -1. Needs no blocks to spare when the rock is there. */
-  async stepUp(prefer = -1): Promise<number> {
+  /** The four ways a staircase could go up from here (as stepUp numbers them), best first: the one that comes out in
+   *  the open in the fewest steps, a block up for each across, with no water over it on the way (dug up under a
+   *  lake, haiku spent a minute shutting water off and climbed out on a stair in the lake). */
+  stairWays(): number[] {
     const x = Math.floor(this.phys.x);
     const y = Math.floor(this.phys.y + 0.1);
     const z = Math.floor(this.phys.z);
     const dirs: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-    const order = prefer >= 0 ? [prefer, ...[0, 1, 2, 3].filter((d) => d !== prefer)] : [0, 1, 2, 3];
+    const lim = (this.world?.info.spawnHeight ?? 0) - 6; // nothing is dug in the spawn hub over this
+    const score = [0, 1, 2, 3].map((d) => {
+      let wet = 0;
+      for (let n = 1; n <= 64; n++) {
+        const cx = x + dirs[d][0] * n;
+        const cz = z + dirs[d][1] * n;
+        const h = y + n; // the stair's floor there
+        // the ground's top over there, and water anywhere over the stair's floor (a lake, a flooded cave or stair)
+        let top = -1;
+        let water = false;
+        for (let yy = 127; yy >= h && !water; yy--) {
+          const id = this.get(cx, yy, cz);
+          if (IS_WATER[id]) water = true;
+          else if (top < 0 && SOLID[id] && !TREE.has(id)) top = yy;
+        }
+        if (water) wet++;
+        else if (h > top) return n + wet * 4;
+        // a dead end: the rock under the spawn hub (it stopped at y=37 there), bedrock, the world's edge
+        if (inHub(cx, cz) && h + 2 >= lim) return 300 + wet * 4;
+        if (!inWorld(cx, 0, cz) || this.get(cx, h, cz) === B.BEDROCK) break;
+      }
+      return 200 + wet * 4;
+    });
+    return [0, 1, 2, 3].sort((a, b) => score[a] - score[b]);
+  }
+
+  /** One step of a staircase up: clear over its head and the two cells over the block beside it, then jump up onto
+   *  that block (with no block there, put one down if it can). Tries `prefer` (a direction index) first; returns the
+   *  direction it climbed, or -1. Needs no blocks to spare when the rock is there. */
+  async stepUp(prefer = -1): Promise<number> {
+    // afloat or mid-jump, down on its feet first: bobbing a block over the floor, it cut every step a block too high
+    // to climb out of the water onto, and jumped at them thirty times (haiku's flooded cave, season 16)
+    for (let t = 0; t < 40 && !this.phys.onGround && (this.phys.inWater || t < 16) && !this.abort && !this.dead; t++) {
+      this.input.jump = false;
+      await this.nextTick();
+    }
+    const x = Math.floor(this.phys.x);
+    const y = Math.floor(this.phys.y + 0.1);
+    const z = Math.floor(this.phys.z);
+    const dirs: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    // the way it was going, else a turn to the side, back the way it came last: turned back each step it went up a
+    // shaft two wide, filling its own stair in (haiku under a lake, season 16)
+    const ways = this.stairWays();
+    const order = prefer >= 0 ? [prefer, ...ways.filter((d) => d !== prefer && d !== (prefer ^ 1)), prefer ^ 1] : ways;
     for (const d of order) {
       if (this.abort || this.dead) return -1;
       const [dx, dz] = dirs[d];
       const sx = x + dx;
       const sz = z + dz;
-      const wet = [[sx, y + 1, sz], [sx, y + 2, sz], [x, y + 2, z], [sx, y + 3, sz]].some(([cx, cy, cz]) => IS_WATER[this.get(cx, cy, cz)]);
-      if (wet) {
+      // water in the cells it opens: not this way. Water right beside them: blocked off first with spare blocks, or
+      // opened, they would let it in (a flooded stair is how it ended up swimming down the old ones; and beside an
+      // underground lake every way up shares the cells over its own head)
+      const opens: [number, number, number][] = [[sx, y + 1, sz], [sx, y + 2, sz], [x, y + 2, z], [sx, y + 3, sz], [x, y + 3, z]];
+      if (opens.some(([cx, cy, cz]) => IS_WATER[this.get(cx, cy, cz)])) {
         this.debug(`stepUp ${d}: water`);
+        continue;
+      }
+      // (not the water it stands in: a block there is refused, and it gave up every way at the cave's floor)
+      const beside = new Map<string, [number, number, number]>();
+      const mine: [number, number, number][] = [...opens, [x, y, z], [x, y + 1, z]];
+      for (const [cx, cy, cz] of opens)
+        for (const [a, b, c] of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]])
+          if (IS_WATER[this.get(cx + a, cy + b, cz + c)] && !mine.some(([ox, oy, oz]) => ox === cx + a && oy === cy + b && oz === cz + c)) beside.set(`${cx + a},${cy + b},${cz + c}`, [cx + a, cy + b, cz + c]);
+      if (beside.size > this.fillerCount()) {
+        this.debug(`stepUp ${d}: water beside, not blocks enough to shut it off`);
+        continue;
+      }
+      let shut = true;
+      for (const [cx, cy, cz] of beside.values()) {
+        const f = this.fillerBlock();
+        if (!f || !(await this.place(f, cx, cy, cz, 0))) {
+          shut = false;
+          break;
+        }
+      }
+      if (!shut) {
+        this.debug(`stepUp ${d}: couldn't shut the water off`);
         continue;
       }
       if (!SOLID[this.get(sx, y, sz)]) {
         // nothing to step onto: build the step, if there is something under it to build on (from the middle of its own
         // cell: off it, its body poked into the step's cell, the block was refused and it gave up "still underground")
         const filler = this.fillerBlock();
-        if (filler && SOLID[this.get(sx, y - 1, sz)] && Math.hypot(x + 0.5 - this.phys.x, z + 0.5 - this.phys.z) > 0.15) await this.center(x, z, 12);
-        if (!filler || !SOLID[this.get(sx, y - 1, sz)] || !(await this.place(filler, sx, y, sz))) {
+        if (filler && Math.hypot(x + 0.5 - this.phys.x, z + 0.5 - this.phys.z) > 0.15) await this.center(x, z, 12);
+        // over the open air (its stair broke into a cave, a block over the floor): the step's own footing first, set
+        // against the block it stands on, so the stair goes on straight (it stopped dead there, "still underground")
+        if (filler && !SOLID[this.get(sx, y - 1, sz)] && this.fillerCount() >= 2 && SOLID[this.get(x, y - 1, z)]) await this.place(filler, sx, y - 1, sz, 0);
+        if (!filler || !SOLID[this.get(sx, y - 1, sz)] || !(await this.place(this.fillerBlock() || filler, sx, y, sz))) {
           this.debug(`stepUp ${d}: no step (filler ${filler}, under solid ${SOLID[this.get(sx, y - 1, sz)]})`);
           continue;
         }

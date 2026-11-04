@@ -1046,6 +1046,9 @@ ${PACK.plan}` : "The pack has no plan written down yet (pack_plan).");
       case "follow_player":
       case "give": {
         const o = [...b.others.values()].find((p) => p.name === String(i.name ?? i.player ?? "").toLowerCase());
+        // under the rock, anyone not right beside it is through the rock: opus paced its tunnel for a minute at night
+        // trying to give sonnet oak, 22 blocks off in a hole of its own
+        if (o && b.covered() && Math.hypot(o.x - b.phys.x, o.y - b.phys.y, o.z - b.phys.z) > 4) return `${why}; you're shut in underground and ${o.name} isn't beside you: hand it over at dawn`;
         return o && far(o.x, o.z) ? `${why}; meet up by day` : "";
       }
       case "attack": return ANIMAL_SPECS.some((a) => a.key === String(i.target ?? "").toLowerCase()) ? `${why}; hunt by day` : "";

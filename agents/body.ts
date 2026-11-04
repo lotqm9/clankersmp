@@ -1686,8 +1686,9 @@ export class Body {
       if (near) await this.goto(near[0] + 0.5, near[1], near[2] + 0.5, 2, { maxMs: 25000, done: () => this.blockInReach(furnace) });
       // none near and none in the bag: make one from 8 cobblestone (crafting makes its own table), the way a player
       // does (sonnet asked to smelt over and over with no furnace and got "craft one: furnace" each time)
-      if (!near && !this.has(B.FURNACE) && this.count(B.COBBLESTONE) >= 8) await this.craft("furnace", 1);
-      if (!near && this.has(B.FURNACE)) {
+      // (and when the one near couldn't be got to: through the rock from a hole, the way the crafting table was)
+      if (!this.blockInReach(furnace) && !this.has(B.FURNACE) && this.count(B.COBBLESTONE) >= 8) await this.craft("furnace", 1);
+      if (!this.blockInReach(furnace) && this.has(B.FURNACE)) {
         const spot = await this.spotForBlock();
         if (spot) await this.place(B.FURNACE, ...spot);
       }

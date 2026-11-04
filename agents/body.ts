@@ -3599,7 +3599,10 @@ export class Body {
       const [a, b, c] = stairs[k];
       await this.goto(a + 0.5, b, c + 0.5, 0.5, { maxMs: 4000 });
     }
-    return `dug a staircase ${stairs.length - 1} steps down (${depth} deep), got ${got} of ${count}${caveAt ? ", broke into a cave (closed it off: monsters wait in the dark there)" : ""}, and walked back up to the top`;
+    // into a cave in the first steps: the rock right here is hollow, and another staircase from the same spot meets the
+    // same cave (opus tried six times running from one spot by the base, "0 steps down ... broke into a cave")
+    const hollow = caveAt && stairs.length <= 3 ? ": the rock right here is full of caves, so move 15 or more blocks away (go_to) before mining again" : "";
+    return `dug a staircase ${stairs.length - 1} steps down (${depth} deep), got ${got} of ${count}${caveAt ? ", broke into a cave (closed it off: monsters wait in the dark there)" : ""}, and walked back up to the top${hollow}`;
   }
 
   // ---------------------------------------------------------------- building the settlement
